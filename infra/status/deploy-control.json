@@ -1,3 +1,35 @@
 {
-  "finishedAt": "2026-07-26T20:00:32.383Z"
+  "result": "success",
+  "controlUrl": "https://opus8cf-control.techtoolhub-office.workers.dev",
+  "markers": [
+    "STEP ensure-d1-kv",
+    "OK ids-resolved d1=260b0f8f… kv=4526bc39…",
+    "STEP apply-schema",
+    "OK schema-applied",
+    "STEP bundle",
+    "OK bundled",
+    "STEP deploy",
+    "OK deployed url=https://opus8cf-control.techtoolhub-office.workers.dev",
+    "STEP secrets",
+    "OK secret ADMIN_PASSWORD",
+    "OK secret JWT_SECRET",
+    "OK secret NODE_HMAC_SECRET",
+    "OK secret ROOT_DOMAIN",
+    "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
+  ],
+  "tail": [
+    "STEP apply-schema",
+    "OK schema-applied",
+    "STEP bundle",
+    "OK bundled",
+    "STEP deploy",
+    "OK deployed url=https://opus8cf-control.techtoolhub-office.workers.dev",
+    "STEP secrets",
+    "OK secret ADMIN_PASSWORD",
+    "OK secret JWT_SECRET",
+    "OK secret NODE_HMAC_SECRET",
+    "OK secret ROOT_DOMAIN",
+    "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
+  ],
+  "finishedAt": "2026-07-26T20:02:29Z"
 }
