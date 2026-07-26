@@ -21,11 +21,11 @@
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
     "OK smoke-sub-has-node",
+    "OK smoke-sub-uses-optimized-ip",
     "OK smoke-cleanup",
     "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
   ],
   "tail": [
-    "OK secret ADMIN_PASSWORD",
     "OK secret JWT_SECRET",
     "OK secret NODE_HMAC_SECRET",
     "OK secret ROOT_DOMAIN",
@@ -35,8 +35,9 @@
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
     "OK smoke-sub-has-node",
+    "OK <redacted>",
     "OK smoke-cleanup",
     "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
   ],
-  "finishedAt": "2026-07-26T21:02:31Z"
+  "finishedAt": "2026-07-26T21:09:33Z"
 }
