@@ -20,21 +20,24 @@ echo "OK built ($(cat /tmp/nb.log))"
 echo "STEP probe-landing"
 PORT=""; LAND=""; PTYPE=""
 if [ -n "${SERVICES_IP:-}" ]; then
-  sudo apt-get update >/dev/null 2>&1 || true
-  sudo apt-get install -y nmap >/dev/null 2>&1 || true
+  # 快速路径：先试已知/常见端口，命中即跳过全端口扫描
+  for p in ${SERVICES_PORT:-} 40008 1080 1081 7890 8388 1088; do
+    [ -z "$p" ] && continue
+    out=$(curl -s -x "socks5h://${SERVICES_IP}:$p" --proxy-user "${SERVICES_USER:-}:${SERVICES_CODE:-}" --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null || true)
+    if echo "$out" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then PORT=$p; PTYPE=socks5-auth; echo "OK landing-port=$p type=socks5(auth,fast) exit=$out"; break; fi
+  done
   OPEN=""
-  if command -v nmap >/dev/null 2>&1; then
-    OPEN=$(nmap -Pn -T4 --min-rate 3000 -p- "${SERVICES_IP}" 2>/dev/null | grep -oE '^[0-9]+/tcp[[:space:]]+open' | grep -oE '^[0-9]+' | tr '\n' ' ')
+  if [ -z "$PORT" ]; then
+    sudo apt-get update >/dev/null 2>&1 || true
+    sudo apt-get install -y nmap >/dev/null 2>&1 || true
+    if command -v nmap >/dev/null 2>&1; then
+      OPEN=$(nmap -Pn -T4 --min-rate 3000 -p- "${SERVICES_IP}" 2>/dev/null | grep -oE '^[0-9]+/tcp[[:space:]]+open' | grep -oE '^[0-9]+' | tr '\n' ' ')
+    fi
+    echo "INFO tcp-open-ports:${OPEN:- 无}"
   fi
-  if [ -z "$OPEN" ]; then
-    for p in 1080 1081 1085 1086 1088 1090 2080 3128 5000 7890 7891 8080 8388 8880 8888 9050 10808 10809 20170 40000 443 8443 ${SERVICES_PORT:-}; do
-      [ -z "$p" ] && continue
-      timeout 3 bash -c ">/dev/tcp/${SERVICES_IP}/$p" 2>/dev/null && OPEN="$OPEN $p"
-    done
-  fi
-  echo "INFO tcp-open-ports:${OPEN:- 无}"
   n=0
   for p in $OPEN; do
+    [ -n "$PORT" ] && break
     n=$((n+1)); [ "$n" -gt 20 ] && break
     out=$(curl -s -x "socks5h://${SERVICES_IP}:$p" --proxy-user "${SERVICES_USER:-}:${SERVICES_CODE:-}" --connect-timeout 6 --max-time 12 https://api.ipify.org 2>/dev/null || true)
     if echo "$out" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then PORT=$p; PTYPE=socks5-auth; echo "OK landing-port=$p type=socks5(auth) exit=$out"; break; fi

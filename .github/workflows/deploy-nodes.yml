@@ -21,11 +21,21 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         include:
           - alias: acc1
             node_id: acc1-n1
             region: US
+          - alias: acc1
+            node_id: acc1-n2
+            region: EU
+          - alias: acc2
+            node_id: acc2-n1
+            region: HK
+          - alias: acc2
+            node_id: acc2-n2
+            region: SG
     env:
       CONTROL_PLANE_URL: https://opus8cf-control.techtoolhub-office.workers.dev
       NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
@@ -61,4 +71,4 @@ jobs:
           git config user.email "opus8-bot@users.noreply.github.com"
           git add "infra/status/deploy-node-${{ matrix.node_id }}.json"
           git commit -m "chore(ci): node ${{ matrix.node_id }} status [skip ci]" || echo "no change"
-          for k in 1 2 3; do git pull --rebase --autostash && git push && break || sleep 3; done
+          for k in 1 2 3 4 5 6; do git pull --rebase --autostash && git push && break || sleep $((RANDOM % 5 + 2)); done
