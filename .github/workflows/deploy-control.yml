@@ -32,21 +32,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm i -g wrangler@3 esbuild
       - name: Deploy control-plane
         id: deploy
         continue-on-error: true
-        run: bash infra/scripts/deploy-control.sh 2>&1 | tee /tmp/dc.log
+        run: |
+          { npm i -g wrangler@3 esbuild && bash infra/scripts/deploy-control.sh ; } 2>&1 | tee /tmp/dc.log
 
       - name: Publish status back to repo
         if: always()
         run: |
           mkdir -p infra/status
           URL=$(grep -oE 'https://[a-z0-9._-]+workers\.dev' /tmp/dc.log | head -n1 || true)
-          # 只保留自己的 marker 行（STEP/OK/ERROR/DONE），不含任何密钥
-          MARKERS=$(grep -E '^(STEP|OK|ERROR|DONE) ' /tmp/dc.log | tr '\n' '|' || true)
-          node -e "const fs=require('fs');fs.writeFileSync('infra/status/deploy-control.json',JSON.stringify({result:process.env.R,controlUrl:process.env.U,markers:process.env.M,finishedAt:new Date().toISOString()},null,2))" \
-            R="${{ steps.deploy.outcome }}" U="$URL" M="$MARKERS"
+          MARKERS=$(grep -E '^(STEP|OK|ERROR|DONE) ' /tmp/dc.log || true)
+          # 失败时保留最后几行日志（抹掉任何 24+ 位的长串，避免泄露 token/id）
+          TAIL=$(tail -n 12 /tmp/dc.log | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g' || true)
+          jq -n \
+            --arg r "${{ steps.deploy.outcome }}" \
+            --arg u "$URL" \
+            --arg m "$MARKERS" \
+            --arg t "$TAIL" \
+            '{result:$r, controlUrl:$u, markers:($m|split("\n")|map(select(length>0))), tail:($t|split("\n")), finishedAt:(now|todate)}' \
+            > infra/status/deploy-control.json
           git config user.name  "opus8-bot"
           git config user.email "opus8-bot@users.noreply.github.com"
           git add infra/status/deploy-control.json
