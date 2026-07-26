@@ -1,0 +1,21 @@
+# 控制面 Worker（部署在主账号 acc1）
+name = "opus8cf-control"
+main = "dist/index.js"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# routes 由 CI 按 ROOT_DOMAIN 注入，如 api.<ROOT_DOMAIN>/*
+
+[[d1_databases]]
+binding = "DB"
+database_name = "opus8cf-db"
+database_id = "PLACEHOLDER_FILL_AFTER_PREFLIGHT"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "PLACEHOLDER_FILL_AFTER_PREFLIGHT"
+
+# secrets（wrangler secret put 或 CI 注入）：
+#   ADMIN_PASSWORD  管理后台密码
+#   JWT_SECRET      管理 JWT 签名
+#   NODE_HMAC_SECRET 节点↔控制面签名共享密钥

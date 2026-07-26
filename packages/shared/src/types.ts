@@ -1,0 +1,66 @@
+/** Opus8-CF · 跨包共享类型 */
+
+export interface NodeRecord {
+  id: string;
+  account_alias: string;
+  hostname: string;
+  region: string | null;
+  capabilities: string | null; // JSON 字符串
+  preferred_ip: string | null;
+  health: "healthy" | "degraded" | "banned" | "unknown";
+  enabled: number;
+  last_seen: number | null;
+  created_at: number;
+}
+
+export interface UserRecord {
+  id: string;
+  username: string | null;
+  uuid: string;
+  plan_id: string | null;
+  node_group: string | null; // JSON 数组：节点标签/别名
+  unlock: number;
+  sub_token: string;
+  expire_at: number | null;
+  enabled: number;
+  created_at: number;
+}
+
+export interface PlanRecord {
+  id: string;
+  name: string;
+  node_group: string | null;
+  unlock: number;
+  duration_days: number | null;
+  device_limit: number | null;
+  price_cents: number;
+  created_at: number;
+}
+
+/** 节点自注册请求体（HMAC 签名保护）。 */
+export interface RegisterRequest {
+  nodeId: string;
+  accountAlias: string;
+  hostname: string;
+  region?: string;
+  capabilities?: string[];
+  preferredIp?: string;
+  version?: string;
+}
+
+export interface HeartbeatRequest {
+  nodeId: string;
+  health?: NodeRecord["health"];
+  preferredIp?: string;
+}
+
+/** 边缘节点拉取的「有效 UUID 集 + 分流规则」。 */
+export interface ActiveUuidsResponse {
+  version: number; // 时间戳，用于节点判断是否更新
+  ttl: number; // 建议缓存秒数
+  uuids: string[]; // 允许连接的用户 UUID
+  unlockHosts: string[]; // 命中则走 SOCKS5 落地
+  socks5Enabled: boolean;
+}
+
+export type SubFormat = "base64" | "clash" | "singbox";

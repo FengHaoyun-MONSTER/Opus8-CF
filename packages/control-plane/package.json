@@ -1,0 +1,14 @@
+{
+  "name": "@opus8-cf/control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@opus8-cf/shared": "workspace:*"
+  }
+}

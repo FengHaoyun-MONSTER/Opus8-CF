@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Opus8-CF 控制台 · 预览</title>
+<style>
+:root{--bg:#0b0f17;--panel:#131a26;--panel-2:#1a2334;--line:#232f45;--text:#e6edf6;--muted:#8b98ac;--accent:#4cc2ff;--accent-2:#f6821f;--green:#3fb950;--amber:#d29922;--red:#f85149;--grey:#6e7b91;--radius:12px}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+.mono{font-family:"SF Mono",Consolas,monospace;font-size:12px}.muted{color:var(--muted)}
+.topbar{display:flex;align-items:center;gap:20px;padding:0 20px;height:56px;background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{font-weight:800;font-size:18px}.brand-cf{color:var(--accent-2)}.brand-sub{color:var(--muted);font-weight:500;font-size:13px;margin-left:8px}
+.tabs{display:flex;gap:4px}.tabs button{background:transparent;border:none;color:var(--muted);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px}
+.tabs button.active{color:var(--text);background:var(--panel-2);box-shadow:inset 0 -2px 0 var(--accent)}
+.topright{margin-left:auto;display:flex;align-items:center;gap:12px}.api-host{color:var(--muted);font-size:12px}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 12px;border-radius:8px;cursor:pointer}
+.content{padding:24px;max-width:1100px;margin:0 auto}h2{margin:0 0 18px}h3{margin:26px 0 12px;color:var(--muted);font-size:14px}
+.stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;position:relative;overflow:hidden}
+.stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px}
+.stat-a::before{background:var(--accent)}.stat-b::before{background:var(--green)}.stat-c::before{background:var(--accent-2)}.stat-d::before{background:var(--amber)}
+.stat-value{font-size:30px;font-weight:800}.stat-label{color:var(--muted);margin-top:2px}.stat-hint{color:var(--grey);font-size:12px;margin-top:6px}
+.tbl{width:100%;border-collapse:collapse;margin-top:8px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.tbl th,.tbl td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line)}
+.tbl th{color:var(--muted);font-weight:600;font-size:12px;background:var(--panel-2)}.tbl tr:last-child td{border-bottom:none}
+.pill{padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+.pill-healthy{color:var(--green);background:rgba(63,185,80,.14)}.pill-degraded{color:var(--amber);background:rgba(210,153,34,.14)}
+.pill-banned{color:var(--red);background:rgba(248,81,73,.14)}.pill-unknown{color:var(--grey);background:rgba(110,123,145,.14)}
+.btn-mini{background:var(--panel-2);color:var(--accent);border:1px solid var(--line);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+.btn-danger{background:transparent;color:var(--red);border:1px solid rgba(248,81,73,.3);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px}
+.btn-primary{background:var(--accent);color:#04121c;border:none;padding:10px 16px;border-radius:8px;font-weight:700;cursor:pointer}
+.create-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.create-bar input{background:var(--panel-2);border:1px solid var(--line);color:var(--text);padding:10px 12px;border-radius:8px}
+.chk{display:flex;align-items:center;gap:6px;color:var(--muted)}
+.note{color:var(--grey);font-size:12px;margin:18px 0 0}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">Opus8<span class="brand-cf">-CF</span><span class="brand-sub">控制台</span></div>
+  <nav class="tabs"><button class="active">仪表盘</button><button>用户</button><button>节点</button></nav>
+  <div class="topright"><span class="api-host">api.example.com</span><button class="btn-ghost">退出</button></div>
+</div>
+<div class="content">
+  <h2>仪表盘</h2>
+  <div class="stat-row">
+    <div class="stat stat-a"><div class="stat-value">128</div><div class="stat-label">用户总数</div></div>
+    <div class="stat stat-b"><div class="stat-value">114</div><div class="stat-label">有效用户</div><div class="stat-hint">启用中且未过期</div></div>
+    <div class="stat stat-c"><div class="stat-value">23</div><div class="stat-label">节点总数</div></div>
+    <div class="stat stat-d"><div class="stat-value">21</div><div class="stat-label">健康节点</div><div class="stat-hint">2 个异常</div></div>
+  </div>
+  <h3>节点健康</h3>
+  <table class="tbl">
+    <thead><tr><th>节点</th><th>账号</th><th>地区</th><th>健康</th><th>优选 IP</th><th>最近心跳</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">us1.example.com</td><td>acc1</td><td>US</td><td><span class="pill pill-healthy">healthy</span></td><td class="mono">104.16.88.20</td><td class="muted">刚刚</td></tr>
+      <tr><td class="mono">hk3.example.com</td><td>acc2</td><td>HK</td><td><span class="pill pill-healthy">healthy</span></td><td class="mono">172.67.12.5</td><td class="muted">2 分钟前</td></tr>
+      <tr><td class="mono">sg2.example.com</td><td>acc2</td><td>SG</td><td><span class="pill pill-degraded">degraded</span></td><td class="mono">104.18.32.11</td><td class="muted">14 分钟前</td></tr>
+      <tr><td class="mono">de1.example.com</td><td>acc1</td><td>DE</td><td><span class="pill pill-banned">banned</span></td><td class="mono">—</td><td class="muted">3 小时前</td></tr>
+    </tbody>
+  </table>
+
+  <h3>用户管理（示意）</h3>
+  <div class="create-bar">
+    <input placeholder="用户名(可选)" style="width:150px" />
+    <input placeholder="天数" value="30" style="width:80px" />
+    <input placeholder="节点组(逗号分隔，空=全部)" style="width:220px" />
+    <label class="chk"><input type="checkbox" checked /> 解锁套餐</label>
+    <button class="btn-primary">+ 新建用户</button>
+  </div>
+  <table class="tbl">
+    <thead><tr><th>用户名</th><th>UUID</th><th>解锁</th><th>到期</th><th>状态</th><th>订阅</th><th></th></tr></thead>
+    <tbody>
+      <tr><td>alice</td><td class="mono">3f8a1c2d…</td><td>✅</td><td>27 天后</td><td><span class="pill pill-healthy">启用</span></td><td><button class="btn-mini">复制链接</button></td><td><button class="btn-danger">删除</button></td></tr>
+      <tr><td>bob</td><td class="mono">9b21ee40…</td><td>—</td><td>永久</td><td><span class="pill pill-healthy">启用</span></td><td><button class="btn-mini">复制链接</button></td><td><button class="btn-danger">删除</button></td></tr>
+      <tr><td class="muted">(无名)</td><td class="mono">c1d0a7f2…</td><td>—</td><td>已过期</td><td><span class="pill pill-banned">停用</span></td><td><button class="btn-mini">复制链接</button></td><td><button class="btn-danger">删除</button></td></tr>
+    </tbody>
+  </table>
+  <p class="note">这是静态外观预览（数据为示意）。真实后台由 React 应用驱动，登录后调用控制面 API。</p>
+</div>
+</body>
+</html>

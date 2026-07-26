@@ -1,0 +1,104 @@
+name: preflight
+
+# 一次性/按需运行：验证两个 CF 账号的 token 权限、创建 D1/KV、探测落地机可用 SOCKS5 端口。
+# 手动触发即可。跑完看 Summary 里输出的 D1 database_id / KV id / 可用端口。
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-tokens:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - alias: acc1
+            account_id_secret: ACCOUNT_ID
+            api_token_secret: API_TOKEN
+          - alias: acc2
+            account_id_secret: ACCOUNT_ID_NUM1
+            api_token_secret: API_TOKEN_NUM1
+    steps:
+      - name: Verify token & probe scopes for ${{ matrix.alias }}
+        env:
+          CF_TOKEN: ${{ matrix.alias == 'acc1' && secrets.API_TOKEN || secrets.API_TOKEN_NUM1 }}
+          CF_ACCOUNT: ${{ matrix.alias == 'acc1' && secrets.ACCOUNT_ID || secrets.ACCOUNT_ID_NUM1 }}
+        run: |
+          set -euo pipefail
+          api="https://api.cloudflare.com/client/v4"
+          echo "## ${{ matrix.alias }} token 校验" >> "$GITHUB_STEP_SUMMARY"
+
+          v=$(curl -s -H "Authorization: Bearer $CF_TOKEN" "$api/user/tokens/verify")
+          echo "verify: $(echo "$v" | grep -o '"status":"[a-z]*"' || echo unknown)"
+          echo "$v" | grep -q '"status":"active"' && echo "- token: ✅ active" >> "$GITHUB_STEP_SUMMARY" || { echo "- token: ❌ 无效" >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+
+          probe() { # $1=path  $2=label
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $CF_TOKEN" "$api/accounts/$CF_ACCOUNT/$1")
+            if [ "$code" = "200" ]; then echo "- $2: ✅ (可访问)" >> "$GITHUB_STEP_SUMMARY"
+            else echo "- $2: ⚠️ HTTP $code（可能缺少该权限）" >> "$GITHUB_STEP_SUMMARY"; fi
+          }
+          probe "workers/scripts" "Workers Scripts"
+          probe "storage/kv/namespaces" "Workers KV"
+          probe "d1/database" "D1"
+          probe "pages/projects" "Pages"
+
+  provision:
+    needs: verify-tokens
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm i -g wrangler@3
+      - name: Create D1 + KV on primary (acc1) — idempotent
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+        run: |
+          set -uo pipefail
+          echo "## D1 / KV 供给（acc1）" >> "$GITHUB_STEP_SUMMARY"
+
+          d1out=$(wrangler d1 create opus8cf-db 2>&1 || true)
+          echo "$d1out"
+          dbid=$(echo "$d1out" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -n1 || true)
+          if [ -z "$dbid" ]; then
+            dbid=$(wrangler d1 list --json 2>/dev/null | grep -B2 'opus8cf-db' | grep -oE '[0-9a-f-]{36}' | head -n1 || true)
+          fi
+          echo "- D1 \`opus8cf-db\` database_id: \`${dbid:-未取到，请看日志}\`" >> "$GITHUB_STEP_SUMMARY"
+
+          kvout=$(wrangler kv namespace create OPUS8_KV 2>&1 || true)
+          echo "$kvout"
+          kvid=$(echo "$kvout" | grep -oE '[0-9a-f]{32}' | head -n1 || true)
+          echo "- KV \`OPUS8_KV\` id: \`${kvid:-已存在或看日志}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> 把上面两个 id 填进 packages/control-plane/wrangler.toml 的 PLACEHOLDER。" >> "$GITHUB_STEP_SUMMARY"
+
+  probe-landing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan common SOCKS5 ports on SERVICES_IP
+        env:
+          IP: ${{ secrets.SERVICES_IP }}
+          USER: ${{ secrets.SERVICES_USER }}
+          PASS: ${{ secrets.SERVICES_CODE }}
+        run: |
+          set -uo pipefail
+          echo "## 落地机 SOCKS5 端口探测" >> "$GITHUB_STEP_SUMMARY"
+          echo "目标: (SERVICES_IP 已隐藏)" >> "$GITHUB_STEP_SUMMARY"
+          ports="1080 1081 1088 1090 7890 7891 7892 8388 3128 8080 10808 10809 20170 40000 42000 9050 1024 5000 443 8443"
+          found=""
+          for p in $ports; do
+            # 先 TCP 连通性
+            if timeout 4 bash -c "echo > /dev/tcp/$IP/$p" 2>/dev/null; then
+              # 再验证是不是可用的 SOCKS5（带认证出口取 IP）
+              out=$(curl -s --connect-timeout 6 --max-time 12 \
+                    --socks5-hostname "$USER:$PASS@$IP:$p" https://api.ipify.org 2>/dev/null || true)
+              if echo "$out" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+                echo "- 端口 $p: ✅ SOCKS5 可用，出口 IP $out" >> "$GITHUB_STEP_SUMMARY"
+                found="$found $p"
+              else
+                echo "- 端口 $p: 🔶 TCP 通但非 SOCKS5/认证失败" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+          done
+          [ -n "$found" ] && echo "" >> "$GITHUB_STEP_SUMMARY" && echo "**可用 SOCKS5 端口:$found** → 填入 infra/accounts.json 的 landing.port" >> "$GITHUB_STEP_SUMMARY" || echo "未发现可用端口，请确认落地机 SOCKS5 是否开启/放行防火墙。" >> "$GITHUB_STEP_SUMMARY"

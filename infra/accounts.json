@@ -1,0 +1,38 @@
+{
+  "$comment": "多账号注册表：只映射 GitHub Actions Secret 的【名称】，绝不含明文密钥。CI 用这些名字去取 secrets。",
+  "landing": {
+    "$comment": "SOCKS5 落地机凭据的 secret 名称；端口由 preflight 工作流自动探测后写回 landing.port。",
+    "ipSecret": "SERVICES_IP",
+    "userSecret": "SERVICES_USER",
+    "passSecret": "SERVICES_CODE",
+    "port": null
+  },
+  "accounts": [
+    {
+      "alias": "acc1",
+      "role": "primary",
+      "$comment": "主账号：跑控制面 + 管理站 + 一部分节点",
+      "accountIdSecret": "ACCOUNT_ID",
+      "apiTokenSecret": "API_TOKEN",
+      "rootDomainSecret": "ROOT_DOMAIN",
+      "r2": {
+        "accessKeyIdSecret": "ACCESS_KEY_ID",
+        "secretAccessKeySecret": "SECRET_ACCESS_KEY",
+        "endpointSecret": "S3_API_ENDPOINT"
+      }
+    },
+    {
+      "alias": "acc2",
+      "role": "node",
+      "$comment": "第二账号：纯节点，_NUM1 后缀",
+      "accountIdSecret": "ACCOUNT_ID_NUM1",
+      "apiTokenSecret": "API_TOKEN_NUM1",
+      "rootDomainSecret": "ROOT_DOMAIN_NUM1",
+      "r2": {
+        "accessKeyIdSecret": "ACCESS_KEY_ID_NUM1",
+        "secretAccessKeySecret": "SECRET_ACCESS_KEY_NUM1",
+        "endpointSecret": "S3_API_ENDPOINT_NUM1"
+      }
+    }
+  ]
+}

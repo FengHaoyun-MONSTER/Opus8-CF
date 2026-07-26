@@ -1,0 +1,12 @@
+{
+  "name": "@opus8-cf/edge-node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opus8-cf/shared": "workspace:*"
+  }
+}
