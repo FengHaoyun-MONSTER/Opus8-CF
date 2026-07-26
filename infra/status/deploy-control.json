@@ -19,7 +19,7 @@
     "OK smoke-health",
     "OK smoke-login",
     "OK smoke-create-user(D1-write)",
-    "ERROR smoke-subscription",
+    "OK smoke-subscription",
     "OK smoke-cleanup",
     "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
   ],
@@ -33,9 +33,9 @@
     "OK smoke-health",
     "OK smoke-login",
     "OK smoke-create-user(D1-write)",
-    "ERROR smoke-subscription",
+    "OK smoke-subscription",
     "OK smoke-cleanup",
     "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
   ],
-  "finishedAt": "2026-07-26T20:05:45Z"
+  "finishedAt": "2026-07-26T20:07:47Z"
 }
