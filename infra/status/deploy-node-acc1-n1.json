@@ -1,0 +1,23 @@
+{
+  "node": "acc1-n1",
+  "result": "success",
+  "nodeUrl": "https://opus8cf-node-acc1-n1.techtoolhub-office.workers.dev",
+  "markers": [
+    "STEP build",
+    "OK built (OK build: dist/index.js (280871 bytes), patch replaced 961 chars)",
+    "STEP kv",
+    "OK kv=40a6527c…",
+    "STEP deploy",
+    "OK deployed url=https://opus8cf-node-acc1-n1.techtoolhub-office.workers.dev",
+    "STEP secrets",
+    "OK secret hmac",
+    "OK secret uuid",
+    "STEP register",
+    "OK registered host=opus8cf-node-acc1-n1.techtoolhub-office.workers.dev",
+    "STEP verify",
+    "OK node-http=200",
+    "OK uuids-endpoint-count=2",
+    "DONE url=https://opus8cf-node-acc1-n1.techtoolhub-office.workers.dev"
+  ],
+  "finishedAt": "2026-07-26T20:29:38Z"
+}
