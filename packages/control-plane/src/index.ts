@@ -130,6 +130,20 @@ export default {
         await touchNode(env, b.nodeId, b.health ?? "healthy", b.preferredIp ?? null, Date.now());
         return json({ ok: true });
       }
+      // 优选 IP 池（供订阅使用；由 CFST 工作流写入）
+      if (p === "/api/optimized-ips" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return json({ ips: await getOptimizedIps(env) });
+      }
+      if (p === "/api/optimized-ips" && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const b = (await req.json().catch(() => ({}))) as { ips?: string[] };
+        const ips = Array.isArray(b.ips)
+          ? b.ips.filter((x) => typeof x === "string" && /^[0-9a-fA-F.:]+$/.test(x)).slice(0, 50)
+          : [];
+        await env.KV.put("opus8:opt-ips", JSON.stringify(ips));
+        return json({ ok: true, count: ips.length });
+      }
       // 有效 UUID 集（UUID 同步总线核心）
       const uuidsMatch = p.match(/^\/api\/nodes\/([^/]+)\/uuids$/);
       if (uuidsMatch && m === "GET") {
@@ -153,7 +167,8 @@ export default {
         if (user.expire_at && user.expire_at < Date.now()) return err("订阅已过期", 403);
         const nodes = nodesForUser(user, await listNodes(env));
         const fmt = pickFormat(req.headers.get("user-agent") || "", url.searchParams.get("format"));
-        const { body, contentType } = renderSubscription(fmt, user, nodes);
+        const optIps = await getOptimizedIps(env);
+        const { body, contentType } = renderSubscription(fmt, user, nodes, optIps);
         return new Response(body, {
           headers: {
             "content-type": contentType,
@@ -169,6 +184,16 @@ export default {
     }
   },
 };
+
+async function getOptimizedIps(env: Env): Promise<string[]> {
+  try {
+    const raw = await env.KV.get("opus8:opt-ips");
+    const arr = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(arr) ? (arr as string[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 function subUserInfo(user: UserRecord): string {
   const expire = user.expire_at ? Math.floor(user.expire_at / 1000) : 0;
