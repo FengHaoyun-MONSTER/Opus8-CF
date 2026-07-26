@@ -6,7 +6,8 @@
     "STEP build",
     "OK built (OK build: dist/index.js (281020 bytes), patch replaced 961 chars)",
     "STEP probe-landing",
-    "INFO landing-no-port (节点将走纯 CF 出口，无解锁)",
+    "INFO tcp-open-ports: 无",
+    "INFO landing-no-socks5 (纯 CF 出口，无解锁)",
     "STEP kv",
     "OK kv=40a6527c…",
     "STEP deploy",
@@ -22,5 +23,5 @@
     "INFO unlock=off",
     "DONE url=https://opus8cf-node-acc1-n1.techtoolhub-office.workers.dev"
   ],
-  "finishedAt": "2026-07-26T20:40:42Z"
+  "finishedAt": "2026-07-26T20:44:42Z"
 }
