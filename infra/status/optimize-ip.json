@@ -2,7 +2,11 @@
   "result": "success",
   "markers": [
     "STEP fetch-cfst",
-    "ERROR cfst-download"
+    "OK cfst-ready (./cfst)",
+    "STEP speedtest",
+    "OK ips:172.65.13.120 172.65.130.151 172.65.230.117 172.65.3.120 172.65.31.208 172.65.189.205 172.64.190.205 172.65.80.41 172.66.135.72 172.65.7.93 ",
+    "STEP push-to-control",
+    "OK pushed:{\"ok\":true,\"count\":10}"
   ],
-  "finishedAt": "2026-07-26T21:04:36Z"
+  "finishedAt": "2026-07-26T21:07:45Z"
 }
