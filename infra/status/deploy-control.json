@@ -20,11 +20,11 @@
     "OK smoke-login",
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
+    "OK smoke-sub-has-node",
     "OK smoke-cleanup",
     "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
   ],
   "tail": [
-    "STEP secrets",
     "OK secret ADMIN_PASSWORD",
     "OK secret JWT_SECRET",
     "OK secret NODE_HMAC_SECRET",
@@ -34,8 +34,9 @@
     "OK smoke-login",
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
+    "OK smoke-sub-has-node",
     "OK smoke-cleanup",
     "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
   ],
-  "finishedAt": "2026-07-26T20:07:47Z"
+  "finishedAt": "2026-07-26T20:32:26Z"
 }
