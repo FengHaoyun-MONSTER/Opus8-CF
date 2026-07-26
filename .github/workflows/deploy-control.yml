@@ -15,7 +15,7 @@ permissions:
 
 concurrency:
   group: deploy-control
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:

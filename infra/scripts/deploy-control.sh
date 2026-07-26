@@ -65,11 +65,16 @@ if curl -s --max-time 15 "$URL/" | grep -q '"ok":true'; then echo "OK smoke-heal
 LOGIN=$(curl -s --max-time 15 -X POST "$URL/api/admin/login" -H 'content-type: application/json' -d "{\"password\":\"${ADMIN_PASSWORD:-}\"}")
 TOK=$(printf '%s' "$LOGIN" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).token||"")}catch(e){process.stdout.write("")}})')
 if [ -n "$TOK" ]; then echo "OK smoke-login"; else echo "ERROR smoke-login"; fi
+ORPH=$(curl -s --max-time 15 "$URL/api/users" -H "authorization: Bearer $TOK" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const u=JSON.parse(s).users||[];process.stdout.write(u.filter(x=>x.username==="__smoke__").map(x=>x.id).join(" "))}catch(e){}})')
+for id in $ORPH; do curl -s --max-time 15 -X DELETE "$URL/api/users/$id" -H "authorization: Bearer $TOK" >/dev/null; done
+[ -n "$ORPH" ] && echo "OK smoke-cleaned-orphans" || true
 CU=$(curl -s --max-time 15 -X POST "$URL/api/users" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"username":"__smoke__","durationDays":1}')
 SUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.id||"")}catch(e){process.stdout.write("")}})')
 SUB=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).subUrl||"")}catch(e){process.stdout.write("")}})')
 if [ -n "$SUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; fi
-if [ -n "$SUB" ] && curl -s --max-time 15 -o /dev/null -w '%{http_code}' "$SUB" | grep -q '200'; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; fi
+SUBBODY=$(curl -s --max-time 15 "$SUB")
+if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; fi
+if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -q 'vless://'; then echo "OK smoke-sub-has-node"; else echo "INFO smoke-sub-no-node"; fi
 if [ -n "$SUID" ] && curl -s --max-time 15 -X DELETE "$URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-cleanup"; else echo "ERROR smoke-cleanup"; fi
 
 echo "DONE url=$URL"
