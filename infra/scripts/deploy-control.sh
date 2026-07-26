@@ -75,6 +75,7 @@ if [ -n "$SUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR 
 SUBBODY=$(curl -s --max-time 15 "$SUB")
 if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; fi
 if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -q 'vless://'; then echo "OK smoke-sub-has-node"; else echo "INFO smoke-sub-no-node"; fi
+if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -qE 'vless://[^@]+@[0-9]{1,3}\.[0-9]{1,3}\.'; then echo "OK smoke-sub-uses-optimized-ip"; else echo "INFO smoke-sub-hostname-only"; fi
 if [ -n "$SUID" ] && curl -s --max-time 15 -X DELETE "$URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-cleanup"; else echo "ERROR smoke-cleanup"; fi
 
 echo "DONE url=$URL"
