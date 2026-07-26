@@ -92,7 +92,8 @@ export default {
           created_at: now,
         };
         await insertUser(env, user);
-        const base = env.ROOT_DOMAIN ? `https://sub.${env.ROOT_DOMAIN}` : url.origin;
+        // 订阅链接用 worker 实际访问源（workers.dev）；接入自定义域名后可改为 SUB_BASE。
+        const base = env.SUB_BASE || url.origin;
         return json({ user, subUrl: `${base}/sub/${user.sub_token}` }, 201);
       }
       const delMatch = p.match(/^\/api\/users\/([^/]+)$/);

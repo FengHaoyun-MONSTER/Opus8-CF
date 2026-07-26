@@ -7,6 +7,7 @@ export interface Env {
   JWT_SECRET: string;
   NODE_HMAC_SECRET: string;
   ROOT_DOMAIN?: string;
+  SUB_BASE?: string;
 }
 
 export async function listNodes(env: Env): Promise<NodeRecord[]> {
