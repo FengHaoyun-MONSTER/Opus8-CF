@@ -19,15 +19,24 @@ echo "OK built ($(cat /tmp/nb.log))"
 
 echo "STEP probe-landing"
 PORT=""; LAND=""
+PORTS="1080 1081 1085 1086 1088 1090 2080 2443 3128 4145 5000 5678 7890 7891 7892 8080 8388 8880 8888 9050 9080 9443 10808 10809 20170 40000 42000 51080 1024 443 8443 ${SERVICES_PORT:-}"
 if [ -n "${SERVICES_IP:-}" ]; then
-  for p in 1080 1081 1088 1090 7890 7891 7892 8388 3128 8080 10808 10809 20170 40000 42000 9050 1024 5000 443 8443; do
-    out=$(curl -s --connect-timeout 5 --max-time 10 --socks5-hostname "${SERVICES_USER:-}:${SERVICES_CODE:-}@${SERVICES_IP}:$p" https://api.ipify.org 2>/dev/null || true)
-    if echo "$out" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then PORT=$p; echo "OK landing-port=$p exit=$out"; break; fi
+  OPEN=""
+  for p in $PORTS; do
+    [ -z "$p" ] && continue
+    if timeout 4 bash -c ">/dev/tcp/${SERVICES_IP}/$p" 2>/dev/null; then OPEN="$OPEN $p"; fi
+  done
+  echo "INFO tcp-open-ports:${OPEN:- 无}"
+  for p in $OPEN; do
+    out=$(curl -s -x "socks5h://${SERVICES_IP}:$p" --proxy-user "${SERVICES_USER:-}:${SERVICES_CODE:-}" --connect-timeout 6 --max-time 12 https://api.ipify.org 2>/dev/null || true)
+    if echo "$out" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then PORT=$p; echo "OK landing-port=$p type=socks5 exit=$out"; break; fi
+    outh=$(curl -s -x "http://${SERVICES_IP}:$p" --proxy-user "${SERVICES_USER:-}:${SERVICES_CODE:-}" --connect-timeout 6 --max-time 12 https://api.ipify.org 2>/dev/null || true)
+    if echo "$outh" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then echo "INFO port=$p 是 HTTP 代理(非 SOCKS5) exit=$outh"; fi
   done
   if [ -n "$PORT" ]; then
     if [ -n "${SERVICES_USER:-}" ]; then LAND="${SERVICES_USER}:${SERVICES_CODE}@${SERVICES_IP}:${PORT}"; else LAND="${SERVICES_IP}:${PORT}"; fi
   else
-    echo "INFO landing-no-port (节点将走纯 CF 出口，无解锁)"
+    echo "INFO landing-no-socks5 (纯 CF 出口，无解锁)"
   fi
 else
   echo "INFO no-SERVICES_IP (纯 CF 出口)"
