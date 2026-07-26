@@ -1,0 +1,27 @@
+{
+  "node": "acc2-n2",
+  "result": "success",
+  "nodeUrl": "https://opus8cf-node-acc2-n2.fengy2020212122.workers.dev",
+  "markers": [
+    "STEP build",
+    "OK built (OK build: dist/index.js (281020 bytes), patch replaced 961 chars)",
+    "STEP probe-landing",
+    "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.214.151",
+    "STEP kv",
+    "OK kv=f634843a…",
+    "STEP deploy",
+    "OK deployed url=https://opus8cf-node-acc2-n2.fengy2020212122.workers.dev",
+    "STEP secrets",
+    "OK secret hmac",
+    "OK secret uuid",
+    "OK secret socks5-landing(解锁已启用)",
+    "STEP register",
+    "OK registered host=opus8cf-node-acc2-n2.fengy2020212122.workers.dev",
+    "STEP verify",
+    "OK node-http=404",
+    "OK uuids-endpoint-count=0",
+    "OK unlock=on(AI域名走落地)",
+    "DONE url=https://opus8cf-node-acc2-n2.fengy2020212122.workers.dev"
+  ],
+  "finishedAt": "2026-07-26T20:56:06Z"
+}
