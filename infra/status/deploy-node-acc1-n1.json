@@ -4,7 +4,9 @@
   "nodeUrl": "https://opus8cf-node-acc1-n1.techtoolhub-office.workers.dev",
   "markers": [
     "STEP build",
-    "OK built (OK build: dist/index.js (280871 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (281020 bytes), patch replaced 961 chars)",
+    "STEP probe-landing",
+    "INFO landing-no-port (节点将走纯 CF 出口，无解锁)",
     "STEP kv",
     "OK kv=40a6527c…",
     "STEP deploy",
@@ -16,8 +18,9 @@
     "OK registered host=opus8cf-node-acc1-n1.techtoolhub-office.workers.dev",
     "STEP verify",
     "OK node-http=200",
-    "OK uuids-endpoint-count=2",
+    "OK uuids-endpoint-count=0",
+    "INFO unlock=off",
     "DONE url=https://opus8cf-node-acc1-n1.techtoolhub-office.workers.dev"
   ],
-  "finishedAt": "2026-07-26T20:29:38Z"
+  "finishedAt": "2026-07-26T20:40:42Z"
 }
