@@ -34,6 +34,9 @@ jobs:
       NODE_ID: ${{ matrix.node_id }}
       NODE_ACCOUNT_ALIAS: ${{ matrix.alias }}
       NODE_REGION: ${{ matrix.region }}
+      SERVICES_IP: ${{ secrets.SERVICES_IP }}
+      SERVICES_USER: ${{ secrets.SERVICES_USER }}
+      SERVICES_CODE: ${{ secrets.SERVICES_CODE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

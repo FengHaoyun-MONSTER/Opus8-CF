@@ -37,12 +37,23 @@ if (!replaced.includes("sub-links.json")) {
 const injection =
   "let activeUUIDs = await OPUS8_getActiveUUIDs(env, userID, ctx);\n" +
   "\t\tlet activeSubLinks = [];\n" +
+  "\t\tglobalThis.OPUS8_LANDING = env.SOCKS5 || '';\n" +
   "\t\tif (env.OPUS8_HEARTBEAT !== '0') ctx.waitUntil(OPUS8_heartbeat(env));";
 
-const patchedCore = core.slice(0, startIdx) + injection + core.slice(end);
+let patchedCore = core.slice(0, startIdx) + injection + core.slice(end);
 
 // 断言补丁只命中一次、且注入函数存在
 if (patchedCore.includes(startMarker)) throw new Error("PATCH FAIL: 起点标记仍残留（可能命中多处）");
+
+// --- 补丁2：SOCKS5 落地从 env.SOCKS5 兜底（凭据留在节点，不进订阅链接）---
+const s5re = new RegExp("\\tif \\(!我的SOCKS5账号\\) \\{\\r?\\n\\t\\t启用SOCKS5反代 = null;\\r?\\n\\t\\treturn;\\r?\\n\\t\\}");
+if (!s5re.test(patchedCore)) throw new Error("PATCH2 FAIL: 找不到 SOCKS5 fallback 锚点");
+const s5new = "\tif (!我的SOCKS5账号) {\n" +
+  "\t\tif (globalThis.OPUS8_LANDING) { 我的SOCKS5账号 = globalThis.OPUS8_LANDING; 启用SOCKS5反代 = 'socks5'; }\n" +
+  "\t\telse { 启用SOCKS5反代 = null; return; }\n" +
+  "\t}";
+patchedCore = patchedCore.replace(s5re, s5new);
+if (s5re.test(patchedCore)) throw new Error("PATCH2 FAIL: 替换未生效");
 
 const out = "// [Opus8-CF build] prelude + patched vendor core\n" + prelude + "\n" + patchedCore;
 
