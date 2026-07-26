@@ -1,0 +1,55 @@
+name: deploy-control
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-control.yml'
+      - 'infra/scripts/deploy-control.sh'
+      - 'packages/control-plane/**'
+      - 'packages/shared/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-control
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
+      ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm i -g wrangler@3 esbuild
+      - name: Deploy control-plane
+        id: deploy
+        continue-on-error: true
+        run: bash infra/scripts/deploy-control.sh 2>&1 | tee /tmp/dc.log
+
+      - name: Publish status back to repo
+        if: always()
+        run: |
+          mkdir -p infra/status
+          URL=$(grep -oE 'https://[a-z0-9._-]+workers\.dev' /tmp/dc.log | head -n1 || true)
+          # 只保留自己的 marker 行（STEP/OK/ERROR/DONE），不含任何密钥
+          MARKERS=$(grep -E '^(STEP|OK|ERROR|DONE) ' /tmp/dc.log | tr '\n' '|' || true)
+          node -e "const fs=require('fs');fs.writeFileSync('infra/status/deploy-control.json',JSON.stringify({result:process.env.R,controlUrl:process.env.U,markers:process.env.M,finishedAt:new Date().toISOString()},null,2))" \
+            R="${{ steps.deploy.outcome }}" U="$URL" M="$MARKERS"
+          git config user.name  "opus8-bot"
+          git config user.email "opus8-bot@users.noreply.github.com"
+          git add infra/status/deploy-control.json
+          git commit -m "chore(ci): deploy-control status [skip ci]" || echo "no change"
+          git pull --rebase --autostash || true
+          git push || true
