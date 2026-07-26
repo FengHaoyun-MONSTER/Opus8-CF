@@ -1,0 +1,25 @@
+{
+  "result": "success",
+  "adminUrl": "https://opus8cf-admin.pages.dev",
+  "markers": [
+    "STEP install",
+    "OK installed",
+    "STEP build",
+    "OK built",
+    "STEP pages-project",
+    "STEP deploy",
+    "OK deployed deploy=https://0d909601.opus8cf-admin.pages.dev",
+    "DONE url=https://opus8cf-admin.pages.dev"
+  ],
+  "tail": [
+    "STEP install",
+    "OK installed",
+    "STEP build",
+    "OK built",
+    "STEP pages-project",
+    "STEP deploy",
+    "OK deployed deploy=https://0d909601.opus8cf-admin.pages.dev",
+    "DONE url=https://opus8cf-admin.pages.dev"
+  ],
+  "finishedAt": "2026-07-26T20:20:43Z"
+}
