@@ -59,4 +59,17 @@ printf '%s' "${JWT_SECRET:-}"       | wrangler secret put JWT_SECRET       >/dev
 printf '%s' "${NODE_HMAC_SECRET:-}" | wrangler secret put NODE_HMAC_SECRET >/dev/null 2>&1 && echo "OK secret NODE_HMAC_SECRET"
 if [ -n "${ROOT_DOMAIN:-}" ]; then printf '%s' "$ROOT_DOMAIN" | wrangler secret put ROOT_DOMAIN >/dev/null 2>&1 && echo "OK secret ROOT_DOMAIN"; fi
 
+echo "STEP smoke"
+sleep 5
+if curl -s --max-time 15 "$URL/" | grep -q '"ok":true'; then echo "OK smoke-health"; else echo "ERROR smoke-health"; fi
+LOGIN=$(curl -s --max-time 15 -X POST "$URL/api/admin/login" -H 'content-type: application/json' -d "{\"password\":\"${ADMIN_PASSWORD:-}\"}")
+TOK=$(printf '%s' "$LOGIN" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).token||"")}catch(e){process.stdout.write("")}})')
+if [ -n "$TOK" ]; then echo "OK smoke-login"; else echo "ERROR smoke-login"; fi
+CU=$(curl -s --max-time 15 -X POST "$URL/api/users" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"username":"__smoke__","durationDays":1}')
+SUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.id||"")}catch(e){process.stdout.write("")}})')
+SUB=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).subUrl||"")}catch(e){process.stdout.write("")}})')
+if [ -n "$SUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; fi
+if [ -n "$SUB" ] && curl -s --max-time 15 -o /dev/null -w '%{http_code}' "$SUB" | grep -q '200'; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; fi
+if [ -n "$SUID" ] && curl -s --max-time 15 -X DELETE "$URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-cleanup"; else echo "ERROR smoke-cleanup"; fi
+
 echo "DONE url=$URL"
