@@ -6,8 +6,7 @@
     "STEP build",
     "OK built (OK build: dist/index.js (281020 bytes), patch replaced 961 chars)",
     "STEP probe-landing",
-    "INFO tcp-open-ports:22 2052 2053 40008 ",
-    "OK landing-port=40008 type=socks5(auth) exit=104.28.214.151",
+    "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.214.151",
     "STEP kv",
     "OK kv=40a6527c…",
     "STEP deploy",
@@ -24,5 +23,5 @@
     "OK unlock=on(AI域名走落地)",
     "DONE url=https://opus8cf-node-acc1-n1.techtoolhub-office.workers.dev"
   ],
-  "finishedAt": "2026-07-26T20:52:18Z"
+  "finishedAt": "2026-07-26T20:55:32Z"
 }
