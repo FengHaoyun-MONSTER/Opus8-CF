@@ -12,12 +12,15 @@ if [ -s "$WS/infra/optimized-ips.txt" ]; then
   echo "OK using-custom-list"
 else
   echo "STEP fetch-cfst"
-  if ! curl -fsSL https://github.com/XIU2/CloudflareSpeedTest/releases/latest/download/CloudflareST_linux_amd64.tar.gz -o /tmp/cfst.tgz; then echo "ERROR cfst-download"; exit 10; fi
+  if ! curl -fsSL https://github.com/XIU2/CloudflareSpeedTest/releases/latest/download/cfst_linux_amd64.tar.gz -o /tmp/cfst.tgz; then echo "ERROR cfst-download"; exit 10; fi
   mkdir -p /tmp/cfst && tar xzf /tmp/cfst.tgz -C /tmp/cfst
-  cd /tmp/cfst && chmod +x CloudflareST
-  echo "OK cfst-ready"
+  cd /tmp/cfst
+  BIN="./CloudflareST"; [ -f "$BIN" ] || BIN="./cfst"; [ -f "$BIN" ] || BIN="$(find . -maxdepth 1 -type f | grep -iE 'cloudflarest|cfst' | head -1)"
+  [ -z "$BIN" ] || [ ! -f "$BIN" ] && { echo "ERROR cfst-binary-not-found ($(ls))"; exit 10; }
+  chmod +x "$BIN"
+  echo "OK cfst-ready ($BIN)"
   echo "STEP speedtest"
-  if ! ./CloudflareST -dd -tp 443 -n 200 -t 4 -o result.csv >/tmp/cfst.log 2>&1; then echo "ERROR speedtest"; tail -5 /tmp/cfst.log; exit 11; fi
+  if ! "$BIN" -dd -tp 443 -n 200 -t 4 -o result.csv >/tmp/cfst.log 2>&1; then echo "ERROR speedtest"; tail -5 /tmp/cfst.log; exit 11; fi
   IPS=$(tail -n +2 result.csv | head -10 | cut -d, -f1 | grep -E '^[0-9]' | tr '\n' ' ')
 fi
 echo "OK ips:${IPS:- none}"
