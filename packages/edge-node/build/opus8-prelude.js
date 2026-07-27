@@ -328,6 +328,7 @@ function OPUS8_usageRuntime(request) {
 function OPUS8_scheduleUsage(runtime, final = false) {
   const promise = OPUS8_flushUsage(runtime, final).catch(() => {});
   try { runtime.ctx?.waitUntil?.(promise) } catch (_) { /* WebSocket event may outlive fetch ctx */ }
+  return promise;
 }
 
 function OPUS8_maybeFlushUsage(runtime) {
@@ -351,13 +352,15 @@ function OPUS8_enforceLocalQuota(runtime) {
   return true;
 }
 
-function OPUS8_bindUsageSocket(webSocket, request, env, ctx, uuidRef) {
-  if (!webSocket || OPUS8_socketUsage.has(webSocket)) return;
+function OPUS8_createUsageRuntime(request, env, ctx, uuidRef, transport, socket = null) {
+  const existing = OPUS8_usageRuntime(request);
+  if (existing) return existing;
   const runtime = {
     request,
     env,
     ctx,
-    socket: webSocket,
+    socket,
+    transport,
     uuidRef,
     uuid: "",
     leaseId: crypto.randomUUID(),
@@ -377,6 +380,20 @@ function OPUS8_bindUsageSocket(webSocket, request, env, ctx, uuidRef) {
     closed: false,
   };
   OPUS8_requestUsage.set(request, runtime);
+  if (socket) OPUS8_socketUsage.set(socket, runtime);
+  return runtime;
+}
+
+function OPUS8_bindUsageSocket(webSocket, request, env, ctx, uuidRef) {
+  if (!webSocket || OPUS8_socketUsage.has(webSocket)) return;
+  const runtime = OPUS8_createUsageRuntime(
+    request,
+    env,
+    ctx,
+    uuidRef,
+    "websocket",
+    webSocket,
+  );
   OPUS8_socketUsage.set(webSocket, runtime);
   webSocket.addEventListener("message", (event) => {
     OPUS8_maybeRenewAdmission(runtime);
@@ -387,12 +404,40 @@ function OPUS8_bindUsageSocket(webSocket, request, env, ctx, uuidRef) {
     OPUS8_maybeFlushUsage(runtime);
   });
   const finish = () => {
-    if (runtime.closed) return;
-    runtime.closed = true;
-    OPUS8_scheduleUsage(runtime, true);
+    OPUS8_finishUsage(runtime);
   };
   webSocket.addEventListener("close", finish);
   webSocket.addEventListener("error", finish);
+}
+
+function OPUS8_bindUsageStream(request, env, ctx, uuidRef, transport) {
+  return OPUS8_createUsageRuntime(request, env, ctx, uuidRef, transport);
+}
+
+function OPUS8_attachUsageBridge(request, bridge) {
+  const runtime = OPUS8_usageRuntime(request);
+  if (!runtime || !bridge || OPUS8_socketUsage.has(bridge)) return;
+  runtime.socket = bridge;
+  OPUS8_socketUsage.set(bridge, runtime);
+  if (typeof bridge.close === "function" && !bridge.OPUS8_closeWrapped) {
+    const close = bridge.close.bind(bridge);
+    bridge.close = (...args) => {
+      OPUS8_finishUsage(runtime);
+      return close(...args);
+    };
+    Object.defineProperty(bridge, "OPUS8_closeWrapped", { value: true });
+  }
+}
+
+function OPUS8_noteUplink(request, payload) {
+  const runtime = OPUS8_usageRuntime(request);
+  if (!runtime || runtime.closed) return;
+  OPUS8_maybeRenewAdmission(runtime);
+  const size = OPUS8_dataSize(payload);
+  runtime.bytesUp += size;
+  runtime.sessionBytes += size;
+  OPUS8_enforceLocalQuota(runtime);
+  OPUS8_maybeFlushUsage(runtime);
 }
 
 function OPUS8_noteDownlink(webSocket, payload) {
@@ -404,6 +449,16 @@ function OPUS8_noteDownlink(webSocket, payload) {
   runtime.sessionBytes += size;
   OPUS8_enforceLocalQuota(runtime);
   OPUS8_maybeFlushUsage(runtime);
+}
+
+function OPUS8_finishUsage(requestOrRuntime) {
+  const runtime = requestOrRuntime?.request
+    ? requestOrRuntime
+    : OPUS8_usageRuntime(requestOrRuntime);
+  if (!runtime) return Promise.resolve();
+  if (runtime.closed) return runtime.flushPromise || Promise.resolve();
+  runtime.closed = true;
+  return OPUS8_scheduleUsage(runtime, true);
 }
 
 async function OPUS8_ipHash(runtime) {

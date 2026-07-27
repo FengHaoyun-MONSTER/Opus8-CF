@@ -166,12 +166,15 @@ jobs:
             "acc2-n2|acc2-n2.${ROOT_DOMAIN_ACC2}"
           )
           VERIFY_UUID=""
+          BEFORE_CONNECTIONS=0
+          BEFORE_BYTES=0
 
           smoke_with_retry() {
             local label="$1"
-            shift
+            local script="$2"
+            shift 2
             for attempt in 1 2 3 4; do
-              if python3 infra/scripts/smoke-vless.py "$@"; then
+              if python3 "$script" "$@"; then
                 echo "OK $label"
                 return 0
               fi
@@ -193,36 +196,68 @@ jobs:
               -H "x-opus8-node: $node" \
               -H "x-opus8-sign: $signature" \
               | jq -er '.uuids[0]')"
-            if [ -z "$VERIFY_UUID" ]; then VERIFY_UUID="$uuid"; fi
+            if [ -z "$VERIFY_UUID" ]; then
+              VERIFY_UUID="$uuid"
+              login_body="$(jq -nc --arg password "$ADMIN_PASSWORD" '{password:$password}')"
+              admin_token="$(curl -fsS --max-time 20 -X POST \
+                "$CONTROL_API/api/admin/login" \
+                -H 'content-type: application/json' \
+                --data "$login_body" | jq -er '.token')"
+              before_user="$(curl -fsS --max-time 20 "$CONTROL_API/api/users" \
+                -H "authorization: Bearer $admin_token" \
+                | jq -cer --arg uuid "$VERIFY_UUID" '.users[] | select(.uuid == $uuid)')"
+              BEFORE_CONNECTIONS="$(printf '%s' "$before_user" | jq -er '.connections')"
+              BEFORE_BYTES="$(printf '%s' "$before_user" | jq -er '.bytes_up + .bytes_down')"
+            elif [ "$uuid" != "$VERIFY_UUID" ]; then
+              echo "::error::Nodes returned inconsistent first active UUIDs"
+              exit 1
+            fi
 
             smoke_with_retry "$node direct-cf-egress" \
+              infra/scripts/smoke-vless.py \
               --url "wss://${host}/?ed=2560" \
               --uuid "$uuid" \
               --target example.com \
               --target-port 80 \
               --expect-status 200
             smoke_with_retry "$node ai-landing-warp-egress" \
+              infra/scripts/smoke-vless.py \
               --url "wss://${host}/?ed=2560" \
               --uuid "$uuid" \
               --target openai.com \
               --target-port 80 \
               --expect-status 0
+            smoke_with_retry "$node xhttp-direct-cf-egress" \
+              infra/scripts/smoke-vless-http.py \
+              --url "https://${host}/xhttp" \
+              --transport xhttp \
+              --uuid "$uuid" \
+              --target example.com \
+              --target-port 80 \
+              --expect-status 200
+            smoke_with_retry "$node grpc-direct-cf-egress" \
+              infra/scripts/smoke-vless-http.py \
+              --url "https://${host}/grpc" \
+              --transport grpc \
+              --uuid "$uuid" \
+              --target example.com \
+              --target-port 80 \
+              --expect-status 200
           done
 
           sleep 5
-          login_body="$(jq -nc --arg password "$ADMIN_PASSWORD" '{password:$password}')"
-          admin_token="$(curl -fsS --max-time 20 -X POST \
-            "$CONTROL_API/api/admin/login" \
-            -H 'content-type: application/json' \
-            --data "$login_body" | jq -er '.token')"
           usage_users="$(curl -fsS --max-time 20 "$CONTROL_API/api/users" \
             -H "authorization: Bearer $admin_token")"
-          if printf '%s' "$usage_users" | jq -e --arg uuid "$VERIFY_UUID" \
-            'any(.users[]; .uuid == $uuid and .connections > 0 and
-              ((.bytes_up + .bytes_down) > 0))' >/dev/null; then
-            echo "OK edge-usage-accounting"
+          after_user="$(printf '%s' "$usage_users" \
+            | jq -cer --arg uuid "$VERIFY_UUID" '.users[] | select(.uuid == $uuid)')"
+          AFTER_CONNECTIONS="$(printf '%s' "$after_user" | jq -er '.connections')"
+          AFTER_BYTES="$(printf '%s' "$after_user" | jq -er '.bytes_up + .bytes_down')"
+          CONNECTION_DELTA=$((AFTER_CONNECTIONS - BEFORE_CONNECTIONS))
+          BYTE_DELTA=$((AFTER_BYTES - BEFORE_BYTES))
+          if [ "$CONNECTION_DELTA" -ge 16 ] && [ "$BYTE_DELTA" -gt 0 ]; then
+            echo "OK edge-usage-accounting connections=$CONNECTION_DELTA"
           else
-            echo "::error::Edge traffic was not recorded for the verified UUID"
+            echo "::error::Expected at least 16 metered WS/XHTTP/gRPC connections; got $CONNECTION_DELTA"
             exit 1
           fi
 

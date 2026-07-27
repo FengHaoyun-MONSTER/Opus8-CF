@@ -78,6 +78,33 @@ if (OPUS8_decideLanding(request, presentedUuids, "openai.com") !== false) {
 if (OPUS8_canUseLanding(request, presentedUuids) !== false) {
   throw new Error("locked user must not use landing as fallback");
 }
+presentedUuids.OPUS8_authenticated = "user-a";
+const streamRequest = {};
+OPUS8_setRequestPolicy(streamRequest, unlocked);
+const streamRuntime = OPUS8_bindUsageStream(
+  streamRequest, { NODE_ID: "test" }, {}, presentedUuids, "xhttp",
+);
+streamRuntime.lastAdmission = Date.now();
+const bridge = {
+  readyState: 1,
+  sent: [],
+  send(value) { this.sent.push(value); },
+  close() { this.readyState = 3; },
+};
+OPUS8_attachUsageBridge(streamRequest, bridge);
+OPUS8_noteUplink(streamRequest, new Uint8Array(11));
+OPUS8_noteDownlink(bridge, new Uint8Array(13));
+if (
+  streamRuntime.transport !== "xhttp" ||
+  streamRuntime.bytesUp !== 11 ||
+  streamRuntime.bytesDown !== 13
+) {
+  throw new Error("stream transport byte accounting is incorrect");
+}
+bridge.close();
+if (!streamRuntime.closed || bridge.readyState !== 3) {
+  throw new Error("stream transport must flush and close with its bridge");
+}
 const oldRequest = {};
 OPUS8_setRequestPolicy(oldRequest, await OPUS8_normalizeState({
   uuids: ["legacy-user"],

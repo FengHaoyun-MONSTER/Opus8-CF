@@ -168,7 +168,9 @@ if (!patchedCore.includes(forwardAdmissionNeedle)) {
 }
 patchedCore = patchedCore.replace(
   forwardAdmissionNeedle,
-  forwardAdmissionNeedle + "\n\tawait OPUS8_requireAdmission(request, yourUUID);",
+  forwardAdmissionNeedle +
+    "\n\tOPUS8_attachUsageBridge(request, ws);" +
+    "\n\tawait OPUS8_requireAdmission(request, yourUUID);",
 );
 
 const wsSendNeedle =
@@ -180,6 +182,99 @@ patchedCore = patchedCore.replace(
   wsSendNeedle,
   "async function WebSocket发送并等待(webSocket, payload) {\n\tOPUS8_noteDownlink(webSocket, payload);\n\tconst sendResult = webSocket.send(payload);",
 );
+
+// --- 补丁7：把 gRPC/XHTTP 流式传输接入同一套准入、配额和计量。 ---
+const grpcCallNeedle = "return await 处理gRPC请求(request, activeUUIDs);";
+const xhttpCallNeedle = "return await 处理XHTTP请求(request, activeUUIDs);";
+if (!patchedCore.includes(grpcCallNeedle) || !patchedCore.includes(xhttpCallNeedle)) {
+  throw new Error("PATCH7 FAIL: 找不到 gRPC/XHTTP 调用点");
+}
+patchedCore = patchedCore.replace(
+  grpcCallNeedle,
+  "return await 处理gRPC请求(request, activeUUIDs, env, ctx);",
+);
+patchedCore = patchedCore.replace(
+  xhttpCallNeedle,
+  "return await 处理XHTTP请求(request, activeUUIDs, env, ctx);",
+);
+
+function patchStreamTransport(source, {
+  functionStart,
+  functionEnd,
+  signature,
+  transport,
+  initialHookNeedle,
+  initialPayload,
+  loopPayloadNeedle,
+}) {
+  const start = source.indexOf(functionStart);
+  const end = source.indexOf(functionEnd, start);
+  if (start === -1 || end === -1) {
+    throw new Error(`PATCH7 FAIL: 找不到 ${transport} 处理函数`);
+  }
+  let block = source.slice(start, end);
+  if (!block.includes(signature)) {
+    throw new Error(`PATCH7 FAIL: 找不到 ${transport} 函数签名`);
+  }
+  block = block.replace(
+    signature,
+    signature.replace(") {", ", env, ctx) {") +
+      `\n\tOPUS8_bindUsageStream(request, env, ctx, yourUUID, "${transport}");`,
+  );
+  if (initialHookNeedle) {
+    if (!block.includes(initialHookNeedle)) {
+      throw new Error(`PATCH7 FAIL: 找不到 ${transport} 首包计量点`);
+    }
+    block = block.replace(
+      initialHookNeedle,
+      `\tOPUS8_noteUplink(request, ${initialPayload});\n${initialHookNeedle}`,
+    );
+  }
+  if (!block.includes(loopPayloadNeedle)) {
+    throw new Error(`PATCH7 FAIL: 找不到 ${transport} 上行计量点`);
+  }
+  block = block.replace(
+    loopPayloadNeedle,
+    loopPayloadNeedle + "\n\t\t\t\t\tOPUS8_noteUplink(request, " +
+      (transport === "grpc" ? "payload" : "value") + ");",
+  );
+  const finallyNeedle = /\t\t\t\} finally \{\r?\n/;
+  if (!finallyNeedle.test(block)) {
+    throw new Error(`PATCH7 FAIL: 找不到 ${transport} 完成计量点`);
+  }
+  block = block.replace(
+    finallyNeedle,
+    (matched) => matched + "\t\t\t\tawait OPUS8_finishUsage(request);\n",
+  );
+  const cancelNeedle = /\t\tcancel\(\) \{\r?\n/;
+  if (!cancelNeedle.test(block)) {
+    throw new Error(`PATCH7 FAIL: 找不到 ${transport} 取消计量点`);
+  }
+  block = block.replace(
+    cancelNeedle,
+    (matched) => matched + "\t\t\tOPUS8_finishUsage(request);\n",
+  );
+  return source.slice(0, start) + block + source.slice(end);
+}
+
+patchedCore = patchStreamTransport(patchedCore, {
+  functionStart: "async function 处理XHTTP请求(",
+  functionEnd: "\nfunction 有效数据长度(",
+  signature: "async function 处理XHTTP请求(request, yourUUID) {",
+  transport: "xhttp",
+  initialHookNeedle: "\tif (isSpeedTestSite(首包.hostname)) {",
+  initialPayload: "首包.rawData",
+  loopPayloadNeedle: "if (!value || value.byteLength === 0) continue;",
+});
+patchedCore = patchStreamTransport(patchedCore, {
+  functionStart: "async function 处理gRPC请求(",
+  functionEnd: "\nfunction 是有效WS早期数据(",
+  signature: "async function 处理gRPC请求(request, yourUUID) {",
+  transport: "grpc",
+  initialHookNeedle: null,
+  initialPayload: null,
+  loopPayloadNeedle: "if (!payload.byteLength) continue;",
+});
 
 const out = "// [Opus8-CF build] prelude + patched vendor core\n" + prelude + "\n" + patchedCore;
 

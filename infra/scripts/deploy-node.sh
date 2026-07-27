@@ -149,7 +149,9 @@ echo "OK uuids-endpoint-count=$UC"
 HAS_LANDING_BUNDLE=$(printf '%s' "$UDATA" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(typeof j.landingBundle==="string"&&j.landingBundle.startsWith("v1.")?"1":"0")}catch(e){process.stdout.write("0")}})')
 if [ "$HAS_LANDING_BUNDLE" = "1" ]; then echo "OK landing-bundle-encrypted"; else echo "ERROR landing-bundle-missing"; exit 16; fi
 TEST_UUID=$(printf '%s' "$UDATA" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String((j.uuids||[])[0]||""))}catch(e){}})')
-[ -n "$TEST_UUID" ] || TEST_UUID="$NODE_UUID"
+# 节点发布并行运行，使用本节点 UUID 做协议烟雾测试，避免多个 GitHub Runner
+# 同时占用真实用户的公网 IP 租约；中央策略在 verify-routing 单 Runner 中验证。
+TEST_UUID="$NODE_UUID"
 
 echo "STEP vless-smoke"
 SMOKE_OK=0
@@ -167,6 +169,19 @@ else
   tail -n 3 /tmp/vless.log
   exit 17
 fi
+
+for transport in xhttp grpc; do
+  if python3 "$REPO_ROOT/infra/scripts/smoke-vless-http.py" \
+    --url "https://${HOST}/${transport}" \
+    --transport "$transport" \
+    --uuid "$TEST_UUID" >/tmp/vless-"$transport".log 2>&1; then
+    echo "OK vless-${transport}-auth-egress"
+  else
+    echo "ERROR vless-${transport}-smoke"
+    tail -n 3 /tmp/vless-"$transport".log
+    exit 18
+  fi
+done
 [ -n "$LAND" ] && echo "OK unlock=on(AI域名走落地)" || echo "INFO unlock=off"
 
 echo "DONE url=$URL"
