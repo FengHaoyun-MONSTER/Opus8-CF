@@ -1,0 +1,119 @@
+name: enroll-zero-trust
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-landing
+  cancel-in-progress: false
+
+jobs:
+  enroll:
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.SERVICES_IP }}
+      VPS_SSH_USER: ${{ secrets.SERVICES_USER }}
+      VPS_SSH_PASSWORD: ${{ secrets.SERVICES_CODE }}
+      VPS_SSH_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+      SOCKS_USER: ${{ secrets.SOCKS_USER }}
+      SOCKS_PASSWORD: ${{ secrets.SOCKS_PASSWORD }}
+      CF_ZERO_TRUST_TEAM: ${{ secrets.CF_ZERO_TRUST_TEAM }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate and mask credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${VPS_HOST:?SERVICES_IP is required}"
+          : "${VPS_SSH_USER:?SERVICES_USER is required}"
+          : "${VPS_SSH_PASSWORD:?SERVICES_CODE is required}"
+          : "${SOCKS_USER:?SOCKS_USER is required}"
+          : "${SOCKS_PASSWORD:?SOCKS_PASSWORD is required}"
+          : "${CF_ZERO_TRUST_TEAM:?CF_ZERO_TRUST_TEAM is required}"
+          : "${CF_ACCESS_CLIENT_ID:?CF_ACCESS_CLIENT_ID is required}"
+          : "${CF_ACCESS_CLIENT_SECRET:?CF_ACCESS_CLIENT_SECRET is required}"
+          echo "::add-mask::$VPS_HOST"
+          echo "::add-mask::$VPS_SSH_USER"
+          echo "::add-mask::$VPS_SSH_PASSWORD"
+          echo "::add-mask::$SOCKS_USER"
+          echo "::add-mask::$SOCKS_PASSWORD"
+          echo "::add-mask::$CF_ACCESS_CLIENT_ID"
+          echo "::add-mask::$CF_ACCESS_CLIENT_SECRET"
+          echo "VPS_SSH_PORT=${VPS_SSH_PORT:-22}" >> "$GITHUB_ENV"
+
+      - name: Install SSH client
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
+
+      - name: Build managed deployment profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cat > /tmp/opus8-mdm.xml <<EOF
+          <dict>
+            <key>auth_client_id</key>
+            <string>${CF_ACCESS_CLIENT_ID}</string>
+            <key>auth_client_secret</key>
+            <string>${CF_ACCESS_CLIENT_SECRET}</string>
+            <key>auto_connect</key>
+            <integer>1</integer>
+            <key>onboarding</key>
+            <false/>
+            <key>organization</key>
+            <string>${CF_ZERO_TRUST_TEAM}</string>
+            <key>service_mode</key>
+            <string>proxy</string>
+            <key>proxy_port</key>
+            <integer>40000</integer>
+          </dict>
+          EOF
+
+      - name: Enroll VPS and preserve Local Proxy mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          SCP_OPTS=(
+            -P "$VPS_SSH_PORT"
+            -o ConnectTimeout=12
+            -o StrictHostKeyChecking=accept-new
+          )
+          SSH_OPTS=(
+            -p "$VPS_SSH_PORT"
+            -o ConnectTimeout=12
+            -o StrictHostKeyChecking=accept-new
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+          )
+
+          sshpass -e scp "${SCP_OPTS[@]}" /tmp/opus8-mdm.xml \
+            infra/scripts/enroll-zero-trust.sh "$VPS_SSH_USER@$VPS_HOST:/tmp/"
+          TEAM_B64=$(printf '%s' "$CF_ZERO_TRUST_TEAM" | base64 -w0)
+          sshpass -e ssh "${SSH_OPTS[@]}" "$VPS_SSH_USER@$VPS_HOST" \
+            "CF_ZERO_TRUST_TEAM=\$(printf '%s' '$TEAM_B64' | base64 -d) bash /tmp/enroll-zero-trust.sh"
+
+      - name: Verify production Dante to managed WARP
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXIT_IP=$(curl -4fsS --max-time 30 \
+            --proxy "socks5h://${VPS_HOST}:40008" \
+            --proxy-user "${SOCKS_USER}:${SOCKS_PASSWORD}" \
+            https://api.ipify.org)
+          test -n "$EXIT_IP"
+          if curl -4fsS --max-time 8 \
+            --proxy "socks5h://${VPS_HOST}:40008" \
+            https://api.ipify.org >/dev/null 2>&1; then
+            echo "::error::Dante unexpectedly permits unauthenticated access"
+            exit 1
+          fi
+          echo "OK managed-warp-through-authenticated-dante"
