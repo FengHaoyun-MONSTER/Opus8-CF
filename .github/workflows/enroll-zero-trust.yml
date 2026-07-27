@@ -2,6 +2,15 @@ name: enroll-zero-trust
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Zero Trust operation
+        required: true
+        default: enroll
+        type: choice
+        options:
+          - enroll
+          - diagnose
 
 permissions:
   contents: read
@@ -54,6 +63,7 @@ jobs:
           sudo apt-get install -y -qq sshpass
 
       - name: Build managed deployment profile
+        if: inputs.operation == 'enroll'
         shell: bash
         run: |
           set -euo pipefail
@@ -78,6 +88,7 @@ jobs:
           EOF
 
       - name: Enroll VPS and preserve Local Proxy mode
+        if: inputs.operation == 'enroll'
         shell: bash
         run: |
           set -euo pipefail
@@ -102,6 +113,7 @@ jobs:
             "CF_ZERO_TRUST_TEAM=\$(printf '%s' '$TEAM_B64' | base64 -d) bash /tmp/enroll-zero-trust.sh"
 
       - name: Verify production Dante to managed WARP
+        if: inputs.operation == 'enroll'
         shell: bash
         run: |
           set -euo pipefail
@@ -117,3 +129,30 @@ jobs:
             exit 1
           fi
           echo "OK managed-warp-through-authenticated-dante"
+
+      - name: Diagnose recent Zero Trust enrollment
+        if: inputs.operation == 'diagnose'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          sshpass -e ssh -p "$VPS_SSH_PORT" \
+            -o ConnectTimeout=12 \
+            -o StrictHostKeyChecking=accept-new \
+            "$VPS_SSH_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set -u
+          echo "DIAG status_begin"
+          warp-cli --accept-tos status 2>&1 || true
+          echo "DIAG settings_begin"
+          warp-cli --accept-tos settings 2>&1 \
+            | sed -E 's/[A-Za-z0-9._-]{24,}/<redacted>/g' || true
+          echo "DIAG registration_begin"
+          warp-cli --accept-tos registration show 2>&1 \
+            | sed -E 's/[A-Za-z0-9._@-]{24,}/<redacted>/g' || true
+          echo "DIAG journal_begin"
+          journalctl -u warp-svc.service --since '30 minutes ago' --no-pager 2>&1 \
+            | grep -Ei 'registration|enroll|auth|token|organization|team|mdm|error|failed|denied|forbidden' \
+            | sed -E 's/[A-Za-z0-9._@:/?&=%-]{24,}/<redacted>/g' \
+            | tail -n 120 || true
+          echo "DIAG journal_end"
+          REMOTE
