@@ -88,8 +88,17 @@ echo "OK custom-domain-ready api=$API_URL sub=$SUB_URL"
 
 echo "STEP smoke"
 if curl -fsS --max-time 15 "$API_URL/health" | grep -q '"ok":true'; then echo "OK smoke-health"; else echo "ERROR smoke-health"; exit 15; fi
-LOGIN=$(curl -fsS --max-time 15 -X POST "$API_URL/api/admin/login" -H 'content-type: application/json' -d "{\"password\":\"${ADMIN_PASSWORD:-}\"}")
-TOK=$(printf '%s' "$LOGIN" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).token||"")}catch(e){process.stdout.write("")}})')
+TOK=""
+for n in $(seq 1 18); do
+  LOGIN=$(curl -s --max-time 15 -X POST "$API_URL/api/admin/login" -H 'content-type: application/json' -d "{\"password\":\"${ADMIN_PASSWORD:-}\"}" || true)
+  TOK=$(printf '%s' "$LOGIN" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).token||"")}catch(e){process.stdout.write("")}})')
+  if [ -n "$TOK" ]; then
+    MECODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$API_URL/api/admin/me" -H "authorization: Bearer $TOK" || true)
+    [ "$MECODE" = "200" ] && break
+    TOK=""
+  fi
+  sleep 5
+done
 if [ -n "$TOK" ]; then echo "OK smoke-login"; else echo "ERROR smoke-login"; exit 16; fi
 ORPH=$(curl -fsS --max-time 15 "$API_URL/api/users" -H "authorization: Bearer $TOK" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const u=JSON.parse(s).users||[];process.stdout.write(u.filter(x=>x.username==="__smoke__").map(x=>x.id).join(" "))}catch(e){}})')
 for id in $ORPH; do curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$id" -H "authorization: Bearer $TOK" >/dev/null; done
