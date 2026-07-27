@@ -27,9 +27,15 @@ if (OPUS8_decideLanding(request, "user-a", "evilopenai.com") !== false) {
 if (OPUS8_decideLanding(request, "user-a", "example.com") !== false) {
   throw new Error("unlisted domain must use direct egress");
 }
+if (OPUS8_canUseLanding(request, presentedUuids) !== true) {
+  throw new Error("unlocked user must be allowed to use landing as direct fallback");
+}
 presentedUuids.OPUS8_authenticated = "user-b";
 if (OPUS8_decideLanding(request, presentedUuids, "openai.com") !== false) {
   throw new Error("locked user must not use landing");
+}
+if (OPUS8_canUseLanding(request, presentedUuids) !== false) {
+  throw new Error("locked user must not use landing as fallback");
 }
 const oldRequest = {};
 OPUS8_setRequestPolicy(oldRequest, OPUS8_normalizeState({

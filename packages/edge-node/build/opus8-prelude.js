@@ -67,8 +67,7 @@ function OPUS8_setRequestPolicy(request, state) {
   if (request && typeof request === "object") OPUS8_requestPolicies.set(request, state);
 }
 
-// true=落地，false=CF 直出，null=旧控制面/离线兜底，交给 vendor 原有规则。
-function OPUS8_decideLanding(request, uuid, host) {
+function OPUS8_canUseLanding(request, uuid) {
   const state = request && typeof request === "object"
     ? OPUS8_requestPolicies.get(request)
     : null;
@@ -76,7 +75,14 @@ function OPUS8_decideLanding(request, uuid, host) {
   if (!state.socks5Enabled) return false;
   const presentedUuid = Array.isArray(uuid) ? uuid.OPUS8_authenticated : uuid;
   const normalizedUuid = String(presentedUuid || "").toLowerCase();
-  if (!state.unlockUuids.includes(normalizedUuid)) return false;
+  return state.unlockUuids.includes(normalizedUuid);
+}
+
+// true=优先落地，false=优先 CF 直出，null=旧控制面/离线兜底。
+function OPUS8_decideLanding(request, uuid, host) {
+  const allowed = OPUS8_canUseLanding(request, uuid);
+  if (allowed !== true) return allowed;
+  const state = OPUS8_requestPolicies.get(request);
   const normalizedHost = String(host || "").toLowerCase().replace(/\.$/, "");
   return state.unlockHosts.some((domain) =>
     normalizedHost === domain || normalizedHost.endsWith("." + domain));

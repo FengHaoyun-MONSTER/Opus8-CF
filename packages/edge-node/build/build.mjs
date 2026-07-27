@@ -66,10 +66,14 @@ let forwardBlock = patchedCore.slice(forwardStart, forwardEnd);
 const routeNeedle = "\tif (启用SOCKS5反代 && (启用SOCKS5全局反代 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host)))) {";
 if (!forwardBlock.includes(routeNeedle)) throw new Error("PATCH3 FAIL: 找不到 SOCKS5 路由条件");
 const decision =
+  "\tconst OPUS8_landingAllowed = OPUS8_canUseLanding(request, yourUUID);\n" +
   "\tconst OPUS8_landingDecision = OPUS8_decideLanding(request, yourUUID, host);\n" +
   "\tconst OPUS8_useConfiguredProxy = OPUS8_landingDecision === null\n" +
   "\t\t? Boolean(启用SOCKS5反代 && (启用SOCKS5全局反代 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host))))\n" +
-  "\t\t: Boolean(启用SOCKS5反代 && OPUS8_landingDecision);\n";
+  "\t\t: Boolean(启用SOCKS5反代 && OPUS8_landingDecision);\n" +
+  "\tconst OPUS8_allowConfiguredProxy = OPUS8_landingAllowed === null\n" +
+  "\t\t? Boolean(启用SOCKS5反代)\n" +
+  "\t\t: Boolean(启用SOCKS5反代 && OPUS8_landingAllowed);\n";
 const connectorNeedle = /\tconst TCP连接 = 创建请求TCP连接器\(request\);\r?\n/;
 if (!connectorNeedle.test(forwardBlock)) throw new Error("PATCH3 FAIL: 找不到请求 TCP 连接器");
 forwardBlock = forwardBlock.replace(
@@ -79,7 +83,7 @@ forwardBlock = forwardBlock.replace(
 forwardBlock = forwardBlock.replace(routeNeedle, "\tif (OPUS8_useConfiguredProxy) {");
 for (const type of ["socks5", "http", "https", "turn", "sstp"]) {
   const needle = `启用SOCKS5反代 === '${type}'`;
-  const replacement = `OPUS8_useConfiguredProxy && ${needle}`;
+  const replacement = `OPUS8_allowConfiguredProxy && ${needle}`;
   const before = forwardBlock;
   forwardBlock = forwardBlock.replace(needle, replacement);
   if (before === forwardBlock) throw new Error(`PATCH3 FAIL: 找不到 ${type} 代理分支`);
