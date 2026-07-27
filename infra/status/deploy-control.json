@@ -1,6 +1,6 @@
 {
-  "result": "failure",
-  "controlUrl": "",
+  "result": "success",
+  "controlUrl": "https://api.thinderbox.com",
   "markers": [
     "STEP ensure-d1-kv",
     "OK ids-resolved d1=260b0f8f… kv=4526bc39…",
@@ -19,21 +19,28 @@
     "STEP wait-custom-domain",
     "OK custom-domain-ready api=https://api.thinderbox.com sub=https://sub.thinderbox.com",
     "STEP smoke",
-    "OK smoke-health"
+    "OK smoke-health",
+    "OK smoke-login",
+    "OK smoke-create-user(D1-write)",
+    "OK smoke-subscription",
+    "OK smoke-sub-has-node",
+    "OK smoke-sub-hostname-only",
+    "OK smoke-cleanup",
+    "DONE url=https://api.thinderbox.com"
   ],
   "tail": [
-    "OK deployed workers=https://opus8cf-control.techtoolhub-office.workers.dev custom=https://api.thinderbox.com",
-    "STEP secrets",
-    "OK secret ADMIN_PASSWORD",
-    "OK secret JWT_SECRET",
-    "OK secret NODE_HMAC_SECRET",
-    "OK secret ROOT_DOMAIN",
     "OK secret SUB_BASE",
     "STEP wait-custom-domain",
     "OK custom-domain-ready api=https://api.thinderbox.com sub=https://sub.thinderbox.com",
     "STEP smoke",
     "OK smoke-health",
-    "curl: (22) The requested URL returned error: 401"
+    "OK smoke-login",
+    "OK smoke-create-user(D1-write)",
+    "OK smoke-subscription",
+    "OK smoke-sub-has-node",
+    "OK smoke-sub-hostname-only",
+    "OK smoke-cleanup",
+    "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-07-27T08:17:54Z"
+  "finishedAt": "2026-07-27T08:22:34Z"
 }
