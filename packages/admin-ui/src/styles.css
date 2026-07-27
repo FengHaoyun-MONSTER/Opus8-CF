@@ -106,6 +106,13 @@ button { font: inherit; }
 .btn-danger { background: transparent; color: var(--red); border: 1px solid rgba(248,81,73,.3); padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; }
 .btn-danger:hover { background: rgba(248,81,73,.12); }
 .switch-label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
+.users-view { max-width: 1280px; }
+.user-create-bar { margin-top: 18px; }
+.field-hints { display: flex; gap: 18px; font-size: 11px; margin: 0 0 12px 225px; }
+.table-scroll { width: 100%; overflow-x: auto; }
+.user-actions { display: flex; flex-wrap: wrap; gap: 5px; min-width: 205px; }
+.status-button { border: 0; cursor: pointer; }
+.small-text { font-size: 11px; margin-top: 4px; white-space: nowrap; }
 
 /* ---------- landing routes ---------- */
 .routes-view { max-width: 820px; }

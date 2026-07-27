@@ -6,6 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "esbuild src/index.ts --bundle --format=esm --external:cloudflare:sockets --outfile=dist/index.js",
+    "test:integration": "node test/integration.mjs",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

@@ -79,6 +79,62 @@ CREATE TABLE IF NOT EXISTS usage (
   PRIMARY KEY (user_id, node_id, ts_bucket)
 );
 
+-- 服务端防分享策略。device_limit 表示五分钟租约窗口内可同时活跃的公网 IP 数。
+CREATE TABLE IF NOT EXISTS user_limits (
+  user_id             TEXT PRIMARY KEY,
+  device_limit        INTEGER NOT NULL DEFAULT 2,
+  ip_limit_24h        INTEGER NOT NULL DEFAULT 5,
+  traffic_limit_bytes INTEGER NOT NULL DEFAULT 0,
+  updated_at          INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 仅保存由 NODE_HMAC_SECRET HMAC 后的 IP，不保存客户原始 IP。
+CREATE TABLE IF NOT EXISTS active_leases (
+  user_id     TEXT NOT NULL,
+  uuid        TEXT NOT NULL,
+  node_id     TEXT NOT NULL,
+  ip_hash     TEXT NOT NULL,
+  lease_id    TEXT NOT NULL,
+  first_seen  INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  PRIMARY KEY (user_id, ip_hash),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_active_leases_expiry
+  ON active_leases(user_id, expires_at);
+
+CREATE TABLE IF NOT EXISTS ip_history (
+  user_id     TEXT NOT NULL,
+  ip_hash     TEXT NOT NULL,
+  first_seen  INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL,
+  PRIMARY KEY (user_id, ip_hash),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ip_history_recent
+  ON ip_history(user_id, last_seen);
+
+-- 事件 ID + applied 标记保证节点重试不会重复累加流量。
+CREATE TABLE IF NOT EXISTS usage_events (
+  event_id    TEXT PRIMARY KEY,
+  user_id     TEXT NOT NULL,
+  node_id     TEXT NOT NULL,
+  ts_bucket   INTEGER NOT NULL,
+  connections INTEGER NOT NULL DEFAULT 0,
+  bytes_up    INTEGER NOT NULL DEFAULT 0,
+  bytes_down  INTEGER NOT NULL DEFAULT 0,
+  applied     INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_created
+  ON usage_events(created_at);
+
 -- 计费预留（P7，一期不写入）
 CREATE TABLE IF NOT EXISTS orders (
   id          TEXT PRIMARY KEY,

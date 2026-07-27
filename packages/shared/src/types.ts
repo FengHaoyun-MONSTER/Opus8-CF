@@ -26,6 +26,15 @@ export interface UserRecord {
   created_at: number;
 }
 
+export interface UserAccessPolicy {
+  userId: string;
+  uuid: string;
+  deviceLimit: number;
+  ipLimit24h: number;
+  trafficLimitBytes: number;
+  usedBytes: number;
+}
+
 export interface PlanRecord {
   id: string;
   name: string;
@@ -63,6 +72,7 @@ export interface ActiveUuidsResponse {
   unlockHosts: string[]; // 命中则走 SOCKS5 落地
   socks5Enabled: boolean;
   landingBundle?: string; // 用 NODE_HMAC_SECRET 派生密钥加密的多落地运行配置
+  accessPolicies?: UserAccessPolicy[];
 }
 
 export type SubFormat = "base64" | "clash" | "singbox";

@@ -137,6 +137,50 @@ patchedCore = patchedCore.replace(
   "\tconst { username, password, hostname, port } = OPUS8_proxyAddress || parsedSocks5Address;",
 );
 
+// --- 补丁6：VLESS WebSocket 准入与双向字节计量。 ---
+const wsCallNeedle = "return await 处理WS请求(request, activeUUIDs, url);";
+const wsFunctionNeedle = "async function 处理WS请求(request, yourUUID, url) {";
+const wsBinaryNeedle = "\tserverSock.binaryType = 'arraybuffer';";
+if (
+  !patchedCore.includes(wsCallNeedle) ||
+  !patchedCore.includes(wsFunctionNeedle) ||
+  !patchedCore.includes(wsBinaryNeedle)
+) {
+  throw new Error("PATCH6 FAIL: 找不到 WebSocket 计量挂载点");
+}
+patchedCore = patchedCore.replace(
+  wsCallNeedle,
+  "return await 处理WS请求(request, activeUUIDs, url, env, ctx);",
+);
+patchedCore = patchedCore.replace(
+  wsFunctionNeedle,
+  "async function 处理WS请求(request, yourUUID, url, env, ctx) {",
+);
+patchedCore = patchedCore.replace(
+  wsBinaryNeedle,
+  wsBinaryNeedle + "\n\tOPUS8_bindUsageSocket(serverSock, request, env, ctx, yourUUID);",
+);
+
+const forwardAdmissionNeedle =
+  "async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnWrapper, yourUUID, request = null) {";
+if (!patchedCore.includes(forwardAdmissionNeedle)) {
+  throw new Error("PATCH6 FAIL: 找不到 TCP 准入挂载点");
+}
+patchedCore = patchedCore.replace(
+  forwardAdmissionNeedle,
+  forwardAdmissionNeedle + "\n\tawait OPUS8_requireAdmission(request, yourUUID);",
+);
+
+const wsSendNeedle =
+  /async function WebSocket发送并等待\(webSocket, payload\) \{\r?\n\tconst sendResult = webSocket\.send\(payload\);/;
+if (!wsSendNeedle.test(patchedCore)) {
+  throw new Error("PATCH6 FAIL: 找不到 WebSocket 下行计量挂载点");
+}
+patchedCore = patchedCore.replace(
+  wsSendNeedle,
+  "async function WebSocket发送并等待(webSocket, payload) {\n\tOPUS8_noteDownlink(webSocket, payload);\n\tconst sendResult = webSocket.send(payload);",
+);
+
 const out = "// [Opus8-CF build] prelude + patched vendor core\n" + prelude + "\n" + patchedCore;
 
 mkdirSync(join(pkg, "dist"), { recursive: true });

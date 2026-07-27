@@ -161,9 +161,49 @@ for id in $ORPH; do curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$id" -
 CU=$(curl -fsS --max-time 15 -X POST "$API_URL/api/users" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"username":"__smoke__","durationDays":1}')
 SUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.id||"")}catch(e){process.stdout.write("")}})')
 SUB=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).subUrl||"")}catch(e){process.stdout.write("")}})')
-if [ -n "$SUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; exit 21; fi
-SUBBODY=$(curl -fsS --max-time 20 "$SUB")
+SUUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.uuid||"")}catch(e){process.stdout.write("")}})')
+if [ -n "$SUID" ] && [ -n "$SUUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; exit 21; fi
+
+signed_node_post() {
+  local path="$1" body="$2" output="$3" ts sig
+  ts=$(date +%s)000
+  sig=$(printf '%s' "${ts}.smoke-node.${body}" | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+  curl -fsS --max-time 20 -X POST "$API_URL$path" \
+    -H "x-opus8-ts: $ts" \
+    -H "x-opus8-node: smoke-node" \
+    -H "x-opus8-sign: $sig" \
+    -H 'content-type: application/json' \
+    --data "$body" > "$output"
+}
+
+for suffix in a b c; do
+  ADMISSION_BODY=$(SUUID="$SUUID" SUFFIX="$suffix" node -e 'process.stdout.write(JSON.stringify({nodeId:"smoke-node",uuid:process.env.SUUID,leaseId:"smoke-lease-"+process.env.SUFFIX,ipHash:"smoke-ip-"+process.env.SUFFIX}))')
+  signed_node_post "/api/nodes/admission" "$ADMISSION_BODY" "/tmp/admission-$suffix.json"
+done
+if node -e 'const fs=require("fs");const a=JSON.parse(fs.readFileSync("/tmp/admission-a.json"));const b=JSON.parse(fs.readFileSync("/tmp/admission-b.json"));const c=JSON.parse(fs.readFileSync("/tmp/admission-c.json"));process.exit(a.allowed&&b.allowed&&!c.allowed&&c.reason==="active_ip_limit_exceeded"?0:1)'; then
+  echo "OK smoke-active-ip-limit"
+else
+  echo "ERROR smoke-active-ip-limit"; exit 22
+fi
+
+BUCKET=$(( $(date +%s) / 3600 * 3600 * 1000 ))
+USAGE_BODY=$(SUUID="$SUUID" BUCKET="$BUCKET" node -e 'process.stdout.write(JSON.stringify({nodeId:"smoke-node",events:[{id:"smoke-node:usage-event",uuid:process.env.SUUID,connections:1,bytesUp:111,bytesDown:222,tsBucket:Number(process.env.BUCKET)}]}))')
+signed_node_post "/api/nodes/usage" "$USAGE_BODY" /tmp/usage-1.json
+signed_node_post "/api/nodes/usage" "$USAGE_BODY" /tmp/usage-2.json
+USERS_AFTER=$(curl -fsS --max-time 15 "$API_URL/api/users" -H "authorization: Bearer $TOK")
+if printf '%s' "$USERS_AFTER" | SUID="$SUID" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const u=(JSON.parse(s).users||[]).find(x=>x.id===process.env.SUID);process.exit(u&&u.bytes_up===111&&u.bytes_down===222&&u.connections===1?0:1)})'; then
+  echo "OK smoke-idempotent-usage"
+else
+  echo "ERROR smoke-idempotent-usage"; exit 23
+fi
+
+SUBBODY=$(curl -fsS -D /tmp/sub.headers --max-time 20 "$SUB")
 if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; exit 22; fi
+if grep -qiE '^subscription-userinfo:.*upload=111;.*download=222;' /tmp/sub.headers; then
+  echo "OK smoke-subscription-usage"
+else
+  echo "ERROR smoke-subscription-usage"; exit 24
+fi
 if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -q 'vless://'; then echo "OK smoke-sub-has-node"; else echo "ERROR smoke-sub-no-node"; exit 23; fi
 if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -qE 'vless://[^@]+@[0-9]{1,3}\.[0-9]{1,3}\.'; then
   echo "ERROR smoke-sub-still-uses-unverified-ip"; exit 24

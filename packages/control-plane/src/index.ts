@@ -11,7 +11,8 @@ import {
 } from "@opus8-cf/shared";
 import {
   type Env, listNodes, upsertNode, touchNode, listUsers, insertUser, deleteUser,
-  getUserByToken, activeUserPolicy, updateUserPolicy,
+  getUserByToken, activeUserPolicy, updateUserPolicy, getUserUsage,
+  resetUserUsage, clearUserLeases, getUserLimits,
 } from "./db";
 import { nodesForUser, renderSubscription, pickFormat } from "./subscription";
 import {
@@ -22,6 +23,7 @@ import {
   type LandingInput,
 } from "./landings";
 import { sealJson } from "./secret-box";
+import { admitConnection, recordUsage, type AdmissionInput } from "./usage";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const CORS = {
@@ -84,8 +86,25 @@ export default {
       if (p === "/api/users" && m === "POST") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         const b = (await req.json().catch(() => ({}))) as {
-          username?: string; planId?: string; nodeGroup?: string[]; unlock?: boolean; durationDays?: number;
+          username?: string;
+          planId?: string;
+          nodeGroup?: string[];
+          unlock?: boolean;
+          durationDays?: number;
+          deviceLimit?: number;
+          ipLimit24h?: number;
+          trafficLimitBytes?: number;
         };
+        let deviceLimit: number;
+        let ipLimit24h: number;
+        let trafficLimitBytes: number;
+        try {
+          deviceLimit = boundedInteger(b.deviceLimit, 1, 20, 2);
+          ipLimit24h = boundedInteger(b.ipLimit24h, deviceLimit, 100, Math.max(5, deviceLimit));
+          trafficLimitBytes = boundedInteger(b.trafficLimitBytes, 0, Number.MAX_SAFE_INTEGER, 0);
+        } catch (error) {
+          return err((error as Error).message, 400);
+        }
         const now = Date.now();
         const user: UserRecord = {
           id: randomHex(8),
@@ -99,7 +118,7 @@ export default {
           enabled: 1,
           created_at: now,
         };
-        await insertUser(env, user);
+        await insertUser(env, user, { deviceLimit, ipLimit24h, trafficLimitBytes });
         // 订阅链接用 worker 实际访问源（workers.dev）；接入自定义域名后可改为 SUB_BASE。
         const base = env.SUB_BASE || url.origin;
         return json({ user, subUrl: `${base}/sub/${user.sub_token}` }, 201);
@@ -108,20 +127,62 @@ export default {
       if (userMatch && m === "PATCH") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         const b = (await req.json().catch(() => ({}))) as {
-          unlock?: unknown; enabled?: unknown;
+          unlock?: unknown;
+          enabled?: unknown;
+          deviceLimit?: unknown;
+          ipLimit24h?: unknown;
+          trafficLimitBytes?: unknown;
         };
         if (b.unlock !== undefined && typeof b.unlock !== "boolean") return err("unlock 必须是布尔值");
         if (b.enabled !== undefined && typeof b.enabled !== "boolean") return err("enabled 必须是布尔值");
-        if (b.unlock === undefined && b.enabled === undefined) return err("没有可更新的字段");
+        const deviceLimit = optionalBoundedInteger(b.deviceLimit, 1, 20);
+        const ipLimit24h = optionalBoundedInteger(b.ipLimit24h, 1, 100);
+        const trafficLimitBytes = optionalBoundedInteger(b.trafficLimitBytes, 0, Number.MAX_SAFE_INTEGER);
+        if (deviceLimit === false || ipLimit24h === false || trafficLimitBytes === false) {
+          return err("连接限制或流量额度超出允许范围");
+        }
+        if (
+          b.unlock === undefined &&
+          b.enabled === undefined &&
+          deviceLimit === undefined &&
+          ipLimit24h === undefined &&
+          trafficLimitBytes === undefined
+        ) return err("没有可更新的字段");
+        const currentLimits = await getUserLimits(env, userMatch[1]);
+        if (!currentLimits) return err("用户不存在", 404);
+        const effectiveDeviceLimit = typeof deviceLimit === "number"
+          ? deviceLimit
+          : currentLimits.deviceLimit;
+        const effectiveIpLimit24h = typeof ipLimit24h === "number"
+          ? ipLimit24h
+          : currentLimits.ipLimit24h;
+        if (effectiveIpLimit24h < effectiveDeviceLimit) {
+          return err("24 小时 IP 上限不能小于同时在线 IP 上限");
+        }
         await updateUserPolicy(env, userMatch[1], {
           unlock: b.unlock as boolean | undefined,
           enabled: b.enabled as boolean | undefined,
+          deviceLimit: deviceLimit as number | undefined,
+          ipLimit24h: ipLimit24h as number | undefined,
+          trafficLimitBytes: trafficLimitBytes as number | undefined,
         });
         return json({ ok: true });
       }
       if (userMatch && m === "DELETE") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         await deleteUser(env, userMatch[1]);
+        return json({ ok: true });
+      }
+      const usageResetMatch = p.match(/^\/api\/users\/([^/]+)\/usage\/reset$/);
+      if (usageResetMatch && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        await resetUserUsage(env, usageResetMatch[1]);
+        return json({ ok: true });
+      }
+      const leaseResetMatch = p.match(/^\/api\/users\/([^/]+)\/leases\/reset$/);
+      if (leaseResetMatch && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        await clearUserLeases(env, leaseResetMatch[1]);
         return json({ ok: true });
       }
 
@@ -212,6 +273,30 @@ export default {
         await touchNode(env, b.nodeId, b.health ?? "healthy", b.preferredIp ?? null, Date.now());
         return json({ ok: true });
       }
+      if (p === "/api/nodes/admission" && m === "POST") {
+        const body = await req.text();
+        const nodeId = await verifyNodeSig(req, env, body);
+        if (!nodeId) return err("签名校验失败", 401);
+        const b = JSON.parse(body) as Omit<AdmissionInput, "nodeId"> & { nodeId?: string };
+        if (b.nodeId && b.nodeId !== nodeId) return err("节点身份不匹配", 401);
+        try {
+          return json(await admitConnection(env, { ...b, nodeId }));
+        } catch (error) {
+          return err((error as Error).message, 400);
+        }
+      }
+      if (p === "/api/nodes/usage" && m === "POST") {
+        const body = await req.text();
+        const nodeId = await verifyNodeSig(req, env, body);
+        if (!nodeId) return err("签名校验失败", 401);
+        const b = JSON.parse(body) as { nodeId?: string; events?: unknown };
+        if (b.nodeId && b.nodeId !== nodeId) return err("节点身份不匹配", 401);
+        try {
+          return json(await recordUsage(env, nodeId, b.events));
+        } catch (error) {
+          return err((error as Error).message, 400);
+        }
+      }
       // 优选 IP 池（供订阅使用；由 CFST 工作流写入）
       if (p === "/api/optimized-ips" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
@@ -243,6 +328,7 @@ export default {
           unlockUuids: policy.unlockUuids,
           unlockHosts: routing.hosts,
           socks5Enabled: true,
+          accessPolicies: policy.accessPolicies,
           landingBundle: await sealJson(
             env.NODE_HMAC_SECRET,
             landings,
@@ -263,12 +349,20 @@ export default {
         // GitHub-hosted CFST 只代表运行器所在网络，不能作为终端用户的可用性证明。
         // 默认关闭 IP 展开；只有部署侧显式启用后才会把经过端到端验证的地址写入订阅。
         const optIps = env.USE_OPTIMIZED_IPS === "1" ? await getOptimizedIps(env) : [];
-        const { body, contentType } = renderSubscription(fmt, user, nodes, optIps);
+        const [{ body, contentType }, usage] = await Promise.all([
+          Promise.resolve(renderSubscription(fmt, user, nodes, optIps)),
+          getUserUsage(env, user.id),
+        ]);
         return new Response(body, {
           headers: {
             "content-type": contentType,
             "profile-update-interval": "12",
-            "subscription-userinfo": subUserInfo(user),
+            "subscription-userinfo": subUserInfo(
+              user,
+              usage.bytesUp,
+              usage.bytesDown,
+              usage.trafficLimitBytes,
+            ),
           },
         });
       }
@@ -290,8 +384,37 @@ async function getOptimizedIps(env: Env): Promise<string[]> {
   }
 }
 
-function subUserInfo(user: UserRecord): string {
+function subUserInfo(
+  user: UserRecord,
+  upload = 0,
+  download = 0,
+  total = 0,
+): string {
   const expire = user.expire_at ? Math.floor(user.expire_at / 1000) : 0;
-  // upload/download/total 一期不做精确计量，给占位值
-  return `upload=0; download=0; total=0; expire=${expire}`;
+  return `upload=${upload}; download=${download}; total=${total}; expire=${expire}`;
+}
+
+function boundedInteger(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (value === undefined || value === null || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`整数必须位于 ${min} 到 ${max} 之间`);
+  }
+  return parsed;
+}
+
+function optionalBoundedInteger(
+  value: unknown,
+  min: number,
+  max: number,
+): number | undefined | false {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) return false;
+  return parsed;
 }

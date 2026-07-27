@@ -11,6 +11,14 @@ export interface User {
   expire_at: number | null;
   enabled: number;
   created_at: number;
+  device_limit: number;
+  ip_limit_24h: number;
+  traffic_limit_bytes: number;
+  bytes_up: number;
+  bytes_down: number;
+  connections: number;
+  active_ips: number;
+  recent_ips: number;
 }
 
 export interface NodeRow {
@@ -30,6 +38,9 @@ export interface CreateUserInput {
   nodeGroup?: string[];
   unlock?: boolean;
   durationDays?: number;
+  deviceLimit?: number;
+  ipLimit24h?: number;
+  trafficLimitBytes?: number;
 }
 
 export interface UnlockHostsConfig {
@@ -142,12 +153,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  updateUser: (id: string, input: { unlock?: boolean; enabled?: boolean }) =>
+  updateUser: (id: string, input: {
+    unlock?: boolean;
+    enabled?: boolean;
+    deviceLimit?: number;
+    ipLimit24h?: number;
+    trafficLimitBytes?: number;
+  }) =>
     req<{ ok: boolean }>(`/api/users/${id}`, {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
   deleteUser: (id: string) => req<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
+  resetUserUsage: (id: string) =>
+    req<{ ok: boolean }>(`/api/users/${id}/usage/reset`, { method: "POST" }),
+  resetUserLeases: (id: string) =>
+    req<{ ok: boolean }>(`/api/users/${id}/leases/reset`, { method: "POST" }),
   listNodes: () => req<{ nodes: NodeRow[] }>("/api/nodes"),
   getUnlockHosts: () => req<UnlockHostsConfig>("/api/settings/unlock-hosts"),
   putUnlockHosts: (hosts: string[]) =>

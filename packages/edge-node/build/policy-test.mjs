@@ -10,6 +10,10 @@ const request = {};
 const unlocked = await OPUS8_normalizeState({
   uuids: ["user-a"],
   unlockUuids: ["user-a"],
+  accessPolicies: [{
+    userId: "account-a", uuid: "user-a", deviceLimit: 2,
+    ipLimit24h: 5, trafficLimitBytes: 1073741824, usedBytes: 1024,
+  }],
   unlockHosts: ["openai.com", "claude.ai"],
   socks5Enabled: true,
   landings: [
@@ -24,6 +28,9 @@ const unlocked = await OPUS8_normalizeState({
   ],
 }, "local-admin", true);
 OPUS8_setRequestPolicy(request, unlocked);
+if (unlocked.accessPolicies["user-a"]?.deviceLimit !== 2) {
+  throw new Error("access policy must be indexed by UUID");
+}
 const presentedUuids = ["local-admin", "user-a", "user-b"];
 Object.defineProperty(presentedUuids, "OPUS8_authenticated", {
   value: "user-a", writable: true, configurable: true,
