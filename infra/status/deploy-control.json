@@ -23,7 +23,6 @@
     "OK smoke-health",
     "OK smoke-login",
     "STEP ensure-default-landing",
-    "OK default-landing-imported",
     "OK smoke-landings count=1",
     "OK smoke-landing-socks5",
     "OK smoke-unlock-hosts count=61",
@@ -35,9 +34,9 @@
     "DONE url=https://api.thinderbox.com"
   ],
   "tail": [
+    "OK smoke-health",
     "OK smoke-login",
     "STEP ensure-default-landing",
-    "OK <redacted>",
     "OK smoke-landings count=1",
     "OK smoke-landing-socks5",
     "OK smoke-unlock-hosts count=61",
@@ -48,5 +47,5 @@
     "OK smoke-cleanup",
     "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-07-27T11:34:09Z"
+  "finishedAt": "2026-07-27T11:39:01Z"
 }
