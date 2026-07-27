@@ -116,7 +116,13 @@ if [ "$LCOUNT" -eq 0 ]; then
     exit 17
   fi
   LANDING_SEED=$(node -e 'process.stdout.write(JSON.stringify({name:"默认落地机",hostname:process.env.SERVICES_IP,port:40008,username:process.env.SERVICES_USER,password:process.env.SERVICES_CODE,region:"default",matchHosts:[],priority:100,enabled:true}))')
-  CREATED=$(curl -fsS --max-time 20 -X POST "$API_URL/api/landings" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d "$LANDING_SEED")
+  CREATE_CODE=$(curl -sS -o /tmp/landing-create.json -w '%{http_code}' --max-time 20 -X POST "$API_URL/api/landings" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d "$LANDING_SEED" || true)
+  if [ "$CREATE_CODE" != "201" ]; then
+    CREATE_ERROR=$(node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync("/tmp/landing-create.json","utf8"));process.stdout.write(String(j.error||"unknown").slice(0,200))}catch(e){process.stdout.write("invalid response")}')
+    echo "ERROR default-landing-create http=$CREATE_CODE reason=$CREATE_ERROR" | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g'
+    exit 18
+  fi
+  CREATED=$(cat /tmp/landing-create.json)
   CREATED_ID=$(printf '%s' "$CREATED" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).landing.id||"")}catch(e){}})')
   if [ -z "$CREATED_ID" ]; then echo "ERROR default-landing-create"; exit 18; fi
   echo "OK default-landing-imported"
