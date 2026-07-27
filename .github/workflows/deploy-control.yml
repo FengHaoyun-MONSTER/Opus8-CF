@@ -30,8 +30,8 @@ jobs:
       LANDING_CONFIG_KEY: ${{ secrets.LANDING_CONFIG_KEY }}
       ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       SERVICES_IP: ${{ secrets.SERVICES_IP }}
-      SERVICES_USER: ${{ secrets.SERVICES_USER }}
-      SERVICES_CODE: ${{ secrets.SERVICES_CODE }}
+      SERVICES_USER: ${{ secrets.SOCKS_USER }}
+      SERVICES_CODE: ${{ secrets.SOCKS_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

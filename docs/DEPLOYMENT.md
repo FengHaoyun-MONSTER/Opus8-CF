@@ -13,7 +13,8 @@
 | `API_TOKEN` / `API_TOKEN_NUM1` | Cloudflare API Token | acc1 / acc2 |
 | `ROOT_DOMAIN` / `ROOT_DOMAIN_NUM1` | 根域名 | acc1 / acc2 |
 | `ACCESS_KEY_ID` / `SECRET_ACCESS_KEY` / `S3_API_ENDPOINT`（+`_NUM1`） | R2(S3) 凭据，用作优选IP/注册表产物存储 | acc1 / acc2 |
-| `SERVICES_IP` / `SERVICES_USER` / `SERVICES_CODE` | SOCKS5 落地机 IP/用户/密码 | — |
+| `SERVICES_IP` / `SERVICES_USER` / `SERVICES_CODE` | 落地机 SSH 地址/root 用户/SSH 密码 | — |
+| `SOCKS_USER` / `SOCKS_PASSWORD` | Dante 使用的独立 SOCKS5 用户名/密码 | — |
 
 ### 生产密钥
 

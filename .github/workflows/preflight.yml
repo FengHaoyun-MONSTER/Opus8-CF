@@ -79,8 +79,8 @@ jobs:
       - name: Scan common SOCKS5 ports on SERVICES_IP
         env:
           IP: ${{ secrets.SERVICES_IP }}
-          USER: ${{ secrets.SERVICES_USER }}
-          PASS: ${{ secrets.SERVICES_CODE }}
+          USER: ${{ secrets.SOCKS_USER }}
+          PASS: ${{ secrets.SOCKS_PASSWORD }}
         run: |
           set -uo pipefail
           echo "## 落地机 SOCKS5 端口探测" >> "$GITHUB_STEP_SUMMARY"

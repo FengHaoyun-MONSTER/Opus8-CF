@@ -28,10 +28,12 @@ jobs:
       VPS_SSH_USER: ${{ secrets.SERVICES_USER }}
       VPS_SSH_PASSWORD: ${{ secrets.SERVICES_CODE }}
       VPS_SSH_PORT: ${{ secrets.SERVICES_SSH_PORT }}
-      SOCKS_USER: ${{ secrets.SERVICES_USER }}
-      SOCKS_PASSWORD: ${{ secrets.SERVICES_CODE }}
+      SOCKS_USER: ${{ secrets.SOCKS_USER }}
+      SOCKS_PASSWORD: ${{ secrets.SOCKS_PASSWORD }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+      CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,9 +44,13 @@ jobs:
           : "${VPS_HOST:?SERVICES_IP is required}"
           : "${VPS_SSH_USER:?SERVICES_USER is required}"
           : "${VPS_SSH_PASSWORD:?SERVICES_CODE is required}"
+          : "${SOCKS_USER:?SOCKS_USER is required}"
+          : "${SOCKS_PASSWORD:?SOCKS_PASSWORD is required}"
           echo "::add-mask::$VPS_HOST"
           echo "::add-mask::$VPS_SSH_USER"
           echo "::add-mask::$VPS_SSH_PASSWORD"
+          echo "::add-mask::$SOCKS_USER"
+          echo "::add-mask::$SOCKS_PASSWORD"
           echo "VPS_SSH_PORT=${VPS_SSH_PORT:-22}" >> "$GITHUB_ENV"
 
       - name: Install SSH client
@@ -192,9 +198,126 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Deployment placeholder
+      - name: Deploy authenticated Dante to WARP
         if: inputs.operation != 'audit'
         shell: bash
         run: |
-          echo "::error::Deployment is intentionally gated until the audit confirms SSH privilege, ports, OS, and Zero Trust API permissions."
-          exit 1
+          set -euo pipefail
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          SSH_BASE=(
+            -p "$VPS_SSH_PORT"
+            -o ConnectTimeout=12
+            -o StrictHostKeyChecking=accept-new
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+          )
+          umask 077
+          {
+            printf 'SOCKS_USER_B64=%s\n' "$(printf '%s' "$SOCKS_USER" | base64 -w0)"
+            printf 'SOCKS_PASSWORD_B64=%s\n' "$(printf '%s' "$SOCKS_PASSWORD" | base64 -w0)"
+          } > /tmp/opus8-landing.env
+
+          sshpass -e scp -P "$VPS_SSH_PORT" \
+            -o ConnectTimeout=12 \
+            -o StrictHostKeyChecking=accept-new \
+            /tmp/opus8-landing.env "$VPS_SSH_USER@$VPS_HOST:/tmp/"
+          sshpass -e scp -P "$VPS_SSH_PORT" \
+            -o ConnectTimeout=12 \
+            -o StrictHostKeyChecking=accept-new \
+            infra/scripts/deploy-landing.sh "$VPS_SSH_USER@$VPS_HOST:/tmp/"
+          sshpass -e ssh "${SSH_BASE[@]}" "$VPS_SSH_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          source /tmp/opus8-landing.env
+          export SOCKS_USER="$(printf '%s' "$SOCKS_USER_B64" | base64 -d)"
+          export SOCKS_PASSWORD="$(printf '%s' "$SOCKS_PASSWORD_B64" | base64 -d)"
+          rm -f /tmp/opus8-landing.env
+          chmod 0700 /tmp/deploy-landing.sh
+          if [ "$(id -u)" -eq 0 ]; then
+            /tmp/deploy-landing.sh
+          else
+            sudo --preserve-env=SOCKS_USER,SOCKS_PASSWORD /tmp/deploy-landing.sh
+          fi
+          rm -f /tmp/deploy-landing.sh
+          REMOTE
+
+      - name: Verify public SOCKS5 authentication
+        if: inputs.operation != 'audit'
+        shell: bash
+        run: |
+          set -euo pipefail
+          AUTH_EXIT=$(curl -4fsS --max-time 25 \
+            --proxy "socks5h://${VPS_HOST}:40008" \
+            --proxy-user "${SOCKS_USER}:${SOCKS_PASSWORD}" \
+            https://api.ipify.org)
+          test -n "$AUTH_EXIT"
+          if curl -4fsS --max-time 8 --proxy "socks5h://${VPS_HOST}:40008" \
+            https://api.ipify.org >/dev/null 2>&1; then
+            echo "::error::Public SOCKS5 still permits unauthenticated access"
+            exit 1
+          fi
+          echo "OK public-authenticated-socks5"
+
+      - name: Rotate control-plane landing credentials
+        if: inputs.operation != 'audit'
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${CONTROL_ROOT_DOMAIN:?ROOT_DOMAIN is required}"
+          : "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
+          root="${CONTROL_ROOT_DOMAIN#https://}"
+          root="${root#http://}"
+          root="${root%%/*}"
+          api="https://api.${root}"
+
+          LOGIN=$(curl -fsS --max-time 20 -X POST "$api/api/admin/login" \
+            -H 'content-type: application/json' \
+            --data "$(jq -nc --arg password "$ADMIN_PASSWORD" '{password:$password}')")
+          TOKEN=$(printf '%s' "$LOGIN" | jq -er '.token')
+          LANDINGS=$(curl -fsS --max-time 20 "$api/api/landings" \
+            -H "authorization: Bearer $TOKEN")
+          mapfile -t IDS < <(printf '%s' "$LANDINGS" | jq -r \
+            --arg host "$VPS_HOST" '.landings[] | select(.hostname == $host and .port == 40008) | .id')
+          if [ "${#IDS[@]}" -eq 0 ]; then
+            echo "::error::No control-plane landing matches SERVICES_IP:40008"
+            exit 1
+          fi
+
+          PAYLOAD=$(jq -nc --arg username "$SOCKS_USER" --arg password "$SOCKS_PASSWORD" \
+            '{username:$username,password:$password}')
+          for id in "${IDS[@]}"; do
+            curl -fsS --max-time 20 -X PATCH "$api/api/landings/$id" \
+              -H "authorization: Bearer $TOKEN" \
+              -H 'content-type: application/json' \
+              --data "$PAYLOAD" >/dev/null
+            TEST=$(curl -fsS --max-time 30 -X POST "$api/api/landings/$id/test" \
+              -H "authorization: Bearer $TOKEN")
+            printf '%s' "$TEST" | jq -e '.ok == true' >/dev/null
+          done
+          echo "OK control-plane-credentials-rotated count=${#IDS[@]}"
+
+      - name: Wait for edge policy refresh
+        if: inputs.operation != 'audit'
+        shell: bash
+        run: |
+          echo "Waiting 70 seconds for the four edge nodes to refresh their encrypted landing bundle."
+          sleep 70
+          echo "OK edge-refresh-window-complete"
+
+      - name: Restore legacy forwarder if deployment fails
+        if: failure() && inputs.operation != 'audit'
+        shell: bash
+        run: |
+          set +e
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          sshpass -e ssh -p "$VPS_SSH_PORT" \
+            -o ConnectTimeout=12 \
+            -o StrictHostKeyChecking=accept-new \
+            "$VPS_SSH_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set +e
+          systemctl disable --now opus8-dante.service >/dev/null 2>&1
+          if ! ss -H -lnt 2>/dev/null | awk '{print $4}' | grep -Eq '(^|:)40008$'; then
+            nohup socat 'TCP-LISTEN:40008,bind=0.0.0.0,fork' \
+              'TCP:127.0.0.1:40000' >/var/log/opus8-socat.log 2>&1 &
+          fi
+          REMOTE
+          echo "::warning::Deployment failed; attempted to restore the previous socat forwarder."
