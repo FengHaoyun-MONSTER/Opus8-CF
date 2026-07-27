@@ -3,34 +3,8 @@
   "result": "failure",
   "nodeUrl": "",
   "markers": [
-    "STEP build",
-    "OK built (OK build: dist/index.js (300271 bytes), patch replaced 961 chars)",
-    "OK policy-test",
-    "STEP probe-landing",
-    "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
-    "STEP kv",
-    "OK kv=40a6527c…",
-    "STEP deploy",
-    "OK deployed workers=https://opus8cf-node-acc1-n2.techtoolhub-office.workers.dev custom=https://acc1-n2.thinderbox.com",
-    "STEP secrets",
-    "OK secret hmac",
-    "OK secret uuid",
-    "OK secret socks5-landing(解锁已启用)",
-    "STEP register",
-    "OK registered host=acc1-n2.thinderbox.com",
-    "STEP wait-custom-domain",
-    "OK custom-domain-ready",
-    "STEP verify",
-    "OK node-tls-http=200",
-    "OK uuids-endpoint-count=2",
-    "OK landing-bundle-encrypted",
-    "STEP vless-smoke",
-    "OK vless-ws-auth-egress",
-    "ERROR vless-xhttp-smoke",
-    "INFO xray-xhttp-attempt=1 curl-exit=7 http=000",
-    "INFO xray-xhttp-attempt=2 curl-exit=52 http=000",
-    "INFO xray-xhttp-attempt=3 curl-exit=52 http=000",
-    "INFO xray-xhttp-attempt=4 curl-exit=52 http=000"
+    "STEP zone-grpc",
+    "ERROR zone-grpc-enable (token 需要 Zone Settings Edit 权限)"
   ],
-  "finishedAt": "2026-07-27T16:47:35Z"
+  "finishedAt": "2026-07-27T16:53:11Z"
 }
