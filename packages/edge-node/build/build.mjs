@@ -276,6 +276,17 @@ patchedCore = patchStreamTransport(patchedCore, {
   loopPayloadNeedle: "if (!payload.byteLength) continue;",
 });
 
+// --- 补丁8：XHTTP 关闭 gRPC Header 伪装，兼容未开启 Zone gRPC 的自定义域名。 ---
+const xhttpLinkNeedle =
+  "type: 是gRPC ? (配置.gRPC模式 === 'multi' ? 'grpc&mode=multi' : 'grpc&mode=gun') : (配置.传输协议 === 'xhttp' ? 'xhttp&mode=stream-one' : 'ws'),";
+if (!patchedCore.includes(xhttpLinkNeedle)) {
+  throw new Error("PATCH8 FAIL: 找不到 XHTTP 分享链接传输参数");
+}
+patchedCore = patchedCore.replace(
+  xhttpLinkNeedle,
+  "type: 是gRPC ? (配置.gRPC模式 === 'multi' ? 'grpc&mode=multi' : 'grpc&mode=gun') : (配置.传输协议 === 'xhttp' ? `xhttp&mode=stream-one&extra=${encodeURIComponent(JSON.stringify({ noGRPCHeader: true }))}` : 'ws'),",
+);
+
 const out = "// [Opus8-CF build] prelude + patched vendor core\n" + prelude + "\n" + patchedCore;
 
 mkdirSync(join(pkg, "dist"), { recursive: true });

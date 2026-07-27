@@ -44,6 +44,7 @@ if [ "$TRANSPORT" = "xhttp" ]; then
       host:$host,
       path:"/xhttp",
       mode:"stream-one",
+      noGRPCHeader:true,
       headers:{"User-Agent":$ua}
     }}')
 else
