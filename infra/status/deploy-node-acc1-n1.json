@@ -26,7 +26,11 @@
     "OK landing-bundle-encrypted",
     "STEP vless-smoke",
     "OK vless-ws-auth-egress",
-    "ERROR vless-xhttp-smoke"
+    "ERROR vless-xhttp-smoke",
+    "INFO xray-xhttp-attempt=1 curl-exit=7 http=000",
+    "INFO xray-xhttp-attempt=2 curl-exit=52 http=000",
+    "INFO xray-xhttp-attempt=3 curl-exit=52 http=000",
+    "INFO xray-xhttp-attempt=4 curl-exit=52 http=000"
   ],
-  "finishedAt": "2026-07-27T16:32:41Z"
+  "finishedAt": "2026-07-27T16:39:23Z"
 }
