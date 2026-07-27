@@ -2,14 +2,6 @@ name: optimize-ip
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '17 */12 * * *'   # 每 12 小时刷新一次优选 IP
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/optimize-ip.yml'
-      - 'infra/scripts/optimize-ip.sh'
-      - 'infra/optimized-ips.txt'
 
 permissions:
   contents: write
@@ -31,7 +23,6 @@ jobs:
           node-version: 20
       - name: Optimize CF IPs
         id: opt
-        continue-on-error: true
         run: bash infra/scripts/optimize-ip.sh 2>&1 | tee /tmp/oi.log
 
       - name: Publish status back to repo

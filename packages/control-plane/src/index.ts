@@ -167,7 +167,9 @@ export default {
         if (user.expire_at && user.expire_at < Date.now()) return err("订阅已过期", 403);
         const nodes = nodesForUser(user, await listNodes(env));
         const fmt = pickFormat(req.headers.get("user-agent") || "", url.searchParams.get("format"));
-        const optIps = await getOptimizedIps(env);
+        // GitHub-hosted CFST 只代表运行器所在网络，不能作为终端用户的可用性证明。
+        // 默认关闭 IP 展开；只有部署侧显式启用后才会把经过端到端验证的地址写入订阅。
+        const optIps = env.USE_OPTIMIZED_IPS === "1" ? await getOptimizedIps(env) : [];
         const { body, contentType } = renderSubscription(fmt, user, nodes, optIps);
         return new Response(body, {
           headers: {

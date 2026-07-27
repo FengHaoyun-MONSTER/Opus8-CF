@@ -10,6 +10,7 @@
     "typecheck": "tsc -b --pretty"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
     "typescript": "^5.6.0",
     "wrangler": "^3.80.0",
     "esbuild": "^0.24.0"

@@ -2,12 +2,9 @@ name: deploy-nodes
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/deploy-nodes.yml'
-      - 'infra/scripts/deploy-node.sh'
-      - 'packages/edge-node/**'
+  workflow_run:
+    workflows: ["deploy-control"]
+    types: [completed]
 
 permissions:
   contents: write
@@ -18,6 +15,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -37,10 +35,11 @@ jobs:
             node_id: acc2-n2
             region: SG
     env:
-      CONTROL_PLANE_URL: https://opus8cf-control.techtoolhub-office.workers.dev
+      CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
       CLOUDFLARE_API_TOKEN: ${{ matrix.alias == 'acc1' && secrets.API_TOKEN || secrets.API_TOKEN_NUM1 }}
       CLOUDFLARE_ACCOUNT_ID: ${{ matrix.alias == 'acc1' && secrets.ACCOUNT_ID || secrets.ACCOUNT_ID_NUM1 }}
+      ROOT_DOMAIN: ${{ matrix.alias == 'acc1' && secrets.ROOT_DOMAIN || secrets.ROOT_DOMAIN_NUM1 }}
       NODE_ID: ${{ matrix.node_id }}
       NODE_ACCOUNT_ALIAS: ${{ matrix.alias }}
       NODE_REGION: ${{ matrix.region }}
@@ -55,14 +54,13 @@ jobs:
       - run: npm i -g wrangler@3
       - name: Deploy edge node
         id: deploy
-        continue-on-error: true
         run: bash infra/scripts/deploy-node.sh 2>&1 | tee /tmp/dn.log
 
       - name: Publish status back to repo
         if: always()
         run: |
           mkdir -p infra/status
-          URL=$(grep -oE 'https://[a-z0-9._-]+workers\.dev' /tmp/dn.log | head -n1 || true)
+          URL=$(grep '^DONE url=' /tmp/dn.log | tail -n1 | sed 's/^DONE url=//' || true)
           MARKERS=$(grep -E '^(STEP|OK|ERROR|INFO|DONE) ' /tmp/dn.log || true)
           jq -n --arg r "${{ steps.deploy.outcome }}" --arg u "$URL" --arg m "$MARKERS" --arg n "${{ matrix.node_id }}" \
             '{node:$n, result:$r, nodeUrl:$u, markers:($m|split("\n")|map(select(length>0))), finishedAt:(now|todate)}' \

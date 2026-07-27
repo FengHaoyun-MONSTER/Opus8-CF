@@ -8,6 +8,7 @@ export interface Env {
   NODE_HMAC_SECRET: string;
   ROOT_DOMAIN?: string;
   SUB_BASE?: string;
+  USE_OPTIMIZED_IPS?: string;
 }
 
 export async function listNodes(env: Env): Promise<NodeRecord[]> {

@@ -34,7 +34,6 @@ jobs:
           node-version: 20
       - name: Deploy control-plane
         id: deploy
-        continue-on-error: true
         run: |
           { npm i -g wrangler@3 esbuild && bash infra/scripts/deploy-control.sh ; } 2>&1 | tee /tmp/dc.log
 
@@ -42,7 +41,7 @@ jobs:
         if: always()
         run: |
           mkdir -p infra/status
-          URL=$(grep -oE 'https://[a-z0-9._-]+workers\.dev' /tmp/dc.log | head -n1 || true)
+          URL=$(grep '^DONE url=' /tmp/dc.log | tail -n1 | sed 's/^DONE url=//' || true)
           MARKERS=$(grep -E '^(STEP|OK|ERROR|DONE) ' /tmp/dc.log || true)
           # 失败时保留最后几行日志（抹掉任何 24+ 位的长串，避免泄露 token/id）
           TAIL=$(tail -n 12 /tmp/dc.log | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g' || true)
