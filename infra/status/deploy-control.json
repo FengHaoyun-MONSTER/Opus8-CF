@@ -21,6 +21,7 @@
     "STEP smoke",
     "OK smoke-health",
     "OK smoke-login",
+    "OK smoke-unlock-hosts count=61",
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
     "OK smoke-sub-has-node",
@@ -29,12 +30,12 @@
     "DONE url=https://api.thinderbox.com"
   ],
   "tail": [
-    "OK secret SUB_BASE",
     "STEP wait-custom-domain",
     "OK custom-domain-ready api=https://api.thinderbox.com sub=https://sub.thinderbox.com",
     "STEP smoke",
     "OK smoke-health",
     "OK smoke-login",
+    "OK smoke-unlock-hosts count=61",
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
     "OK smoke-sub-has-node",
@@ -42,5 +43,5 @@
     "OK smoke-cleanup",
     "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-07-27T08:22:34Z"
+  "finishedAt": "2026-07-27T10:34:00Z"
 }
