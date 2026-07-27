@@ -114,6 +114,17 @@ jobs:
           echo "DETAIL listeners_begin"
           ss -H -lntup 2>/dev/null | awk '$5 ~ /:(40000|40008|40009)$/ {print}' || true
           echo "DETAIL listeners_end"
+          SOCAT_PID=$(ss -H -lntup 2>/dev/null \
+            | awk '$5 ~ /:40008$/ && $0 ~ /socat/ {match($0,/pid=[0-9]+/); if (RSTART) print substr($0,RSTART+4,RLENGTH-4)}' \
+            | head -n1)
+          if [ -n "$SOCAT_PID" ] && [ -r "/proc/$SOCAT_PID/cmdline" ]; then
+            echo "DETAIL socat_begin"
+            printf 'pid=%s ppid=%s command=' "$SOCAT_PID" "$(awk '/^PPid:/{print $2}' "/proc/$SOCAT_PID/status")"
+            tr '\0' ' ' < "/proc/$SOCAT_PID/cmdline"
+            echo
+            echo "cgroup=$(tr '\n' ';' < "/proc/$SOCAT_PID/cgroup")"
+            echo "DETAIL socat_end"
+          fi
           echo "DETAIL services_begin"
           systemctl --no-pager --plain --type=service --state=running 2>/dev/null \
             | grep -Ei 'warp|x-ui|xray|sing-box|sock|dante|gost' || true
