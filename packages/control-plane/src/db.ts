@@ -6,6 +6,7 @@ export interface Env {
   ADMIN_PASSWORD: string;
   JWT_SECRET: string;
   NODE_HMAC_SECRET: string;
+  DEFAULT_UNLOCK_HOSTS?: string;
   ROOT_DOMAIN?: string;
   SUB_BASE?: string;
   USE_OPTIMIZED_IPS?: string;
@@ -69,11 +70,33 @@ export async function deleteUser(env: Env, id: string): Promise<void> {
   await env.DB.prepare("DELETE FROM users WHERE id=?1").bind(id).run();
 }
 
-/** 当前有效用户的 UUID 集：启用中且未过期。 */
-export async function activeUserUuids(env: Env): Promise<string[]> {
+export async function updateUserPolicy(
+  env: Env,
+  id: string,
+  changes: { unlock?: boolean; enabled?: boolean },
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE users
+     SET unlock=COALESCE(?2, unlock), enabled=COALESCE(?3, enabled)
+     WHERE id=?1`,
+  ).bind(
+    id,
+    changes.unlock === undefined ? null : (changes.unlock ? 1 : 0),
+    changes.enabled === undefined ? null : (changes.enabled ? 1 : 0),
+  ).run();
+}
+
+/** 当前有效用户及其落地权限：启用中且未过期。 */
+export async function activeUserPolicy(
+  env: Env,
+): Promise<{ uuids: string[]; unlockUuids: string[] }> {
   const now = Date.now();
   const { results } = await env.DB.prepare(
-    "SELECT uuid FROM users WHERE enabled=1 AND (expire_at IS NULL OR expire_at > ?1)",
-  ).bind(now).all<{ uuid: string }>();
-  return (results ?? []).map((r) => r.uuid);
+    "SELECT uuid, unlock FROM users WHERE enabled=1 AND (expire_at IS NULL OR expire_at > ?1)",
+  ).bind(now).all<{ uuid: string; unlock: number }>();
+  const active = results ?? [];
+  return {
+    uuids: active.map((r) => r.uuid),
+    unlockUuids: active.filter((r) => r.unlock === 1).map((r) => r.uuid),
+  };
 }

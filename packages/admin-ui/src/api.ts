@@ -32,6 +32,12 @@ export interface CreateUserInput {
   durationDays?: number;
 }
 
+export interface UnlockHostsConfig {
+  hosts: string[];
+  source: "default" | "custom";
+  updatedAt: number;
+}
+
 interface Auth {
   base: string;
   token: string;
@@ -106,6 +112,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  updateUser: (id: string, input: { unlock?: boolean; enabled?: boolean }) =>
+    req<{ ok: boolean }>(`/api/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
   deleteUser: (id: string) => req<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
   listNodes: () => req<{ nodes: NodeRow[] }>("/api/nodes"),
+  getUnlockHosts: () => req<UnlockHostsConfig>("/api/settings/unlock-hosts"),
+  putUnlockHosts: (hosts: string[]) =>
+    req<UnlockHostsConfig>("/api/settings/unlock-hosts", {
+      method: "PUT",
+      body: JSON.stringify({ hosts }),
+    }),
+  resetUnlockHosts: () =>
+    req<UnlockHostsConfig>("/api/settings/unlock-hosts", { method: "DELETE" }),
 };

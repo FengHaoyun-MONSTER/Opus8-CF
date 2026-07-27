@@ -52,7 +52,14 @@ export async function getActiveState(env: PlatformEnv): Promise<ActiveUuidsRespo
       try { return (JSON.parse(raw) as Cached).data; } catch { /* ignore */ }
     }
   }
-  return { version: 0, ttl: 60, uuids: [], unlockHosts: [], socks5Enabled: false };
+  return {
+    version: 0,
+    ttl: 60,
+    uuids: [],
+    unlockUuids: [],
+    unlockHosts: [],
+    socks5Enabled: false,
+  };
 }
 
 /** 主动失效本地缓存（收到控制面 purge 信号时用）。 */

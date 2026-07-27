@@ -7,8 +7,9 @@ import { AI_UNLOCK_LIST, isUnlockHost } from "../../config/ai-unlock-domains";
 
 export type Egress = "socks5" | "direct";
 
-export function decideEgress(host: string, state: ActiveUuidsResponse): Egress {
+export function decideEgress(host: string, uuid: string, state: ActiveUuidsResponse): Egress {
   if (!state.socks5Enabled) return "direct";
+  if (!state.unlockUuids.map((x) => x.toLowerCase()).includes(uuid.toLowerCase())) return "direct";
   const list = state.unlockHosts.length > 0 ? state.unlockHosts : AI_UNLOCK_LIST;
   return isUnlockHost(host, list) ? "socks5" : "direct";
 }

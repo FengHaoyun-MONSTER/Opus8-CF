@@ -11,15 +11,18 @@ import {
 } from "@opus8-cf/shared";
 import {
   type Env, listNodes, upsertNode, touchNode, listUsers, insertUser, deleteUser,
-  getUserByToken, activeUserUuids,
+  getUserByToken, activeUserPolicy, updateUserPolicy,
 } from "./db";
 import { nodesForUser, renderSubscription, pickFormat } from "./subscription";
+import {
+  getUnlockHosts, putUnlockHosts, resetUnlockHosts, validateUnlockHosts,
+} from "./routing";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-headers": "authorization, content-type",
-  "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 };
 
 const json = (data: unknown, status = 200) =>
@@ -96,11 +99,47 @@ export default {
         const base = env.SUB_BASE || url.origin;
         return json({ user, subUrl: `${base}/sub/${user.sub_token}` }, 201);
       }
-      const delMatch = p.match(/^\/api\/users\/([^/]+)$/);
-      if (delMatch && m === "DELETE") {
+      const userMatch = p.match(/^\/api\/users\/([^/]+)$/);
+      if (userMatch && m === "PATCH") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
-        await deleteUser(env, delMatch[1]);
+        const b = (await req.json().catch(() => ({}))) as {
+          unlock?: unknown; enabled?: unknown;
+        };
+        if (b.unlock !== undefined && typeof b.unlock !== "boolean") return err("unlock 必须是布尔值");
+        if (b.enabled !== undefined && typeof b.enabled !== "boolean") return err("enabled 必须是布尔值");
+        if (b.unlock === undefined && b.enabled === undefined) return err("没有可更新的字段");
+        await updateUserPolicy(env, userMatch[1], {
+          unlock: b.unlock as boolean | undefined,
+          enabled: b.enabled as boolean | undefined,
+        });
         return json({ ok: true });
+      }
+      if (userMatch && m === "DELETE") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        await deleteUser(env, userMatch[1]);
+        return json({ ok: true });
+      }
+
+      // ---------- 落地域名配置（admin） ----------
+      if (p === "/api/settings/unlock-hosts" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return json(await getUnlockHosts(env));
+      }
+      if (p === "/api/settings/unlock-hosts" && m === "PUT") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const b = (await req.json().catch(() => ({}))) as { hosts?: unknown };
+        const validated = validateUnlockHosts(b.hosts);
+        if (validated.invalidHosts.length > 0) {
+          return json({
+            error: "存在无效域名；请只填写域名，不要包含协议、端口或路径",
+            invalidHosts: validated.invalidHosts.slice(0, 20),
+          }, 400);
+        }
+        return json(await putUnlockHosts(env, validated.hosts));
+      }
+      if (p === "/api/settings/unlock-hosts" && m === "DELETE") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return json(await resetUnlockHosts(env));
       }
 
       // ---------- 节点接口 ----------
@@ -150,10 +189,15 @@ export default {
         const body = "";
         const nodeId = await verifyNodeSig(req, env, body);
         if (!nodeId) return err("签名校验失败", 401);
+        const [policy, routing] = await Promise.all([
+          activeUserPolicy(env),
+          getUnlockHosts(env),
+        ]);
         const resp: ActiveUuidsResponse = {
           version: Date.now(), ttl: 60,
-          uuids: await activeUserUuids(env),
-          unlockHosts: [], // 空 = 节点使用其内置 AI 解锁清单
+          uuids: policy.uuids,
+          unlockUuids: policy.unlockUuids,
+          unlockHosts: routing.hosts,
           socks5Enabled: true,
         };
         return json(resp);

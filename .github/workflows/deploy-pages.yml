@@ -30,8 +30,9 @@ jobs:
       - run: npm i -g wrangler@3
       - name: Build & deploy admin-ui
         id: deploy
-        continue-on-error: true
-        run: bash infra/scripts/deploy-pages.sh 2>&1 | tee /tmp/dp.log
+        run: |
+          set -o pipefail
+          bash infra/scripts/deploy-pages.sh 2>&1 | tee /tmp/dp.log
 
       - name: Publish status back to repo
         if: always()

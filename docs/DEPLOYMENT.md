@@ -15,13 +15,27 @@
 | `ACCESS_KEY_ID` / `SECRET_ACCESS_KEY` / `S3_API_ENDPOINT`（+`_NUM1`） | R2(S3) 凭据，用作优选IP/注册表产物存储 | acc1 / acc2 |
 | `SERVICES_IP` / `SERVICES_USER` / `SERVICES_CODE` | SOCKS5 落地机 IP/用户/密码 | — |
 
-### 待补的 Secrets（密钥三件套，由我生成）
+### 生产密钥三件套
 
 | Secret | 用途 |
 |---|---|
 | `ADMIN_PASSWORD` | 管理后台登录密码 |
 | `JWT_SECRET` | 管理 JWT 签名 |
 | `NODE_HMAC_SECRET` | 边缘节点 ↔ 控制面 请求签名共享密钥 |
+
+三项均必须以 GitHub Actions Secrets 保存，不要写入仓库。生产轮换后需让控制面和全部节点依次重新部署。
+
+## 动态落地域名
+
+部署控制面时，`infra/ai-unlock.txt` 会作为默认域名清单写入 Worker 配置。管理员在管理站保存自定义清单后，
+自定义值持久化到控制面 KV，并优先于代码默认值。节点按 60 秒 TTL 拉取以下策略：
+
+- 当前有效 UUID；
+- 允许使用落地机的 UUID；
+- 当前落地域名清单；
+- SOCKS5 全局开关。
+
+修改默认清单并推送 `main` 会触发 `deploy-control`；控制面成功后再触发 `deploy-nodes`。
 
 ## 首次流程
 

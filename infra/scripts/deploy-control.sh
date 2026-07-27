@@ -12,6 +12,7 @@ API_HOST="api.${ROOT_DOMAIN}"
 SUB_HOST="sub.${ROOT_DOMAIN}"
 API_URL="https://${API_HOST}"
 SUB_URL="https://${SUB_HOST}"
+DEFAULT_UNLOCK_HOSTS=$(grep -E '^[A-Za-z0-9.-]+$' ../../infra/ai-unlock.txt | tr '[:upper:]' '[:lower:]' | paste -sd, -)
 
 echo "STEP ensure-d1-kv"
 wrangler d1 create opus8cf-db >/dev/null 2>&1 || true
@@ -32,6 +33,9 @@ main = "dist/index.js"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
+
+[vars]
+DEFAULT_UNLOCK_HOSTS = "$DEFAULT_UNLOCK_HOSTS"
 
 [[d1_databases]]
 binding = "DB"
@@ -100,21 +104,24 @@ for n in $(seq 1 18); do
   sleep 5
 done
 if [ -n "$TOK" ]; then echo "OK smoke-login"; else echo "ERROR smoke-login"; exit 16; fi
+ROUTES=$(curl -fsS --max-time 15 "$API_URL/api/settings/unlock-hosts" -H "authorization: Bearer $TOK")
+RCOUNT=$(printf '%s' "$ROUTES" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String((JSON.parse(s).hosts||[]).length))}catch(e){process.stdout.write("0")}})')
+if [ "$RCOUNT" -gt 0 ]; then echo "OK smoke-unlock-hosts count=$RCOUNT"; else echo "ERROR smoke-unlock-hosts-empty"; exit 17; fi
 ORPH=$(curl -fsS --max-time 15 "$API_URL/api/users" -H "authorization: Bearer $TOK" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const u=JSON.parse(s).users||[];process.stdout.write(u.filter(x=>x.username==="__smoke__").map(x=>x.id).join(" "))}catch(e){}})')
 for id in $ORPH; do curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$id" -H "authorization: Bearer $TOK" >/dev/null; done
 [ -n "$ORPH" ] && echo "OK smoke-cleaned-orphans" || true
 CU=$(curl -fsS --max-time 15 -X POST "$API_URL/api/users" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"username":"__smoke__","durationDays":1}')
 SUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.id||"")}catch(e){process.stdout.write("")}})')
 SUB=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).subUrl||"")}catch(e){process.stdout.write("")}})')
-if [ -n "$SUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; exit 17; fi
+if [ -n "$SUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; exit 18; fi
 SUBBODY=$(curl -fsS --max-time 20 "$SUB")
-if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; exit 18; fi
-if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -q 'vless://'; then echo "OK smoke-sub-has-node"; else echo "ERROR smoke-sub-no-node"; exit 19; fi
+if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; exit 19; fi
+if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -q 'vless://'; then echo "OK smoke-sub-has-node"; else echo "ERROR smoke-sub-no-node"; exit 20; fi
 if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -qE 'vless://[^@]+@[0-9]{1,3}\.[0-9]{1,3}\.'; then
-  echo "ERROR smoke-sub-still-uses-unverified-ip"; exit 20
+  echo "ERROR smoke-sub-still-uses-unverified-ip"; exit 21
 else
   echo "OK smoke-sub-hostname-only"
 fi
-if curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-cleanup"; else echo "ERROR smoke-cleanup"; exit 21; fi
+if curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-cleanup"; else echo "ERROR smoke-cleanup"; exit 22; fi
 
 echo "DONE url=$API_URL"

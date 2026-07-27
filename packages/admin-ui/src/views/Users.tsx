@@ -66,6 +66,16 @@ export function Users() {
     }
   }
 
+  async function toggleUnlock(u: User) {
+    setError("");
+    try {
+      await api.updateUser(u.id, { unlock: !u.unlock });
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function copySub(u: User) {
     await copy(subUrlFor(u.sub_token));
     setCopied(u.id);
@@ -123,7 +133,16 @@ export function Users() {
               <tr key={u.id}>
                 <td>{u.username || <span className="muted">(无名)</span>}</td>
                 <td className="mono">{u.uuid.slice(0, 8)}…</td>
-                <td>{u.unlock ? "✅" : "—"}</td>
+                <td>
+                  <label className="switch-label" title="控制该用户是否允许使用落地机">
+                    <input
+                      type="checkbox"
+                      checked={u.unlock === 1}
+                      onChange={() => void toggleUnlock(u)}
+                    />
+                    {u.unlock ? "允许" : "禁止"}
+                  </label>
+                </td>
                 <td>{fmtExpire(u.expire_at)}</td>
                 <td>
                   <span className={`pill ${u.enabled ? "pill-healthy" : "pill-banned"}`}>

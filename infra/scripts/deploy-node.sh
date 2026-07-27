@@ -23,6 +23,8 @@ WORKER_NAME="opus8cf-node-${NODE_ID}"
 echo "STEP build"
 if ! node build/build.mjs >/tmp/nb.log 2>&1; then echo "ERROR build"; tail -n 8 /tmp/nb.log; exit 10; fi
 echo "OK built ($(cat /tmp/nb.log))"
+if ! node build/policy-test.mjs >/tmp/policy.log 2>&1; then echo "ERROR policy-test"; tail -n 8 /tmp/policy.log; exit 10; fi
+echo "OK policy-test"
 
 echo "STEP probe-landing"
 PORT=""; LAND=""; PTYPE=""

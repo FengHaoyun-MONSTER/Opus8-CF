@@ -59,6 +59,7 @@ export interface ActiveUuidsResponse {
   version: number; // 时间戳，用于节点判断是否更新
   ttl: number; // 建议缓存秒数
   uuids: string[]; // 允许连接的用户 UUID
+  unlockUuids: string[]; // 允许使用 SOCKS5 落地的用户 UUID
   unlockHosts: string[]; // 命中则走 SOCKS5 落地
   socks5Enabled: boolean;
 }

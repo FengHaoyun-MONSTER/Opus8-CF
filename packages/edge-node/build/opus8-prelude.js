@@ -1,5 +1,5 @@
 // Opus8-CF 平台前置层（注入到 vendor 核心之前）。纯 JS，用 Workers 全局 fetch/crypto。
-// 提供：向控制面同步「有效 UUID 集」、自注册心跳。不改动核心任何既有能力。
+// 提供：有效 UUID、每用户落地权限、动态域名策略和节点心跳。
 
 function OPUS8_dedupe(a) {
   return [...new Set(a.map((x) => String(x).toLowerCase()))];
@@ -20,48 +20,108 @@ async function OPUS8_signedFetch(env, method, path, body = "") {
   const sign = await OPUS8_hmac(env.NODE_HMAC_SECRET, ts + "." + nodeId + "." + body);
   const headers = { "x-opus8-ts": ts, "x-opus8-node": nodeId, "x-opus8-sign": sign };
   if (method === "POST") headers["content-type"] = "application/json";
-  return fetch(env.CONTROL_PLANE_URL + path, { method, headers, body: method === "POST" ? body : undefined });
+  return fetch(env.CONTROL_PLANE_URL + path, {
+    method,
+    headers,
+    body: method === "POST" ? body : undefined,
+  });
 }
 
 function OPUS8_ready(env) {
   return !!(env.CONTROL_PLANE_URL && env.NODE_ID && env.NODE_HMAC_SECRET);
 }
 
-// 返回允许连接的 UUID 集：控制面同步来的用户 UUID + 本地管理员 userID 兜底。
-// 多级缓存：KV(未过期) -> 控制面 -> KV(过期兜底) -> [userID]
-async function OPUS8_getActiveUUIDs(env, userID, ctx) {
-  const base = [userID];
-  if (!OPUS8_ready(env)) return base;
-  const KVKEY = "opus8:active";
+const OPUS8_requestPolicies = new WeakMap();
+
+function OPUS8_normalizeState(data, userID, managed) {
+  const uuids = Array.isArray(data?.uuids) ? data.uuids : [];
+  // 兼容旧控制面：没有 unlockUuids 时继续沿用“所有用户可走落地”的原行为。
+  const hasUnlockPolicy = Array.isArray(data?.unlockUuids);
+  const unlockUuids = hasUnlockPolicy ? data.unlockUuids : uuids;
+  return {
+    version: Number(data?.version) || 0,
+    ttl: Math.max(15, Number(data?.ttl) || 60),
+    uuids: OPUS8_dedupe([userID, ...uuids]),
+    unlockUuids: OPUS8_dedupe([userID, ...unlockUuids]),
+    unlockHosts: Array.isArray(data?.unlockHosts)
+      ? OPUS8_dedupe(
+        data.unlockHosts
+          .map((x) => String(x).trim().replace(/^\*\./, "").replace(/\.$/, ""))
+          .filter(Boolean),
+      )
+      : [],
+    socks5Enabled: data?.socks5Enabled !== false,
+    routingManaged: managed && hasUnlockPolicy,
+  };
+}
+
+function OPUS8_fallbackState(userID) {
+  return OPUS8_normalizeState(
+    { uuids: [], unlockUuids: [], unlockHosts: [], socks5Enabled: true, ttl: 60 },
+    userID,
+    false,
+  );
+}
+
+function OPUS8_setRequestPolicy(request, state) {
+  if (request && typeof request === "object") OPUS8_requestPolicies.set(request, state);
+}
+
+// true=落地，false=CF 直出，null=旧控制面/离线兜底，交给 vendor 原有规则。
+function OPUS8_decideLanding(request, uuid, host) {
+  const state = request && typeof request === "object"
+    ? OPUS8_requestPolicies.get(request)
+    : null;
+  if (!state?.routingManaged) return null;
+  if (!state.socks5Enabled) return false;
+  const presentedUuid = Array.isArray(uuid) ? uuid.OPUS8_authenticated : uuid;
+  const normalizedUuid = String(presentedUuid || "").toLowerCase();
+  if (!state.unlockUuids.includes(normalizedUuid)) return false;
+  const normalizedHost = String(host || "").toLowerCase().replace(/\.$/, "");
+  return state.unlockHosts.some((domain) =>
+    normalizedHost === domain || normalizedHost.endsWith("." + domain));
+}
+
+// 多级缓存：KV(未过期) -> 控制面 -> KV(过期兜底) -> 本地管理员。
+async function OPUS8_getActiveState(env, userID, ctx) {
+  const fallback = OPUS8_fallbackState(userID);
+  if (!OPUS8_ready(env)) return fallback;
+  const KVKEY = "opus8:policy:v2";
   try {
     if (env.KV) {
       const raw = await env.KV.get(KVKEY);
       if (raw) {
         const c = JSON.parse(raw);
-        if (c && c.exp > Date.now()) return OPUS8_dedupe([userID, ...(c.uuids || [])]);
+        if (c && c.exp > Date.now() && c.state) {
+          return OPUS8_normalizeState(c.state, userID, true);
+        }
       }
     }
   } catch (e) { /* ignore */ }
   try {
     const res = await OPUS8_signedFetch(env, "GET", "/api/nodes/" + env.NODE_ID + "/uuids");
     if (res.ok) {
-      const data = await res.json();
-      const uuids = Array.isArray(data.uuids) ? data.uuids : [];
-      const ttl = data.ttl || 60;
+      const state = OPUS8_normalizeState(await res.json(), userID, true);
       if (env.KV) {
-        ctx.waitUntil(env.KV.put(KVKEY, JSON.stringify({ uuids, exp: Date.now() + ttl * 1000 }),
-          { expirationTtl: Math.max(120, ttl * 4) }));
+        ctx.waitUntil(env.KV.put(
+          KVKEY,
+          JSON.stringify({ state, exp: Date.now() + state.ttl * 1000 }),
+          { expirationTtl: Math.max(120, state.ttl * 4) },
+        ));
       }
-      return OPUS8_dedupe([userID, ...uuids]);
+      return state;
     }
   } catch (e) { /* network fail -> fall through to stale cache */ }
   try {
     if (env.KV) {
       const raw = await env.KV.get(KVKEY);
-      if (raw) { const c = JSON.parse(raw); return OPUS8_dedupe([userID, ...((c && c.uuids) || [])]); }
+      if (raw) {
+        const c = JSON.parse(raw);
+        if (c?.state) return OPUS8_normalizeState(c.state, userID, true);
+      }
     }
   } catch (e) { /* ignore */ }
-  return base;
+  return fallback;
 }
 
 let OPUS8_lastHB = 0;

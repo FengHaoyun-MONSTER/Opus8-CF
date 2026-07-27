@@ -35,8 +35,10 @@ if (!replaced.includes("sub-links.json")) {
 }
 
 const injection =
-  "let activeUUIDs = await OPUS8_getActiveUUIDs(env, userID, ctx);\n" +
+  "const OPUS8_activeState = await OPUS8_getActiveState(env, userID, ctx);\n" +
+  "\t\tlet activeUUIDs = OPUS8_activeState.uuids;\n" +
   "\t\tlet activeSubLinks = [];\n" +
+  "\t\tOPUS8_setRequestPolicy(request, OPUS8_activeState);\n" +
   "\t\tglobalThis.OPUS8_LANDING = env.SOCKS5 || '';\n" +
   "\t\tif (env.OPUS8_HEARTBEAT !== '0') ctx.waitUntil(OPUS8_heartbeat(env));";
 
@@ -54,6 +56,53 @@ const s5new = "\tif (!我的SOCKS5账号) {\n" +
   "\t}";
 patchedCore = patchedCore.replace(s5re, s5new);
 if (s5re.test(patchedCore)) throw new Error("PATCH2 FAIL: 替换未生效");
+
+// --- 补丁3：按控制面下发的用户权限 + 域名清单决定是否使用落地。---
+// 返回 null 表示控制面仍是旧协议，此时完整保留 vendor 原有白名单行为。
+const forwardStart = patchedCore.indexOf("async function forwardataTCP(");
+const forwardEnd = patchedCore.indexOf("\nasync function forwardataudp(", forwardStart);
+if (forwardStart === -1 || forwardEnd === -1) throw new Error("PATCH3 FAIL: 找不到 TCP 转发函数");
+let forwardBlock = patchedCore.slice(forwardStart, forwardEnd);
+const routeNeedle = "\tif (启用SOCKS5反代 && (启用SOCKS5全局反代 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host)))) {";
+if (!forwardBlock.includes(routeNeedle)) throw new Error("PATCH3 FAIL: 找不到 SOCKS5 路由条件");
+const decision =
+  "\tconst OPUS8_landingDecision = OPUS8_decideLanding(request, yourUUID, host);\n" +
+  "\tconst OPUS8_useConfiguredProxy = OPUS8_landingDecision === null\n" +
+  "\t\t? Boolean(启用SOCKS5反代 && (启用SOCKS5全局反代 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host))))\n" +
+  "\t\t: Boolean(启用SOCKS5反代 && OPUS8_landingDecision);\n";
+const connectorNeedle = /\tconst TCP连接 = 创建请求TCP连接器\(request\);\r?\n/;
+if (!connectorNeedle.test(forwardBlock)) throw new Error("PATCH3 FAIL: 找不到请求 TCP 连接器");
+forwardBlock = forwardBlock.replace(
+  connectorNeedle,
+  () => "\tconst TCP连接 = 创建请求TCP连接器(request);\n" + decision,
+);
+forwardBlock = forwardBlock.replace(routeNeedle, "\tif (OPUS8_useConfiguredProxy) {");
+for (const type of ["socks5", "http", "https", "turn", "sstp"]) {
+  const needle = `启用SOCKS5反代 === '${type}'`;
+  const replacement = `OPUS8_useConfiguredProxy && ${needle}`;
+  const before = forwardBlock;
+  forwardBlock = forwardBlock.replace(needle, replacement);
+  if (before === forwardBlock) throw new Error(`PATCH3 FAIL: 找不到 ${type} 代理分支`);
+}
+patchedCore = patchedCore.slice(0, forwardStart) + forwardBlock + patchedCore.slice(forwardEnd);
+
+// --- 补丁4：记录 VLESS 校验时真正命中的 UUID，供每用户出口权限判断。---
+const uuidMatchStart = patchedCore.indexOf("function UUID字节匹配(");
+const uuidMatchEnd = patchedCore.indexOf("\nfunction 解析魏烈思请求(", uuidMatchStart);
+if (uuidMatchStart === -1 || uuidMatchEnd === -1) throw new Error("PATCH4 FAIL: 找不到 UUID 匹配函数");
+let uuidMatchBlock = patchedCore.slice(uuidMatchStart, uuidMatchEnd);
+const matchedNeedle = "\t\tif (match) return true;";
+if (!uuidMatchBlock.includes(matchedNeedle)) throw new Error("PATCH4 FAIL: 找不到 UUID 命中返回");
+uuidMatchBlock = uuidMatchBlock.replace(
+  matchedNeedle,
+  "\t\tif (match) {\n" +
+  "\t\t\tif (Array.isArray(uuid)) Object.defineProperty(uuid, 'OPUS8_authenticated', {\n" +
+  "\t\t\t\tvalue: String(u).toLowerCase(), writable: true, configurable: true,\n" +
+  "\t\t\t});\n" +
+  "\t\t\treturn true;\n" +
+  "\t\t}",
+);
+patchedCore = patchedCore.slice(0, uuidMatchStart) + uuidMatchBlock + patchedCore.slice(uuidMatchEnd);
 
 const out = "// [Opus8-CF build] prelude + patched vendor core\n" + prelude + "\n" + patchedCore;
 
