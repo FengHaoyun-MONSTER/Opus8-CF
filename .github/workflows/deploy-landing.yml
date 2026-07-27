@@ -114,6 +114,9 @@ jobs:
           fi
           if command -v sockd >/dev/null 2>&1 || command -v danted >/dev/null 2>&1; then
             echo "AUDIT dante=installed"
+            echo "DETAIL dante_journal_begin"
+            journalctl -u opus8-dante.service --no-pager -n 40 2>/dev/null || true
+            echo "DETAIL dante_journal_end"
           else
             echo "AUDIT dante=absent"
           fi
