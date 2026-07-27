@@ -47,14 +47,19 @@ def read_varint(payload: bytes, offset: int) -> tuple[int, int]:
     raise RuntimeError("invalid protobuf varint")
 
 
-def unwrap_grpc_response(body: bytes) -> bytes:
+def unwrap_grpc_response(body: bytes, allow_partial: bool = False) -> bytes:
     output = bytearray()
     offset = 0
     while offset + 5 <= len(body):
         compressed = body[offset]
         frame_length = struct.unpack("!I", body[offset + 1 : offset + 5])[0]
         offset += 5
-        if compressed != 0 or offset + frame_length > len(body):
+        if compressed != 0:
+            raise RuntimeError("invalid gRPC response frame")
+        if offset + frame_length > len(body):
+            if allow_partial:
+                offset -= 5
+                break
             raise RuntimeError("invalid gRPC response frame")
         frame = body[offset : offset + frame_length]
         offset += frame_length
@@ -66,9 +71,30 @@ def unwrap_grpc_response(body: bytes) -> bytes:
             output.extend(chunk)
         else:
             output.extend(frame)
-    if offset != len(body):
+    if not allow_partial and offset != len(body):
         raise RuntimeError("trailing bytes in gRPC response")
     return bytes(output)
+
+
+def read_proxy_response(response: http.client.HTTPResponse, transport: str) -> bytes:
+    wire = bytearray()
+    for _ in range(64):
+        chunk = response.read1(65536)
+        if not chunk:
+            break
+        wire.extend(chunk)
+        decoded = (
+            unwrap_grpc_response(bytes(wire), allow_partial=True)
+            if transport == "grpc"
+            else bytes(wire)
+        )
+        if re.search(rb"HTTP/1\.[01] [1-5][0-9]{2}", decoded):
+            return decoded
+    return (
+        unwrap_grpc_response(bytes(wire))
+        if transport == "grpc"
+        else bytes(wire)
+    )
 
 
 def run(
@@ -112,17 +138,12 @@ def run(
             },
         )
         response = connection.getresponse()
-        response_body = response.read()
+        if response.status != 200:
+            raise RuntimeError(f"{transport} endpoint returned HTTP {response.status}")
+        received = read_proxy_response(response, transport)
     finally:
         connection.close()
 
-    if response.status != 200:
-        raise RuntimeError(f"{transport} endpoint returned HTTP {response.status}")
-    received = (
-        unwrap_grpc_response(response_body)
-        if transport == "grpc"
-        else response_body
-    )
     if len(received) < 2 or received[:2] != b"\x00\x00":
         raise RuntimeError("invalid VLESS response header")
     match = re.search(rb"HTTP/1\.[01] ([1-5][0-9]{2})", received)

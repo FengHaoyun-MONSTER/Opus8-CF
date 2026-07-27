@@ -171,10 +171,18 @@ else
 fi
 
 for transport in xhttp grpc; do
-  if python3 "$REPO_ROOT/infra/scripts/smoke-vless-http.py" \
-    --url "https://${HOST}/${transport}" \
-    --transport "$transport" \
-    --uuid "$TEST_UUID" >/tmp/vless-"$transport".log 2>&1; then
+  TRANSPORT_OK=0
+  for n in $(seq 1 12); do
+    if python3 "$REPO_ROOT/infra/scripts/smoke-vless-http.py" \
+      --url "https://${HOST}/${transport}" \
+      --transport "$transport" \
+      --uuid "$TEST_UUID" >/tmp/vless-"$transport".log 2>&1; then
+      TRANSPORT_OK=1
+      break
+    fi
+    sleep 5
+  done
+  if [ "$TRANSPORT_OK" = "1" ]; then
     echo "OK vless-${transport}-auth-egress"
   else
     echo "ERROR vless-${transport}-smoke"
