@@ -84,6 +84,8 @@ jobs:
             <string>proxy</string>
             <key>proxy_port</key>
             <integer>40000</integer>
+            <key>warp_tunnel_protocol</key>
+            <string>masque</string>
           </dict>
           EOF
 

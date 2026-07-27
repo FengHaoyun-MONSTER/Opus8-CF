@@ -56,12 +56,17 @@ managed_registration_visible() {
 }
 
 wait_for_managed_proxy() {
-  local attempts="${1:-24}" attempt
+  local attempts="${1:-24}" attempt consecutive=0
   for attempt in $(seq 1 "$attempts"); do
     if warp_status | grep -q "Status update: Connected" \
       && managed_registration_visible \
       && proxy_works; then
-      return 0
+      consecutive=$((consecutive + 1))
+      if [ "$consecutive" -ge 3 ]; then
+        return 0
+      fi
+    else
+      consecutive=0
     fi
     sleep 5
   done
@@ -98,6 +103,12 @@ restore_consumer_proxy() {
   systemctl restart warp-svc.service
   sleep 4
   if ! proxy_works; then
+    echo "ROLLBACK previous-profile-not-functional; restoring-consumer-registration"
+    rm -f "$MDM_PATH"
+    warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+    warp-cli --accept-tos registration delete >/dev/null 2>&1 || true
+    systemctl restart warp-svc.service
+    sleep 4
     warp-cli --accept-tos registration new >/dev/null 2>&1 || true
     warp-cli --accept-tos mode proxy >/dev/null 2>&1 || true
     warp-cli --accept-tos proxy port "$WARP_PROXY_PORT" >/dev/null 2>&1 || true
