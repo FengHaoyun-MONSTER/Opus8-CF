@@ -1,14 +1,13 @@
 {
   "node": "acc2-n1",
-  "result": "failure",
-  "nodeUrl": "",
+  "result": "success",
+  "nodeUrl": "https://acc2-n1.openal.uk",
   "markers": [
     "STEP build",
     "OK built (OK build: dist/index.js (288869 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
-    "INFO tcp-open-ports:22 2052 2053 ",
-    "INFO landing-no-socks5 (纯 CF 出口，无解锁)",
+    "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.214.151",
     "STEP kv",
     "OK kv=f634843a…",
     "STEP deploy",
@@ -16,6 +15,7 @@
     "STEP secrets",
     "OK secret hmac",
     "OK secret uuid",
+    "OK secret socks5-landing(解锁已启用)",
     "STEP register",
     "OK registered host=acc2-n1.openal.uk",
     "STEP wait-custom-domain",
@@ -25,7 +25,9 @@
     "OK uuids-endpoint-count=2",
     "OK landing-bundle-encrypted",
     "STEP vless-smoke",
-    "ERROR vless-smoke"
+    "OK vless-ws-auth-egress",
+    "OK unlock=on(AI域名走落地)",
+    "DONE url=https://acc2-n1.openal.uk"
   ],
-  "finishedAt": "2026-07-27T13:11:07Z"
+  "finishedAt": "2026-07-27T13:31:57Z"
 }
