@@ -111,6 +111,35 @@ jobs:
           else
             echo "AUDIT dante=absent"
           fi
+          echo "DETAIL listeners_begin"
+          ss -H -lntup 2>/dev/null | awk '$5 ~ /:(40000|40008|40009)$/ {print}' || true
+          echo "DETAIL listeners_end"
+          echo "DETAIL services_begin"
+          systemctl --no-pager --plain --type=service --state=running 2>/dev/null \
+            | grep -Ei 'warp|x-ui|xray|sing-box|sock|dante|gost' || true
+          echo "DETAIL services_end"
+          if command -v docker >/dev/null 2>&1; then
+            echo "DETAIL docker_begin"
+            docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}' 2>/dev/null || true
+            echo "DETAIL docker_end"
+          fi
+          if command -v warp-cli >/dev/null 2>&1; then
+            echo "DETAIL warp_status_begin"
+            timeout 10 warp-cli --accept-tos status 2>&1 || true
+            timeout 10 warp-cli --accept-tos settings 2>&1 \
+              | sed -E 's/(organization|team|account|license)[^:]*:.*/\1: <configured>/I' || true
+            echo "DETAIL warp_status_end"
+            DIRECT_IP=$(curl -4fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)
+            WARP_IP=$(curl -4fsS --max-time 15 --proxy socks5h://127.0.0.1:40000 \
+              https://api.ipify.org 2>/dev/null || true)
+            if [ -n "$DIRECT_IP" ]; then echo "AUDIT direct_egress=ok"; else echo "AUDIT direct_egress=failed"; fi
+            if [ -n "$WARP_IP" ]; then echo "AUDIT warp_proxy_egress=ok"; else echo "AUDIT warp_proxy_egress=failed"; fi
+            if [ -n "$DIRECT_IP" ] && [ -n "$WARP_IP" ] && [ "$DIRECT_IP" != "$WARP_IP" ]; then
+              echo "AUDIT warp_exit=changed"
+            elif [ -n "$DIRECT_IP" ] && [ -n "$WARP_IP" ]; then
+              echo "AUDIT warp_exit=unchanged"
+            fi
+          fi
           REMOTE
 
           {
