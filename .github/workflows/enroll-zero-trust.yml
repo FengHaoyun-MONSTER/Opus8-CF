@@ -11,6 +11,7 @@ on:
         options:
           - enroll
           - diagnose
+          - verify-routing
 
 permissions:
   contents: read
@@ -32,6 +33,10 @@ jobs:
       CF_ZERO_TRUST_TEAM: ${{ secrets.CF_ZERO_TRUST_TEAM }}
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
+      NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
+      ROOT_DOMAIN_ACC1: ${{ secrets.ROOT_DOMAIN }}
+      ROOT_DOMAIN_ACC2: ${{ secrets.ROOT_DOMAIN_NUM1 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -131,6 +136,74 @@ jobs:
             exit 1
           fi
           echo "OK managed-warp-through-authenticated-dante"
+
+      - name: Verify four edge routing paths
+        if: inputs.operation == 'enroll' || inputs.operation == 'verify-routing'
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${CONTROL_ROOT_DOMAIN:?ROOT_DOMAIN is required}"
+          : "${NODE_HMAC_SECRET:?NODE_HMAC_SECRET is required}"
+          : "${ROOT_DOMAIN_ACC1:?ROOT_DOMAIN is required}"
+          : "${ROOT_DOMAIN_ACC2:?ROOT_DOMAIN_NUM1 is required}"
+
+          normalize_domain() {
+            local domain="${1#https://}"
+            domain="${domain#http://}"
+            printf '%s' "${domain%%/*}"
+          }
+
+          CONTROL_ROOT_DOMAIN="$(normalize_domain "$CONTROL_ROOT_DOMAIN")"
+          ROOT_DOMAIN_ACC1="$(normalize_domain "$ROOT_DOMAIN_ACC1")"
+          ROOT_DOMAIN_ACC2="$(normalize_domain "$ROOT_DOMAIN_ACC2")"
+          CONTROL_API="https://api.${CONTROL_ROOT_DOMAIN}"
+          nodes=(
+            "acc1-n1|acc1-n1.${ROOT_DOMAIN_ACC1}"
+            "acc1-n2|acc1-n2.${ROOT_DOMAIN_ACC1}"
+            "acc2-n1|acc2-n1.${ROOT_DOMAIN_ACC2}"
+            "acc2-n2|acc2-n2.${ROOT_DOMAIN_ACC2}"
+          )
+
+          smoke_with_retry() {
+            local label="$1"
+            shift
+            for attempt in 1 2 3 4; do
+              if python3 infra/scripts/smoke-vless.py "$@"; then
+                echo "OK $label"
+                return 0
+              fi
+              sleep 5
+            done
+            echo "::error::$label failed after four attempts"
+            return 1
+          }
+
+          for entry in "${nodes[@]}"; do
+            IFS='|' read -r node host <<<"$entry"
+            timestamp="$(date +%s)000"
+            signature="$(printf '%s' "${timestamp}.${node}." \
+              | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r \
+              | cut -d' ' -f1)"
+            uuid="$(curl -fsS --max-time 20 \
+              "$CONTROL_API/api/nodes/$node/uuids" \
+              -H "x-opus8-ts: $timestamp" \
+              -H "x-opus8-node: $node" \
+              -H "x-opus8-sign: $signature" \
+              | jq -er '.uuids[0]')"
+
+            smoke_with_retry "$node direct-cf-egress" \
+              --url "wss://${host}/?ed=2560" \
+              --uuid "$uuid" \
+              --target example.com \
+              --target-port 80 \
+              --expect-status 200
+            smoke_with_retry "$node ai-landing-warp-egress" \
+              --url "wss://${host}/?ed=2560" \
+              --uuid "$uuid" \
+              --target openai.com \
+              --target-port 80 \
+              --expect-status 0
+          done
 
       - name: Diagnose recent Zero Trust enrollment
         if: inputs.operation == 'diagnose'
