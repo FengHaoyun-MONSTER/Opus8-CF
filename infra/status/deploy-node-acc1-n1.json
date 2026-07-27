@@ -1,6 +1,6 @@
 {
   "node": "acc1-n1",
-  "result": "cancelled",
+  "result": "failure",
   "nodeUrl": "",
   "markers": [
     "STEP build",
@@ -25,7 +25,8 @@
     "OK uuids-endpoint-count=2",
     "OK landing-bundle-encrypted",
     "STEP vless-smoke",
-    "OK vless-ws-auth-egress"
+    "OK vless-ws-auth-egress",
+    "ERROR vless-xhttp-smoke"
   ],
-  "finishedAt": "2026-07-27T16:30:44Z"
+  "finishedAt": "2026-07-27T16:32:41Z"
 }
