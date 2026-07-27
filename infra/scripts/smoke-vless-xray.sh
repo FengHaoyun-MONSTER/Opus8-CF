@@ -80,17 +80,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for attempt in $(seq 1 12); do
+for attempt in $(seq 1 4); do
   if ! kill -0 "$XRAY_PID" >/dev/null 2>&1; then break; fi
   CODE=$(curl -sS -o "$RESPONSE" \
-    -w '%{http_code}' --max-time 20 \
+    -w '%{http_code}' --max-time 10 \
     --socks5-hostname "127.0.0.1:${SOCKS_PORT}" \
     http://example.com/ || true)
   if [ "$CODE" = "200" ]; then
     echo "OK xray-${TRANSPORT}-egress"
     exit 0
   fi
-  sleep 3
+  sleep 2
 done
 
 echo "xray-${TRANSPORT} smoke failed" >&2
