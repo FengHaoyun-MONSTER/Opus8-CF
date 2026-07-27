@@ -20,6 +20,35 @@ CUSTOM_HOST="${NODE_ID}.${ROOT_DOMAIN}"
 CUSTOM_URL="https://${CUSTOM_HOST}"
 WORKER_NAME="opus8cf-node-${NODE_ID}"
 
+echo "STEP zone-grpc"
+ZONE_NAME="$ROOT_DOMAIN"
+ZONE_ID=""
+while [[ "$ZONE_NAME" == *.* ]]; do
+  ZONE_RESPONSE=$(curl -fsS --get "https://api.cloudflare.com/client/v4/zones" \
+    -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+    -H 'Accept: application/json' \
+    --data-urlencode "name=${ZONE_NAME}" \
+    --data-urlencode "account.id=${CLOUDFLARE_ACCOUNT_ID}" || true)
+  ZONE_ID=$(printf '%s' "$ZONE_RESPONSE" | jq -r '.result[0].id // empty' 2>/dev/null || true)
+  [ -n "$ZONE_ID" ] && break
+  ZONE_NAME="${ZONE_NAME#*.}"
+done
+if [ -z "$ZONE_ID" ]; then
+  echo "ERROR zone-lookup (token 需要 Zone Read 权限)"
+  exit 9
+fi
+GRPC_SETTING=$(curl -fsS -X PATCH \
+  "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/settings/grpc" \
+  -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  --data '{"value":"on"}' || true)
+if [ "$(printf '%s' "$GRPC_SETTING" | jq -r '.success // false' 2>/dev/null)" != "true" ] \
+  || [ "$(printf '%s' "$GRPC_SETTING" | jq -r '.result.value // empty' 2>/dev/null)" != "on" ]; then
+  echo "ERROR zone-grpc-enable (token 需要 Zone Settings Edit 权限)"
+  exit 9
+fi
+echo "OK zone-grpc=on zone=$ZONE_NAME"
+
 echo "STEP build"
 if ! node build/build.mjs >/tmp/nb.log 2>&1; then echo "ERROR build"; tail -n 8 /tmp/nb.log; exit 10; fi
 echo "OK built ($(cat /tmp/nb.log))"
