@@ -7,6 +7,7 @@ import argparse
 import base64
 import hashlib
 import os
+import re
 import socket
 import ssl
 import struct
@@ -100,7 +101,14 @@ def build_vless_packet(user_uuid: str, target: str = "example.com", port: int = 
     )
 
 
-def run(url: str, user_uuid: str, timeout: float) -> None:
+def run(
+    url: str,
+    user_uuid: str,
+    timeout: float,
+    target: str,
+    target_port: int,
+    expect_status: int,
+) -> None:
     parsed = urlsplit(url)
     if parsed.scheme != "wss" or not parsed.hostname:
         raise ValueError("--url must be a wss:// URL")
@@ -115,7 +123,7 @@ def run(url: str, user_uuid: str, timeout: float) -> None:
         with context.wrap_socket(raw, server_hostname=host) as sock:
             sock.settimeout(timeout)
             websocket_upgrade(sock, host, path)
-            send_ws_frame(sock, build_vless_packet(user_uuid))
+            send_ws_frame(sock, build_vless_packet(user_uuid, target, target_port))
 
             received = bytearray()
             for _ in range(16):
@@ -127,13 +135,19 @@ def run(url: str, user_uuid: str, timeout: float) -> None:
                     continue
                 if opcode in (0, 2):
                     received.extend(payload)
-                if b"HTTP/1.1 200" in received:
+                if re.search(rb"HTTP/1\.[01] [1-5][0-9]{2}", received):
                     break
 
     if len(received) < 2 or received[:2] != b"\x00\x00":
         raise RuntimeError("invalid VLESS response header")
-    if b"HTTP/1.1 200" not in received:
-        raise RuntimeError("egress HTTP probe did not return 200")
+    match = re.search(rb"HTTP/1\.[01] ([1-5][0-9]{2})", received)
+    if not match:
+        raise RuntimeError("egress HTTP probe did not return an HTTP response")
+    actual_status = int(match.group(1))
+    if expect_status and actual_status != expect_status:
+        raise RuntimeError(
+            f"egress HTTP probe returned {actual_status}, expected {expect_status}"
+        )
 
 
 def main() -> int:
@@ -141,9 +155,24 @@ def main() -> int:
     parser.add_argument("--url", required=True)
     parser.add_argument("--uuid", required=True)
     parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument("--target", default="example.com")
+    parser.add_argument("--target-port", type=int, default=80)
+    parser.add_argument(
+        "--expect-status",
+        type=int,
+        default=200,
+        help="Expected HTTP status; use 0 to accept any valid HTTP response.",
+    )
     args = parser.parse_args()
     try:
-        run(args.url, args.uuid, args.timeout)
+        run(
+            args.url,
+            args.uuid,
+            args.timeout,
+            args.target,
+            args.target_port,
+            args.expect_status,
+        )
     except Exception as exc:
         print(f"vless smoke failed: {exc}", file=sys.stderr)
         return 1

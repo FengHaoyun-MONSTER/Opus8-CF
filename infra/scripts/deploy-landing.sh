@@ -156,8 +156,26 @@ socks pass {
   log: connect disconnect error
 }
 
+socks pass {
+  from: 0.0.0.0/0 to: ::/0
+  command: connect
+  protocol: tcp
+  proxyprotocol: socks_v5
+  socksmethod: username
+  user: ${SOCKS_USER}
+  log: connect disconnect error
+}
+
 route {
   from: 0.0.0.0/0 to: 0.0.0.0/0 via: 127.0.0.1 port = ${WARP_PROXY_PORT}
+  command: connect
+  protocol: tcp
+  proxyprotocol: socks_v5
+  method: none
+}
+
+route {
+  from: 0.0.0.0/0 to: ::/0 via: 127.0.0.1 port = ${WARP_PROXY_PORT}
   command: connect
   protocol: tcp
   proxyprotocol: socks_v5
