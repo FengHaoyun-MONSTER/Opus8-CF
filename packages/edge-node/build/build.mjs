@@ -254,6 +254,23 @@ function patchStreamTransport(source, {
     cancelNeedle,
     (matched) => matched + "\t\t\tOPUS8_finishUsage(request);\n",
   );
+  const streamStartNeedle = "\t\tasync start(controller) {";
+  const streamCancelBoundary = /\r?\n\t\t},\r?\n\t\tcancel\(\) \{/;
+  if (
+    !block.includes(streamStartNeedle) ||
+    !streamCancelBoundary.test(block)
+  ) {
+    throw new Error(`PATCH7 FAIL: 找不到 ${transport} 响应流启动边界`);
+  }
+  // ReadableStream.start() 必须立即完成，否则流式上行保持打开时，下行数据无法被客户端读取。
+  block = block.replace(
+    streamStartNeedle,
+    "\t\tstart(controller) {\n\t\t\tvoid (async () => {",
+  );
+  block = block.replace(
+    streamCancelBoundary,
+    "\n\t\t\t})();\n\t\t},\n\t\tcancel() {",
+  );
   return source.slice(0, start) + block + source.slice(end);
 }
 
