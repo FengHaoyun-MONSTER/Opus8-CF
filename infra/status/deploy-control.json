@@ -14,6 +14,7 @@
     "OK secret ADMIN_PASSWORD",
     "OK secret JWT_SECRET",
     "OK secret NODE_HMAC_SECRET",
+    "OK secret LANDING_CONFIG_KEY",
     "OK secret ROOT_DOMAIN",
     "OK secret SUB_BASE",
     "STEP wait-custom-domain",
@@ -21,6 +22,10 @@
     "STEP smoke",
     "OK smoke-health",
     "OK smoke-login",
+    "STEP ensure-default-landing",
+    "OK default-landing-imported",
+    "OK smoke-landings count=1",
+    "OK smoke-landing-socks5",
     "OK smoke-unlock-hosts count=61",
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
@@ -30,11 +35,11 @@
     "DONE url=https://api.thinderbox.com"
   ],
   "tail": [
-    "STEP wait-custom-domain",
-    "OK custom-domain-ready api=https://api.thinderbox.com sub=https://sub.thinderbox.com",
-    "STEP smoke",
-    "OK smoke-health",
     "OK smoke-login",
+    "STEP ensure-default-landing",
+    "OK <redacted>",
+    "OK smoke-landings count=1",
+    "OK smoke-landing-socks5",
     "OK smoke-unlock-hosts count=61",
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
@@ -43,5 +48,5 @@
     "OK smoke-cleanup",
     "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-07-27T10:34:00Z"
+  "finishedAt": "2026-07-27T11:34:09Z"
 }
