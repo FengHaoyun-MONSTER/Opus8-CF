@@ -1,6 +1,6 @@
 {
   "result": "success",
-  "controlUrl": "https://opus8cf-control.techtoolhub-office.workers.dev",
+  "controlUrl": "https://api.thinderbox.com",
   "markers": [
     "STEP ensure-d1-kv",
     "OK ids-resolved d1=260b0f8f… kv=4526bc39…",
@@ -9,35 +9,38 @@
     "STEP bundle",
     "OK bundled",
     "STEP deploy",
-    "OK deployed url=https://opus8cf-control.techtoolhub-office.workers.dev",
+    "OK deployed workers=https://opus8cf-control.techtoolhub-office.workers.dev custom=https://api.thinderbox.com",
     "STEP secrets",
     "OK secret ADMIN_PASSWORD",
     "OK secret JWT_SECRET",
     "OK secret NODE_HMAC_SECRET",
     "OK secret ROOT_DOMAIN",
+    "OK secret SUB_BASE",
+    "STEP wait-custom-domain",
+    "OK custom-domain-ready api=https://api.thinderbox.com sub=https://sub.thinderbox.com",
     "STEP smoke",
     "OK smoke-health",
     "OK smoke-login",
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
     "OK smoke-sub-has-node",
-    "OK smoke-sub-uses-optimized-ip",
+    "OK smoke-sub-hostname-only",
     "OK smoke-cleanup",
-    "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
+    "DONE url=https://api.thinderbox.com"
   ],
   "tail": [
-    "OK secret JWT_SECRET",
-    "OK secret NODE_HMAC_SECRET",
-    "OK secret ROOT_DOMAIN",
+    "OK secret SUB_BASE",
+    "STEP wait-custom-domain",
+    "OK custom-domain-ready api=https://api.thinderbox.com sub=https://sub.thinderbox.com",
     "STEP smoke",
     "OK smoke-health",
     "OK smoke-login",
     "OK smoke-create-user(D1-write)",
     "OK smoke-subscription",
     "OK smoke-sub-has-node",
-    "OK <redacted>",
+    "OK smoke-sub-hostname-only",
     "OK smoke-cleanup",
-    "DONE url=https://opus8cf-control.techtoolhub-office.workers.dev"
+    "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-07-26T21:09:33Z"
+  "finishedAt": "2026-07-27T08:08:38Z"
 }
