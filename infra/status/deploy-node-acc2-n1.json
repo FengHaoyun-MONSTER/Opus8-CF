@@ -1,7 +1,7 @@
 {
   "node": "acc2-n1",
   "result": "success",
-  "nodeUrl": "",
+  "nodeUrl": "https://acc2-n1.openal.uk",
   "markers": [
     "STEP build",
     "OK built (OK build: dist/index.js (281020 bytes), patch replaced 961 chars)",
@@ -17,8 +17,15 @@
     "OK secret socks5-landing(解锁已启用)",
     "STEP register",
     "OK registered host=acc2-n1.openal.uk",
+    "STEP wait-custom-domain",
+    "OK custom-domain-ready",
     "STEP verify",
-    "ERROR node-custom-domain-unreachable"
+    "OK node-tls-http=200",
+    "OK uuids-endpoint-count=2",
+    "STEP vless-smoke",
+    "OK vless-ws-auth-egress",
+    "OK unlock=on(AI域名走落地)",
+    "DONE url=https://acc2-n1.openal.uk"
   ],
-  "finishedAt": "2026-07-27T08:09:43Z"
+  "finishedAt": "2026-07-27T08:15:21Z"
 }
