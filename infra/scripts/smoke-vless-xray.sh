@@ -66,7 +66,12 @@ jq -n \
       streamSettings:({
         network:$transport,
         security:"tls",
-        tlsSettings:{serverName:$host,allowInsecure:false,alpn:["h2"]}
+        tlsSettings:{
+          serverName:$host,
+          allowInsecure:false,
+          alpn:["h2"],
+          fingerprint:"chrome"
+        }
       } + $transportSettings)
     }]
   }' > "$CONFIG"
