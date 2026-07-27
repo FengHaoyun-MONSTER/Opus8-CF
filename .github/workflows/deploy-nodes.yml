@@ -54,7 +54,9 @@ jobs:
       - run: npm i -g wrangler@3
       - name: Deploy edge node
         id: deploy
-        run: bash infra/scripts/deploy-node.sh 2>&1 | tee /tmp/dn.log
+        run: |
+          set -o pipefail
+          bash infra/scripts/deploy-node.sh 2>&1 | tee /tmp/dn.log
 
       - name: Publish status back to repo
         if: always()

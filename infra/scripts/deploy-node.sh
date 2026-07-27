@@ -123,9 +123,19 @@ for n in $(seq 1 18); do
 done
 if [ "$RCODE" = "200" ]; then echo "OK registered host=$HOST"; else echo "ERROR register http=$RCODE"; exit 13; fi
 
+echo "STEP wait-custom-domain"
+DOMAIN_OK=0
+NC=000
+for n in $(seq 1 24); do
+  NC=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$URL/" || true)
+  if [ -n "$NC" ] && [ "$NC" != "000" ]; then DOMAIN_OK=1; break; fi
+  sleep 10
+done
+if [ "$DOMAIN_OK" != "1" ]; then echo "ERROR node-custom-domain-unreachable"; exit 14; fi
+echo "OK custom-domain-ready"
+
 echo "STEP verify"
-NC=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$URL/" || true)
-if [ -n "$NC" ] && [ "$NC" != "000" ]; then echo "OK node-tls-http=$NC"; else echo "ERROR node-custom-domain-unreachable"; exit 14; fi
+echo "OK node-tls-http=$NC"
 TS2=$(date +%s)000
 SIG2=$(printf '%s' "${TS2}.${NODE_ID}." | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
 if ! UDATA=$(curl -fsS --max-time 20 "$CONTROL_PLANE_URL/api/nodes/$NODE_ID/uuids" \

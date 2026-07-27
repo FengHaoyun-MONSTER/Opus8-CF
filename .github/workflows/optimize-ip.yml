@@ -23,7 +23,9 @@ jobs:
           node-version: 20
       - name: Optimize CF IPs
         id: opt
-        run: bash infra/scripts/optimize-ip.sh 2>&1 | tee /tmp/oi.log
+        run: |
+          set -o pipefail
+          bash infra/scripts/optimize-ip.sh 2>&1 | tee /tmp/oi.log
 
       - name: Publish status back to repo
         if: always()

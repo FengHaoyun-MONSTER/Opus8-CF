@@ -35,6 +35,7 @@ jobs:
       - name: Deploy control-plane
         id: deploy
         run: |
+          set -o pipefail
           { npm i -g wrangler@3 esbuild && bash infra/scripts/deploy-control.sh ; } 2>&1 | tee /tmp/dc.log
 
       - name: Publish status back to repo
