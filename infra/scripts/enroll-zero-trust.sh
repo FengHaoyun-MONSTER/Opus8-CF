@@ -31,28 +31,61 @@ warp_settings() {
   timeout 12 warp-cli --accept-tos settings 2>&1 || true
 }
 
+warp_registration() {
+  timeout 12 warp-cli --accept-tos registration show 2>&1 || true
+}
+
 proxy_works() {
   curl -4fsS --max-time 20 \
     --proxy "socks5h://127.0.0.1:${WARP_PROXY_PORT}" \
     https://api.ipify.org >/dev/null 2>&1
 }
 
-managed_team_visible() {
-  warp_settings | grep -Eiq \
-    "(Daemon Team|Organization|Team).*[=:][[:space:]]*${CF_ZERO_TRUST_TEAM}([[:space:]]|$)"
+managed_registration_visible() {
+  local registration settings
+  registration="$(warp_registration)"
+  settings="$(warp_settings)"
+
+  if printf '%s\n' "$registration" \
+      | grep -Eiq '^Account type:[[:space:]]*(Team|Zero Trust|Managed)([[:space:]]|$)'; then
+    return 0
+  fi
+
+  printf '%s\n' "$settings" \
+    | grep -Eiq 'Daemon Teams Auth:[[:space:]]*true([[:space:]]|$)'
 }
 
 wait_for_managed_proxy() {
-  local attempt
-  for attempt in $(seq 1 36); do
+  local attempts="${1:-24}" attempt
+  for attempt in $(seq 1 "$attempts"); do
     if warp_status | grep -q "Status update: Connected" \
-      && managed_team_visible \
+      && managed_registration_visible \
       && proxy_works; then
       return 0
     fi
     sleep 5
   done
   return 1
+}
+
+redact_output() {
+  sed -E \
+    -e 's/[A-Za-z0-9._@:/?&=%-]{24,}/<redacted>/g' \
+    -e 's/(auth_client_(id|secret)[^[:space:]]*[[:space:]]+)[^[:space:]]+/\1<redacted>/Ig'
+}
+
+enrollment_diagnostics() {
+  echo "DIAG managed-enrollment-status"
+  warp_status | redact_output || true
+  echo "DIAG managed-enrollment-settings"
+  warp_settings | redact_output || true
+  echo "DIAG managed-enrollment-registration"
+  warp_registration | redact_output || true
+  echo "DIAG managed-enrollment-journal"
+  journalctl -u warp-svc.service --since '8 minutes ago' --no-pager 2>&1 \
+    | grep -Ei 'registration|enroll|auth|token|organization|team|mdm|error|failed|denied|forbidden|unauthorized|http|status' \
+    | redact_output \
+    | tail -n 160 || true
 }
 
 restore_consumer_proxy() {
@@ -105,7 +138,7 @@ rm -f "$MDM_SOURCE"
 systemctl restart warp-svc.service
 sleep 5
 
-if wait_for_managed_proxy; then
+if wait_for_managed_proxy 12; then
   ENROLL_OK=1
   trap - EXIT
   echo "DONE zero-trust-enrolled team=${CF_ZERO_TRUST_TEAM} mode=proxy port=${WARP_PROXY_PORT}"
@@ -118,9 +151,12 @@ warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
 warp-cli --accept-tos registration delete >/dev/null 2>&1 || true
 systemctl restart warp-svc.service
 sleep 5
+echo "STEP create-managed-registration"
+timeout 45 warp-cli --accept-tos registration new 2>&1 \
+  | redact_output || true
 warp-cli --accept-tos connect >/dev/null 2>&1 || true
 
-if wait_for_managed_proxy; then
+if wait_for_managed_proxy 24; then
   ENROLL_OK=1
   trap - EXIT
   echo "DONE zero-trust-enrolled team=${CF_ZERO_TRUST_TEAM} mode=proxy port=${WARP_PROXY_PORT}"
@@ -128,5 +164,6 @@ if wait_for_managed_proxy; then
 fi
 
 echo "ERROR managed-enrollment-failed"
+enrollment_diagnostics
 echo "HINT ensure the service token is included in Device enrollment permissions with action Service Auth"
 exit 20
