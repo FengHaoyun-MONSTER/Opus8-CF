@@ -1,7 +1,7 @@
 {
   "node": "acc2-n1",
   "result": "success",
-  "nodeUrl": "https://opus8cf-node-acc2-n1.fengy2020212122.workers.dev",
+  "nodeUrl": "",
   "markers": [
     "STEP build",
     "OK built (OK build: dist/index.js (281020 bytes), patch replaced 961 chars)",
@@ -10,18 +10,15 @@
     "STEP kv",
     "OK kv=f634843a…",
     "STEP deploy",
-    "OK deployed url=https://opus8cf-node-acc2-n1.fengy2020212122.workers.dev",
+    "OK deployed workers=https://opus8cf-node-acc2-n1.fengy2020212122.workers.dev custom=https://acc2-n1.openal.uk",
     "STEP secrets",
     "OK secret hmac",
     "OK secret uuid",
     "OK secret socks5-landing(解锁已启用)",
     "STEP register",
-    "OK registered host=opus8cf-node-acc2-n1.fengy2020212122.workers.dev",
+    "OK registered host=acc2-n1.openal.uk",
     "STEP verify",
-    "OK node-http=404",
-    "OK uuids-endpoint-count=0",
-    "OK unlock=on(AI域名走落地)",
-    "DONE url=https://opus8cf-node-acc2-n1.fengy2020212122.workers.dev"
+    "ERROR node-custom-domain-unreachable"
   ],
-  "finishedAt": "2026-07-26T20:56:00Z"
+  "finishedAt": "2026-07-27T08:09:43Z"
 }
