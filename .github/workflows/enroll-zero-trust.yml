@@ -174,10 +174,7 @@ jobs:
             local script="$2"
             shift 2
             for attempt in 1 2 3 4; do
-              if [[ "$script" == *.py ]] && python3 "$script" "$@"; then
-                echo "OK $label"
-                return 0
-              elif [[ "$script" == *.sh ]] && bash "$script" "$@"; then
+              if python3 "$script" "$@"; then
                 echo "OK $label"
                 return 0
               fi
@@ -230,12 +227,6 @@ jobs:
               --target openai.com \
               --target-port 80 \
               --expect-status 0
-            smoke_with_retry "$node xhttp-direct-cf-egress" \
-              infra/scripts/smoke-vless-xray.sh \
-              xhttp "$host" "$uuid"
-            smoke_with_retry "$node grpc-direct-cf-egress" \
-              infra/scripts/smoke-vless-xray.sh \
-              grpc "$host" "$uuid"
           done
 
           sleep 5
@@ -247,10 +238,10 @@ jobs:
           AFTER_BYTES="$(printf '%s' "$after_user" | jq -er '.bytes_up + .bytes_down')"
           CONNECTION_DELTA=$((AFTER_CONNECTIONS - BEFORE_CONNECTIONS))
           BYTE_DELTA=$((AFTER_BYTES - BEFORE_BYTES))
-          if [ "$CONNECTION_DELTA" -ge 16 ] && [ "$BYTE_DELTA" -gt 0 ]; then
+          if [ "$CONNECTION_DELTA" -ge 8 ] && [ "$BYTE_DELTA" -gt 0 ]; then
             echo "OK edge-usage-accounting connections=$CONNECTION_DELTA"
           else
-            echo "::error::Expected at least 16 metered WS/XHTTP/gRPC connections; got $CONNECTION_DELTA"
+            echo "::error::Expected at least 8 metered WebSocket connections; got $CONNECTION_DELTA"
             exit 1
           fi
 

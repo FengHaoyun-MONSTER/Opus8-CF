@@ -44,7 +44,8 @@
 - 不依赖客户端 HWID。边缘节点在 VLESS 鉴权后，以用户 UUID 为主体向控制面申请五分钟 IP 租约。
 - 默认允许同一订阅同时使用 2 个公网 IP、24 小时内使用 5 个公网 IP；可在“用户与防分享”页面逐用户调整。
 - 控制面只保存由节点密钥 HMAC 后的 IP 指纹，不保存客户原始公网 IP。
-- VLESS WebSocket、gRPC、XHTTP 的上下行均按 UUID 分批、幂等汇总到 D1；订阅响应的 `subscription-userinfo` 会返回实际用量和流量额度。
+- 生产节点的 VLESS WebSocket 上下行按 UUID 分批、幂等汇总到 D1；订阅响应的 `subscription-userinfo` 会返回实际用量和流量额度。
+- gRPC/XHTTP 已接入同一计量运行时，但 Cloudflare Zone gRPC 开关和双向流式 POST 仍需独立端到端验证，当前不作为生产节点能力下发。
 - 控制面短时不可达时节点采取故障放行，避免全员断网；UUID 有效期和停用状态仍由节点缓存策略继续校验。
 
 > ⚠️ 在 Cloudflare Workers 上跑代理违反其服务条款、规模化可能被封号。本项目按「封号常态化」设计

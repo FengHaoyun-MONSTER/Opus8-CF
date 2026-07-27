@@ -20,37 +20,6 @@ CUSTOM_HOST="${NODE_ID}.${ROOT_DOMAIN}"
 CUSTOM_URL="https://${CUSTOM_HOST}"
 WORKER_NAME="opus8cf-node-${NODE_ID}"
 
-echo "STEP zone-grpc"
-ZONE_NAME="$ROOT_DOMAIN"
-ZONE_ID=""
-ZONE_GRPC_ENABLED=0
-while [[ "$ZONE_NAME" == *.* ]]; do
-  ZONE_RESPONSE=$(curl -fsS --get "https://api.cloudflare.com/client/v4/zones" \
-    -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-    -H 'Accept: application/json' \
-    --data-urlencode "name=${ZONE_NAME}" \
-    --data-urlencode "account.id=${CLOUDFLARE_ACCOUNT_ID}" || true)
-  ZONE_ID=$(printf '%s' "$ZONE_RESPONSE" | jq -r '.result[0].id // empty' 2>/dev/null || true)
-  [ -n "$ZONE_ID" ] && break
-  ZONE_NAME="${ZONE_NAME#*.}"
-done
-if [ -z "$ZONE_ID" ]; then
-  echo "INFO zone-lookup-unavailable (自定义域名 gRPC 使用 workers.dev 备用入口)"
-else
-  GRPC_SETTING=$(curl -sS -X PATCH \
-    "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/settings/grpc" \
-    -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-    -H 'Content-Type: application/json' \
-    --data '{"value":"on"}' || true)
-  if [ "$(printf '%s' "$GRPC_SETTING" | jq -r '.success // false' 2>/dev/null)" = "true" ] \
-    && [ "$(printf '%s' "$GRPC_SETTING" | jq -r '.result.value // empty' 2>/dev/null)" = "on" ]; then
-    ZONE_GRPC_ENABLED=1
-    echo "OK zone-grpc=on zone=$ZONE_NAME"
-  else
-    echo "INFO zone-grpc-edit-unavailable (自定义域名 gRPC 使用 workers.dev 备用入口)"
-  fi
-fi
-
 echo "STEP build"
 if ! node build/build.mjs >/tmp/nb.log 2>&1; then echo "ERROR build"; tail -n 8 /tmp/nb.log; exit 10; fi
 echo "OK built ($(cat /tmp/nb.log))"
@@ -132,7 +101,6 @@ EOF
 echo "STEP deploy"
 if ! wrangler deploy >/tmp/nd.log 2>&1; then echo "ERROR deploy"; tail -n 8 /tmp/nd.log | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g'; exit 12; fi
 WORKERS_URL=$(grep -oE 'https://[a-z0-9._-]+workers\.dev' /tmp/nd.log | head -n1 || true)
-WORKERS_HOST="${WORKERS_URL#https://}"
 URL="$CUSTOM_URL"
 HOST="$CUSTOM_HOST"
 echo "OK deployed workers=${WORKERS_URL:-unreported} custom=$URL"
@@ -148,7 +116,7 @@ echo "STEP register"
 RCODE=000
 for n in $(seq 1 18); do
   TS=$(date +%s)000
-  BODY=$(H="$HOST" HASLAND="$LAND" node -e "process.stdout.write(JSON.stringify({nodeId:process.env.NODE_ID,accountAlias:process.env.NODE_ACCOUNT_ALIAS,hostname:process.env.H,region:process.env.NODE_REGION||null,capabilities:['vless-ws','xhttp','grpc','anti-share-v1','usage-v1'].concat(process.env.HASLAND?['unlock']:[])}))")
+  BODY=$(H="$HOST" HASLAND="$LAND" node -e "process.stdout.write(JSON.stringify({nodeId:process.env.NODE_ID,accountAlias:process.env.NODE_ACCOUNT_ALIAS,hostname:process.env.H,region:process.env.NODE_REGION||null,capabilities:['vless-ws','anti-share-v1','usage-v1'].concat(process.env.HASLAND?['unlock']:[])}))")
   SIG=$(printf '%s' "${TS}.${NODE_ID}.${BODY}" | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
   RCODE=$(curl -s -o /tmp/reg.json -w '%{http_code}' --max-time 20 -X POST "$CONTROL_PLANE_URL/api/nodes/register" \
     -H "x-opus8-ts: $TS" -H "x-opus8-node: $NODE_ID" -H "x-opus8-sign: $SIG" -H 'content-type: application/json' -d "$BODY" || true)
@@ -202,25 +170,6 @@ else
   exit 17
 fi
 
-for transport in xhttp grpc; do
-  TRANSPORT_HOST="$HOST"
-  if [ "$transport" = "grpc" ] && [ "$ZONE_GRPC_ENABLED" != "1" ]; then
-    if [ -z "$WORKERS_HOST" ] || [ "$WORKERS_HOST" = "$WORKERS_URL" ]; then
-      echo "ERROR grpc-workers-dev-host-missing"
-      exit 18
-    fi
-    TRANSPORT_HOST="$WORKERS_HOST"
-    echo "INFO grpc-host=workers.dev (Zone Settings Edit 授权后自动切换自定义域名)"
-  fi
-  if bash "$REPO_ROOT/infra/scripts/smoke-vless-xray.sh" \
-    "$transport" "$TRANSPORT_HOST" "$TEST_UUID" >/tmp/vless-"$transport".log 2>&1; then
-    echo "OK vless-${transport}-auth-egress"
-  else
-    echo "ERROR vless-${transport}-smoke"
-    tail -n 40 /tmp/vless-"$transport".log
-    exit 18
-  fi
-done
 [ -n "$LAND" ] && echo "OK unlock=on(AI域名走落地)" || echo "INFO unlock=off"
 
 echo "DONE url=$URL"
