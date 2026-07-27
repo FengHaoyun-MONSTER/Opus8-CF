@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import http.client
 import re
 import struct
+import subprocess
 import sys
 import uuid
 from urllib.parse import urlsplit
@@ -76,25 +76,57 @@ def unwrap_grpc_response(body: bytes, allow_partial: bool = False) -> bytes:
     return bytes(output)
 
 
-def read_proxy_response(response: http.client.HTTPResponse, transport: str) -> bytes:
-    wire = bytearray()
-    for _ in range(64):
-        chunk = response.read1(65536)
-        if not chunk:
-            break
-        wire.extend(chunk)
-        decoded = (
-            unwrap_grpc_response(bytes(wire), allow_partial=True)
-            if transport == "grpc"
-            else bytes(wire)
-        )
-        if re.search(rb"HTTP/1\.[01] [1-5][0-9]{2}", decoded):
-            return decoded
-    return (
-        unwrap_grpc_response(bytes(wire))
-        if transport == "grpc"
-        else bytes(wire)
+def request_http2(
+    url: str,
+    body: bytes,
+    content_type: str,
+    timeout: float,
+) -> tuple[int, bytes]:
+    marker = b"\nOPUS8_HTTP_STATUS:"
+    result = subprocess.run(
+        [
+            "curl",
+            "--http2",
+            "--silent",
+            "--show-error",
+            "--no-buffer",
+            "--fail-with-body",
+            "--max-time",
+            str(timeout),
+            "-X",
+            "POST",
+            "-H",
+            f"Content-Type: {content_type}",
+            "-H",
+            "Cache-Control: no-store",
+            "-H",
+            f"Referer: {url}?x_padding=smoke",
+            "--data-binary",
+            "@-",
+            "--write-out",
+            "\\nOPUS8_HTTP_STATUS:%{http_code}\\n",
+            url,
+        ],
+        input=body,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
     )
+    marker_offset = result.stdout.rfind(marker)
+    if marker_offset < 0:
+        detail = result.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(
+            f"curl HTTP/2 probe failed with exit {result.returncode}: {detail}"
+        )
+    status_text = result.stdout[marker_offset + len(marker) :].strip()
+    status = int(status_text)
+    response_body = result.stdout[:marker_offset]
+    # curl 28 is acceptable only when the bidirectional stream intentionally stays
+    # open after a complete proxy response; payload validation below remains strict.
+    if result.returncode not in (0, 28) and status == 0:
+        detail = result.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"curl HTTP/2 probe failed: {detail}")
+    return status, response_body
 
 
 def run(
@@ -120,29 +152,17 @@ def run(
         body = packet
         content_type = "application/octet-stream"
 
-    connection = http.client.HTTPSConnection(
-        parsed.hostname,
-        parsed.port or 443,
-        timeout=timeout,
+    endpoint = f"https://{parsed.hostname}:{parsed.port}{path}" if parsed.port else (
+        f"https://{parsed.hostname}{path}"
     )
-    try:
-        connection.request(
-            "POST",
-            path,
-            body=body,
-            headers={
-                "Content-Type": content_type,
-                "Cache-Control": "no-store",
-                "Connection": "close",
-                "Referer": f"https://{parsed.hostname}/?x_padding=smoke",
-            },
-        )
-        response = connection.getresponse()
-        if response.status != 200:
-            raise RuntimeError(f"{transport} endpoint returned HTTP {response.status}")
-        received = read_proxy_response(response, transport)
-    finally:
-        connection.close()
+    status, response_body = request_http2(endpoint, body, content_type, timeout)
+    if status != 200:
+        raise RuntimeError(f"{transport} endpoint returned HTTP {status}")
+    received = (
+        unwrap_grpc_response(response_body, allow_partial=True)
+        if transport == "grpc"
+        else response_body
+    )
 
     if len(received) < 2 or received[:2] != b"\x00\x00":
         raise RuntimeError("invalid VLESS response header")
