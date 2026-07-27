@@ -176,7 +176,7 @@ for transport in xhttp grpc; do
     echo "OK vless-${transport}-auth-egress"
   else
     echo "ERROR vless-${transport}-smoke"
-    tail -n 3 /tmp/vless-"$transport".log
+    tail -n 40 /tmp/vless-"$transport".log
     exit 18
   fi
 done

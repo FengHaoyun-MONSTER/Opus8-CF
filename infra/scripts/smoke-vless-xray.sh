@@ -52,7 +52,7 @@ jq -n \
   --argjson port "$SOCKS_PORT" \
   --argjson transportSettings "$TRANSPORT_SETTINGS" \
   '{
-    log:{loglevel:"warning"},
+    log:{loglevel:"info"},
     inbounds:[{
       tag:"socks-in", listen:"127.0.0.1", port:$port,
       protocol:"socks", settings:{udp:false}
@@ -82,17 +82,22 @@ trap cleanup EXIT
 
 for attempt in $(seq 1 4); do
   if ! kill -0 "$XRAY_PID" >/dev/null 2>&1; then break; fi
-  CODE=$(curl -sS -o "$RESPONSE" \
-    -w '%{http_code}' --max-time 10 \
-    --socks5-hostname "127.0.0.1:${SOCKS_PORT}" \
-    http://example.com/ || true)
+  if CODE=$(curl -sS -o "$RESPONSE" \
+      -w '%{http_code}' --max-time 10 \
+      --socks5-hostname "127.0.0.1:${SOCKS_PORT}" \
+      http://example.com/); then
+    CURL_EXIT=0
+  else
+    CURL_EXIT=$?
+  fi
   if [ "$CODE" = "200" ]; then
     echo "OK xray-${TRANSPORT}-egress"
     exit 0
   fi
+  echo "INFO xray-${TRANSPORT}-attempt=$attempt curl-exit=$CURL_EXIT http=$CODE" >&2
   sleep 2
 done
 
 echo "xray-${TRANSPORT} smoke failed" >&2
-tail -n 12 "$LOG" | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g' >&2 || true
+tail -n 40 "$LOG" | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g' >&2 || true
 exit 1
