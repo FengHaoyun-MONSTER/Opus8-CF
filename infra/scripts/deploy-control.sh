@@ -116,18 +116,29 @@ if [ "$LCOUNT" -eq 0 ]; then
     exit 17
   fi
   LANDING_SEED=$(node -e 'process.stdout.write(JSON.stringify({name:"默认落地机",hostname:process.env.SERVICES_IP,port:40008,username:process.env.SERVICES_USER,password:process.env.SERVICES_CODE,region:"default",matchHosts:[],priority:100,enabled:true}))')
-  CREATE_CODE=$(curl -sS -o /tmp/landing-create.json -w '%{http_code}' --max-time 20 -X POST "$API_URL/api/landings" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d "$LANDING_SEED" || true)
-  if [ "$CREATE_CODE" != "201" ]; then
+  CREATE_CODE=000
+  for n in $(seq 1 8); do
+    CREATE_CODE=$(curl -sS -o /tmp/landing-create.json -w '%{http_code}' --max-time 20 -X POST "$API_URL/api/landings" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d "$LANDING_SEED" || true)
+    if [ "$CREATE_CODE" = "201" ]; then break; fi
+    # 首次写入 Worker Secret 后各边缘位置可能短暂仍读到旧配置；同时检查是否已写入，避免超时重试产生重复记录。
+    LANDINGS=$(curl -fsS --max-time 15 "$API_URL/api/landings" -H "authorization: Bearer $TOK" || true)
+    LCOUNT=$(printf '%s' "$LANDINGS" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String((JSON.parse(s).landings||[]).length))}catch(e){process.stdout.write("0")}})')
+    if [ "$LCOUNT" -gt 0 ]; then CREATE_CODE=existing; break; fi
+    sleep 3
+  done
+  if [ "$CREATE_CODE" != "201" ] && [ "$CREATE_CODE" != "existing" ]; then
     CREATE_ERROR=$(node -e 'const fs=require("fs");try{const j=JSON.parse(fs.readFileSync("/tmp/landing-create.json","utf8"));process.stdout.write(String(j.error||"unknown").slice(0,200))}catch(e){process.stdout.write("invalid response")}')
     echo "ERROR default-landing-create http=$CREATE_CODE reason=$CREATE_ERROR" | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g'
     exit 18
   fi
-  CREATED=$(cat /tmp/landing-create.json)
-  CREATED_ID=$(printf '%s' "$CREATED" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).landing.id||"")}catch(e){}})')
-  if [ -z "$CREATED_ID" ]; then echo "ERROR default-landing-create"; exit 18; fi
+  if [ "$CREATE_CODE" = "201" ]; then
+    CREATED=$(cat /tmp/landing-create.json)
+    CREATED_ID=$(printf '%s' "$CREATED" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).landing.id||"")}catch(e){}})')
+    if [ -z "$CREATED_ID" ]; then echo "ERROR default-landing-create"; exit 18; fi
+  fi
   echo "OK default-landing-imported"
   LANDINGS=$(curl -fsS --max-time 15 "$API_URL/api/landings" -H "authorization: Bearer $TOK")
-  LCOUNT=1
+  LCOUNT=$(printf '%s' "$LANDINGS" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String((JSON.parse(s).landings||[]).length))}catch(e){process.stdout.write("0")}})')
 fi
 echo "OK smoke-landings count=$LCOUNT"
 LANDING_ID=$(printf '%s' "$LANDINGS" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write((JSON.parse(s).landings||[])[0]?.id||"")}catch(e){}})')
