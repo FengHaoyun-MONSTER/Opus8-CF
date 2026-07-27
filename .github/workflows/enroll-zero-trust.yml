@@ -174,7 +174,10 @@ jobs:
             local script="$2"
             shift 2
             for attempt in 1 2 3 4; do
-              if python3 "$script" "$@"; then
+              if [[ "$script" == *.py ]] && python3 "$script" "$@"; then
+                echo "OK $label"
+                return 0
+              elif [[ "$script" == *.sh ]] && bash "$script" "$@"; then
                 echo "OK $label"
                 return 0
               fi
@@ -228,21 +231,11 @@ jobs:
               --target-port 80 \
               --expect-status 0
             smoke_with_retry "$node xhttp-direct-cf-egress" \
-              infra/scripts/smoke-vless-http.py \
-              --url "https://${host}/xhttp" \
-              --transport xhttp \
-              --uuid "$uuid" \
-              --target example.com \
-              --target-port 80 \
-              --expect-status 200
+              infra/scripts/smoke-vless-xray.sh \
+              xhttp "$host" "$uuid"
             smoke_with_retry "$node grpc-direct-cf-egress" \
-              infra/scripts/smoke-vless-http.py \
-              --url "https://${host}/grpc" \
-              --transport grpc \
-              --uuid "$uuid" \
-              --target example.com \
-              --target-port 80 \
-              --expect-status 200
+              infra/scripts/smoke-vless-xray.sh \
+              grpc "$host" "$uuid"
           done
 
           sleep 5

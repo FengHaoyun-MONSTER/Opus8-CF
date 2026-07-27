@@ -173,10 +173,8 @@ fi
 for transport in xhttp grpc; do
   TRANSPORT_OK=0
   for n in $(seq 1 12); do
-    if python3 "$REPO_ROOT/infra/scripts/smoke-vless-http.py" \
-      --url "https://${HOST}/${transport}" \
-      --transport "$transport" \
-      --uuid "$TEST_UUID" >/tmp/vless-"$transport".log 2>&1; then
+    if bash "$REPO_ROOT/infra/scripts/smoke-vless-xray.sh" \
+      "$transport" "$HOST" "$TEST_UUID" >/tmp/vless-"$transport".log 2>&1; then
       TRANSPORT_OK=1
       break
     fi
