@@ -10,6 +10,8 @@ dist/
 .env.*
 coverage/
 .vitest/
+__pycache__/
+*.pyc
 # 绝不提交真实密钥 / 优选IP产物 / 落地机信息
 secrets.local.*
 infra/accounts.local.json
