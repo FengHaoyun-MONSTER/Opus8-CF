@@ -31,10 +31,25 @@ rollback() {
   if [ "$DEPLOY_OK" = "1" ]; then return; fi
   echo "ROLLBACK deployment-failed"
   systemctl stop opus8-dante.service >/dev/null 2>&1 || true
-  if [ "$ROLLED_FORWARDER_BACK" = "1" ] && command -v socat >/dev/null 2>&1; then
-    nohup socat "TCP-LISTEN:${DANTE_PORT},bind=0.0.0.0,fork" \
-      "TCP:127.0.0.1:${WARP_PROXY_PORT}" >/var/log/opus8-socat.log 2>&1 &
-    echo "ROLLBACK restored-legacy-forwarder"
+  if command -v socat >/dev/null 2>&1; then
+    cat > /etc/systemd/system/opus8-legacy-socat.service <<EOF
+[Unit]
+Description=Opus8 legacy WARP SOCKS forwarder
+After=network-online.target warp-svc.service
+Requires=warp-svc.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:${DANTE_PORT},bind=0.0.0.0,fork TCP:127.0.0.1:${WARP_PROXY_PORT}
+Restart=always
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now opus8-legacy-socat.service >/dev/null 2>&1 || true
+    echo "ROLLBACK restored-persistent-legacy-forwarder"
   fi
 }
 trap rollback EXIT
@@ -58,13 +73,16 @@ if [ -n "$LISTENER" ]; then
       echo "ERROR refusing-to-replace-unknown-socat"
       exit 11
     fi
-    kill "$SOCAT_PID"
-    for _ in $(seq 1 20); do
-      kill -0 "$SOCAT_PID" >/dev/null 2>&1 || break
+    systemctl disable --now opus8-legacy-socat.service >/dev/null 2>&1 || true
+    mapfile -t SOCAT_PIDS < <(pgrep -f \
+      "^socat TCP-LISTEN:${DANTE_PORT},bind=0\\.0\\.0\\.0,fork TCP:127\\.0\\.0\\.1:${WARP_PROXY_PORT} ?$" || true)
+    if [ "${#SOCAT_PIDS[@]}" -gt 0 ]; then kill "${SOCAT_PIDS[@]}" >/dev/null 2>&1 || true; fi
+    for _ in $(seq 1 60); do
+      if ! ss -H -lnt 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${DANTE_PORT}$"; then break; fi
       sleep 0.25
     done
-    if kill -0 "$SOCAT_PID" >/dev/null 2>&1; then
-      echo "ERROR legacy-forwarder-did-not-stop"
+    if ss -H -lnt 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${DANTE_PORT}$"; then
+      echo "ERROR legacy-forwarder-port-did-not-release"
       exit 12
     fi
     ROLLED_FORWARDER_BACK=1
@@ -200,6 +218,9 @@ if curl -4fsS --max-time 8 --proxy "socks5h://127.0.0.1:${DANTE_PORT}" \
 fi
 echo "OK auth-required-and-warp-egress"
 
+systemctl disable --now opus8-legacy-socat.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/opus8-legacy-socat.service
+systemctl daemon-reload
 DEPLOY_OK=1
 trap - EXIT
 echo "DONE dante_port=${DANTE_PORT} warp_proxy_port=${WARP_PROXY_PORT}"

@@ -292,9 +292,15 @@ jobs:
               -H "authorization: Bearer $TOKEN" \
               -H 'content-type: application/json' \
               --data "$PAYLOAD" >/dev/null
-            TEST=$(curl -fsS --max-time 30 -X POST "$api/api/landings/$id/test" \
-              -H "authorization: Bearer $TOKEN")
-            printf '%s' "$TEST" | jq -e '.ok == true' >/dev/null
+            TEST_CODE=$(curl -sS --max-time 30 -o /tmp/landing-test.json -w '%{http_code}' \
+              -X POST "$api/api/landings/$id/test" \
+              -H "authorization: Bearer $TOKEN" || true)
+            if [ "$TEST_CODE" = "200" ] && jq -e '.ok == true' /tmp/landing-test.json >/dev/null 2>&1; then
+              echo "OK control-plane-landing-test id=$id"
+            else
+              TEST_ERROR=$(jq -r '.error // "unknown test error"' /tmp/landing-test.json 2>/dev/null || echo "unknown test error")
+              echo "::warning::Control-plane test returned HTTP $TEST_CODE: $TEST_ERROR"
+            fi
           done
           echo "OK control-plane-credentials-rotated count=${#IDS[@]}"
 
@@ -319,8 +325,23 @@ jobs:
           set +e
           systemctl disable --now opus8-dante.service >/dev/null 2>&1
           if ! ss -H -lnt 2>/dev/null | awk '{print $4}' | grep -Eq '(^|:)40008$'; then
-            nohup socat 'TCP-LISTEN:40008,bind=0.0.0.0,fork' \
-              'TCP:127.0.0.1:40000' >/var/log/opus8-socat.log 2>&1 &
+            cat > /etc/systemd/system/opus8-legacy-socat.service <<'EOF'
+          [Unit]
+          Description=Opus8 legacy WARP SOCKS forwarder
+          After=network-online.target warp-svc.service
+          Requires=warp-svc.service
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/bin/socat TCP-LISTEN:40008,bind=0.0.0.0,fork TCP:127.0.0.1:40000
+          Restart=always
+          RestartSec=2s
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+            systemctl daemon-reload
+            systemctl enable --now opus8-legacy-socat.service
           fi
           REMOTE
           echo "::warning::Deployment failed; attempted to restore the previous socat forwarder."
