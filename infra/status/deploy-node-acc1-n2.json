@@ -6,7 +6,7 @@
     "STEP zone-grpc",
     "INFO zone-grpc-edit-unavailable (自定义域名 gRPC 使用 workers.dev 备用入口)",
     "STEP build",
-    "OK built (OK build: dist/index.js (300339 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (300387 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
@@ -34,5 +34,5 @@
     "INFO xray-xhttp-attempt=3 curl-exit=28 http=000",
     "INFO xray-xhttp-attempt=4 curl-exit=28 http=000"
   ],
-  "finishedAt": "2026-07-27T16:58:30Z"
+  "finishedAt": "2026-07-27T17:04:54Z"
 }
