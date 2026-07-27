@@ -20,6 +20,7 @@ done
 
 XRAY_VERSION="v26.3.27"
 XRAY_SHA256="23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae"
+XRAY_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
 XRAY_DIR="/tmp/opus8-xray-${XRAY_VERSION}"
 XRAY_BIN="$XRAY_DIR/xray"
 mkdir -p "$XRAY_DIR"
@@ -38,11 +39,21 @@ CONFIG="/tmp/opus8-xray-${TRANSPORT}-${SOCKS_PORT}.json"
 LOG="/tmp/opus8-xray-${TRANSPORT}-${SOCKS_PORT}.log"
 RESPONSE="/tmp/opus8-xray-${TRANSPORT}-${SOCKS_PORT}.response"
 if [ "$TRANSPORT" = "xhttp" ]; then
-  TRANSPORT_SETTINGS=$(jq -nc --arg host "$HOST" \
-    '{xhttpSettings:{host:$host,path:"/xhttp",mode:"stream-one"}}')
+  TRANSPORT_SETTINGS=$(jq -nc --arg host "$HOST" --arg ua "$XRAY_USER_AGENT" \
+    '{xhttpSettings:{
+      host:$host,
+      path:"/xhttp",
+      mode:"stream-one",
+      headers:{"User-Agent":$ua}
+    }}')
 else
-  TRANSPORT_SETTINGS=$(jq -nc --arg host "$HOST" \
-    '{grpcSettings:{authority:$host,serviceName:"grpc",multiMode:false}}')
+  TRANSPORT_SETTINGS=$(jq -nc --arg host "$HOST" --arg ua "$XRAY_USER_AGENT" \
+    '{grpcSettings:{
+      authority:$host,
+      serviceName:"grpc",
+      multiMode:false,
+      user_agent:$ua
+    }}')
 fi
 
 jq -n \
