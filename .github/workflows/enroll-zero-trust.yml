@@ -34,6 +34,7 @@ jobs:
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
       CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
       NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
       ROOT_DOMAIN_ACC1: ${{ secrets.ROOT_DOMAIN }}
       ROOT_DOMAIN_ACC2: ${{ secrets.ROOT_DOMAIN_NUM1 }}
@@ -143,6 +144,7 @@ jobs:
         run: |
           set -euo pipefail
           : "${CONTROL_ROOT_DOMAIN:?ROOT_DOMAIN is required}"
+          : "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
           : "${NODE_HMAC_SECRET:?NODE_HMAC_SECRET is required}"
           : "${ROOT_DOMAIN_ACC1:?ROOT_DOMAIN is required}"
           : "${ROOT_DOMAIN_ACC2:?ROOT_DOMAIN_NUM1 is required}"
@@ -163,6 +165,7 @@ jobs:
             "acc2-n1|acc2-n1.${ROOT_DOMAIN_ACC2}"
             "acc2-n2|acc2-n2.${ROOT_DOMAIN_ACC2}"
           )
+          VERIFY_UUID=""
 
           smoke_with_retry() {
             local label="$1"
@@ -190,6 +193,7 @@ jobs:
               -H "x-opus8-node: $node" \
               -H "x-opus8-sign: $signature" \
               | jq -er '.uuids[0]')"
+            if [ -z "$VERIFY_UUID" ]; then VERIFY_UUID="$uuid"; fi
 
             smoke_with_retry "$node direct-cf-egress" \
               --url "wss://${host}/?ed=2560" \
@@ -204,6 +208,23 @@ jobs:
               --target-port 80 \
               --expect-status 0
           done
+
+          sleep 5
+          login_body="$(jq -nc --arg password "$ADMIN_PASSWORD" '{password:$password}')"
+          admin_token="$(curl -fsS --max-time 20 -X POST \
+            "$CONTROL_API/api/admin/login" \
+            -H 'content-type: application/json' \
+            --data "$login_body" | jq -er '.token')"
+          usage_users="$(curl -fsS --max-time 20 "$CONTROL_API/api/users" \
+            -H "authorization: Bearer $admin_token")"
+          if printf '%s' "$usage_users" | jq -e --arg uuid "$VERIFY_UUID" \
+            'any(.users[]; .uuid == $uuid and .connections > 0 and
+              ((.bytes_up + .bytes_down) > 0))' >/dev/null; then
+            echo "OK edge-usage-accounting"
+          else
+            echo "::error::Edge traffic was not recorded for the verified UUID"
+            exit 1
+          fi
 
       - name: Diagnose recent Zero Trust enrollment
         if: inputs.operation == 'diagnose'
