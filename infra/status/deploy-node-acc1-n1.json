@@ -1,10 +1,11 @@
 {
   "node": "acc1-n1",
-  "result": "success",
-  "nodeUrl": "https://acc1-n1.thinderbox.com",
+  "result": "failure",
+  "nodeUrl": "",
   "markers": [
     "STEP build",
-    "OK built (OK build: dist/index.js (281020 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (283575 bytes), patch replaced 961 chars)",
+    "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.214.151",
     "STEP kv",
@@ -23,9 +24,7 @@
     "OK node-tls-http=200",
     "OK uuids-endpoint-count=2",
     "STEP vless-smoke",
-    "OK vless-ws-auth-egress",
-    "OK unlock=on(AI域名走落地)",
-    "DONE url=https://acc1-n1.thinderbox.com"
+    "ERROR vless-smoke"
   ],
-  "finishedAt": "2026-07-27T08:23:07Z"
+  "finishedAt": "2026-07-27T10:41:02Z"
 }
