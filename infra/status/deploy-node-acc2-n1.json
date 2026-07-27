@@ -4,7 +4,7 @@
   "nodeUrl": "https://acc2-n1.openal.uk",
   "markers": [
     "STEP build",
-    "OK built (OK build: dist/index.js (283575 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (283967 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.214.151",
@@ -28,5 +28,5 @@
     "OK unlock=on(AI域名走落地)",
     "DONE url=https://acc2-n1.openal.uk"
   ],
-  "finishedAt": "2026-07-27T10:35:04Z"
+  "finishedAt": "2026-07-27T10:47:18Z"
 }
