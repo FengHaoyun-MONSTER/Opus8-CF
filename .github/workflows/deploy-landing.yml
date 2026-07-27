@@ -1,0 +1,160 @@
+name: deploy-landing
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Landing host operation
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - deploy-dante
+          - deploy-all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-landing
+  cancel-in-progress: false
+
+jobs:
+  landing:
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.SERVICES_IP }}
+      VPS_SSH_USER: ${{ secrets.SERVICES_USER }}
+      VPS_SSH_PASSWORD: ${{ secrets.SERVICES_CODE }}
+      VPS_SSH_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+      SOCKS_USER: ${{ secrets.SERVICES_USER }}
+      SOCKS_PASSWORD: ${{ secrets.SERVICES_CODE }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${VPS_HOST:?SERVICES_IP is required}"
+          : "${VPS_SSH_USER:?SERVICES_USER is required}"
+          : "${VPS_SSH_PASSWORD:?SERVICES_CODE is required}"
+          echo "::add-mask::$VPS_HOST"
+          echo "::add-mask::$VPS_SSH_USER"
+          echo "::add-mask::$VPS_SSH_PASSWORD"
+          echo "VPS_SSH_PORT=${VPS_SSH_PORT:-22}" >> "$GITHUB_ENV"
+
+      - name: Install SSH client
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
+
+      - name: Audit landing host
+        id: audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SSHPASS="$VPS_SSH_PASSWORD"
+          SSH=(sshpass -e ssh
+            -p "$VPS_SSH_PORT"
+            -o ConnectTimeout=12
+            -o StrictHostKeyChecking=accept-new
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+            "$VPS_SSH_USER@$VPS_HOST")
+
+          "${SSH[@]}" 'bash -s' <<'REMOTE' | tee /tmp/landing-audit.log
+          set -u
+          echo "AUDIT ssh=ok"
+          echo "AUDIT os=$(awk -F= '/^ID=/{gsub(/"/,"",$2); print $2; exit}' /etc/os-release 2>/dev/null || echo unknown)"
+          echo "AUDIT version=$(awk -F= '/^VERSION_ID=/{gsub(/"/,"",$2); print $2; exit}' /etc/os-release 2>/dev/null || echo unknown)"
+          echo "AUDIT arch=$(uname -m)"
+          echo "AUDIT uid=$(id -u)"
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "AUDIT privilege=root"
+          elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+            echo "AUDIT privilege=passwordless-sudo"
+          elif command -v sudo >/dev/null 2>&1; then
+            echo "AUDIT privilege=sudo-password-required"
+          else
+            echo "AUDIT privilege=no-sudo"
+          fi
+          echo "AUDIT default_interface=$(ip -o route show default 2>/dev/null | awk 'NR==1{print $5}')"
+          if command -v docker >/dev/null 2>&1; then
+            echo "AUDIT docker=installed"
+          else
+            echo "AUDIT docker=absent"
+          fi
+          if systemctl list-unit-files 2>/dev/null | grep -Eq '(^|@)x-ui|x-ui\.service'; then
+            echo "AUDIT xui=installed"
+          else
+            echo "AUDIT xui=not-detected"
+          fi
+          for port in 22 40000 40008 40009; do
+            if ss -H -lnt 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
+              echo "AUDIT port_${port}=occupied"
+            else
+              echo "AUDIT port_${port}=free"
+            fi
+          done
+          if command -v warp-cli >/dev/null 2>&1; then
+            echo "AUDIT warp=installed"
+          else
+            echo "AUDIT warp=absent"
+          fi
+          if command -v sockd >/dev/null 2>&1 || command -v danted >/dev/null 2>&1; then
+            echo "AUDIT dante=installed"
+          else
+            echo "AUDIT dante=absent"
+          fi
+          REMOTE
+
+          {
+            echo "## Landing host audit"
+            echo '```text'
+            grep '^AUDIT ' /tmp/landing-audit.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Probe Cloudflare Zero Trust API
+        if: inputs.operation == 'audit' || inputs.operation == 'deploy-all'
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${CLOUDFLARE_API_TOKEN:?API_TOKEN is required}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?ACCOUNT_ID is required}"
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID"
+
+          probe() {
+            local path="$1" label="$2" code
+            code=$(curl -sS -o "/tmp/$label.json" -w '%{http_code}' \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "$api/$path")
+            echo "PROBE $label=http_$code"
+          }
+
+          probe "access/organizations" "organization"
+          probe "access/apps?per_page=100" "access_apps"
+          probe "access/service_tokens?per_page=100" "service_tokens"
+          probe "devices/policies" "device_profiles"
+
+          {
+            echo "## Cloudflare Zero Trust API audit"
+            echo '```text'
+            probe "access/organizations" "organization_summary"
+            probe "access/apps?per_page=100" "access_apps_summary"
+            probe "access/service_tokens?per_page=100" "service_tokens_summary"
+            probe "devices/policies" "device_profiles_summary"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deployment placeholder
+        if: inputs.operation != 'audit'
+        shell: bash
+        run: |
+          echo "::error::Deployment is intentionally gated until the audit confirms SSH privilege, ports, OS, and Zero Trust API permissions."
+          exit 1
