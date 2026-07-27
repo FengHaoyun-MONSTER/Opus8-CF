@@ -1,10 +1,8 @@
 {
   "node": "acc2-n1",
-  "result": "failure",
-  "nodeUrl": "",
+  "result": "success",
+  "nodeUrl": "https://acc2-n1.openal.uk",
   "markers": [
-    "STEP zone-grpc",
-    "INFO zone-grpc-edit-unavailable (自定义域名 gRPC 使用 workers.dev 备用入口)",
     "STEP build",
     "OK built (OK build: dist/index.js (300387 bytes), patch replaced 961 chars)",
     "OK policy-test",
@@ -28,11 +26,8 @@
     "OK landing-bundle-encrypted",
     "STEP vless-smoke",
     "OK vless-ws-auth-egress",
-    "ERROR vless-xhttp-smoke",
-    "INFO xray-xhttp-attempt=1 curl-exit=7 http=000",
-    "INFO xray-xhttp-attempt=2 curl-exit=28 http=000",
-    "INFO xray-xhttp-attempt=3 curl-exit=28 http=000",
-    "INFO xray-xhttp-attempt=4 curl-exit=28 http=000"
+    "OK unlock=on(AI域名走落地)",
+    "DONE url=https://acc2-n1.openal.uk"
   ],
-  "finishedAt": "2026-07-27T17:06:06Z"
+  "finishedAt": "2026-07-27T17:11:24Z"
 }
