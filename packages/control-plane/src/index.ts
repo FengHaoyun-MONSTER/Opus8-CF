@@ -17,6 +17,11 @@ import { nodesForUser, renderSubscription, pickFormat } from "./subscription";
 import {
   getUnlockHosts, putUnlockHosts, resetUnlockHosts, validateUnlockHosts,
 } from "./routing";
+import {
+  createLanding, deleteLanding, listLandings, runtimeLandings, testLanding, updateLanding,
+  type LandingInput,
+} from "./landings";
+import { sealJson } from "./secret-box";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const CORS = {
@@ -142,6 +147,44 @@ export default {
         return json(await resetUnlockHosts(env));
       }
 
+      // ---------- 多落地机配置（admin） ----------
+      if (p === "/api/landings" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return json({ landings: await listLandings(env) });
+      }
+      if (p === "/api/landings" && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const input = (await req.json().catch(() => ({}))) as LandingInput;
+        try {
+          return json({ landing: await createLanding(env, input) }, 201);
+        } catch (error) {
+          return err((error as Error).message, 400);
+        }
+      }
+      const landingTestMatch = p.match(/^\/api\/landings\/([^/]+)\/test$/);
+      if (landingTestMatch && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const result = await testLanding(env, landingTestMatch[1]);
+        return result ? json(result, result.ok ? 200 : 502) : err("落地机不存在", 404);
+      }
+      const landingMatch = p.match(/^\/api\/landings\/([^/]+)$/);
+      if (landingMatch && m === "PATCH") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const input = (await req.json().catch(() => ({}))) as LandingInput;
+        try {
+          const landing = await updateLanding(env, landingMatch[1], input);
+          return landing ? json({ landing }) : err("落地机不存在", 404);
+        } catch (error) {
+          return err((error as Error).message, 400);
+        }
+      }
+      if (landingMatch && m === "DELETE") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return (await deleteLanding(env, landingMatch[1]))
+          ? json({ ok: true })
+          : err("落地机不存在", 404);
+      }
+
       // ---------- 节点接口 ----------
       if (p === "/api/nodes" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
@@ -188,10 +231,11 @@ export default {
       if (uuidsMatch && m === "GET") {
         const body = "";
         const nodeId = await verifyNodeSig(req, env, body);
-        if (!nodeId) return err("签名校验失败", 401);
-        const [policy, routing] = await Promise.all([
+        if (!nodeId || nodeId !== uuidsMatch[1]) return err("签名校验失败", 401);
+        const [policy, routing, landings] = await Promise.all([
           activeUserPolicy(env),
           getUnlockHosts(env),
+          runtimeLandings(env),
         ]);
         const resp: ActiveUuidsResponse = {
           version: Date.now(), ttl: 60,
@@ -199,6 +243,11 @@ export default {
           unlockUuids: policy.unlockUuids,
           unlockHosts: routing.hosts,
           socks5Enabled: true,
+          landingBundle: await sealJson(
+            env.NODE_HMAC_SECRET,
+            landings,
+            `node:${nodeId}`,
+          ),
         };
         return json(resp);
       }

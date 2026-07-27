@@ -35,6 +35,27 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid);
 CREATE INDEX IF NOT EXISTS idx_users_subtoken ON users(sub_token);
 
+-- SOCKS5 落地机注册表：凭据使用 LANDING_CONFIG_KEY 做 AES-GCM 加密。
+CREATE TABLE IF NOT EXISTS landings (
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  hostname       TEXT NOT NULL,
+  port           INTEGER NOT NULL,
+  credential_enc TEXT NOT NULL,
+  region         TEXT,
+  match_hosts    TEXT NOT NULL DEFAULT '[]', -- JSON；空数组=默认落地/可服务全部解锁域名
+  priority       INTEGER NOT NULL DEFAULT 100,
+  enabled        INTEGER NOT NULL DEFAULT 1,
+  health         TEXT NOT NULL DEFAULT 'unknown',
+  last_checked   INTEGER,
+  last_error     TEXT,
+  created_at     INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_landings_enabled_priority
+  ON landings(enabled, priority, created_at);
+
 -- 套餐（一期只用 node_group/unlock/时长，价格字段预留）
 CREATE TABLE IF NOT EXISTS plans (
   id          TEXT PRIMARY KEY,

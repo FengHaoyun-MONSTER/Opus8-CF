@@ -19,3 +19,4 @@ id = "PLACEHOLDER_FILL_AFTER_PREFLIGHT"
 #   ADMIN_PASSWORD  管理后台密码
 #   JWT_SECRET      管理 JWT 签名
 #   NODE_HMAC_SECRET 节点↔控制面签名共享密钥
+#   LANDING_CONFIG_KEY 落地机账号密码的静态加密密钥（至少 32 字符）

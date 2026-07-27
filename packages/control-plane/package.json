@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js",
+    "build": "esbuild src/index.ts --bundle --format=esm --external:cloudflare:sockets --outfile=dist/index.js",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

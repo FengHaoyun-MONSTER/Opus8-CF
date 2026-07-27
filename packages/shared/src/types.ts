@@ -62,6 +62,7 @@ export interface ActiveUuidsResponse {
   unlockUuids: string[]; // 允许使用 SOCKS5 落地的用户 UUID
   unlockHosts: string[]; // 命中则走 SOCKS5 落地
   socks5Enabled: boolean;
+  landingBundle?: string; // 用 NODE_HMAC_SECRET 派生密钥加密的多落地运行配置
 }
 
 export type SubFormat = "base64" | "clash" | "singbox";

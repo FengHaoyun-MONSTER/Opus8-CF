@@ -5,8 +5,9 @@ import { Dashboard } from "./views/Dashboard";
 import { Users } from "./views/Users";
 import { Nodes } from "./views/Nodes";
 import { Routes } from "./views/Routes";
+import { Landings } from "./views/Landings";
 
-type Tab = "dashboard" | "users" | "nodes" | "routes";
+type Tab = "dashboard" | "users" | "nodes" | "routes" | "landings";
 
 export function App() {
   loadAuth();
@@ -40,6 +41,9 @@ export function App() {
           <button className={tab === "routes" ? "active" : ""} onClick={() => setTab("routes")}>
             落地分流
           </button>
+          <button className={tab === "landings" ? "active" : ""} onClick={() => setTab("landings")}>
+            落地机
+          </button>
         </nav>
         <div className="topright">
           <span className="api-host" title={apiBase()}>
@@ -55,6 +59,7 @@ export function App() {
         {tab === "users" && <Users />}
         {tab === "nodes" && <Nodes />}
         {tab === "routes" && <Routes />}
+        {tab === "landings" && <Landings />}
       </main>
     </div>
   );

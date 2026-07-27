@@ -5,6 +5,7 @@ cd "$(dirname "$0")/../.."          # repo root
 cd packages/control-plane
 
 : "${ROOT_DOMAIN:?ROOT_DOMAIN is required for production custom domains}"
+: "${LANDING_CONFIG_KEY:?LANDING_CONFIG_KEY is required}"
 ROOT_DOMAIN="${ROOT_DOMAIN#https://}"
 ROOT_DOMAIN="${ROOT_DOMAIN#http://}"
 ROOT_DOMAIN="${ROOT_DOMAIN%%/*}"
@@ -62,7 +63,7 @@ fi
 echo "OK schema-applied"
 
 echo "STEP bundle"
-if ! esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --alias:@opus8-cf/shared=../shared/src/index.ts >/tmp/bundle.log 2>&1; then
+if ! esbuild src/index.ts --bundle --format=esm --external:cloudflare:sockets --outfile=dist/index.js --alias:@opus8-cf/shared=../shared/src/index.ts >/tmp/bundle.log 2>&1; then
   echo "ERROR bundle-failed"; tail -n 5 /tmp/bundle.log; exit 12
 fi
 echo "OK bundled"
@@ -78,6 +79,7 @@ echo "STEP secrets"
 printf '%s' "${ADMIN_PASSWORD:-}"   | wrangler secret put ADMIN_PASSWORD   >/dev/null 2>&1 && echo "OK secret ADMIN_PASSWORD"
 printf '%s' "${JWT_SECRET:-}"       | wrangler secret put JWT_SECRET       >/dev/null 2>&1 && echo "OK secret JWT_SECRET"
 printf '%s' "${NODE_HMAC_SECRET:-}" | wrangler secret put NODE_HMAC_SECRET >/dev/null 2>&1 && echo "OK secret NODE_HMAC_SECRET"
+printf '%s' "$LANDING_CONFIG_KEY"     | wrangler secret put LANDING_CONFIG_KEY >/dev/null 2>&1 && echo "OK secret LANDING_CONFIG_KEY"
 printf '%s' "$ROOT_DOMAIN" | wrangler secret put ROOT_DOMAIN >/dev/null 2>&1 && echo "OK secret ROOT_DOMAIN"
 printf '%s' "$SUB_URL"     | wrangler secret put SUB_BASE    >/dev/null 2>&1 && echo "OK secret SUB_BASE"
 
@@ -104,24 +106,53 @@ for n in $(seq 1 18); do
   sleep 5
 done
 if [ -n "$TOK" ]; then echo "OK smoke-login"; else echo "ERROR smoke-login"; exit 16; fi
+
+echo "STEP ensure-default-landing"
+LANDINGS=$(curl -fsS --max-time 15 "$API_URL/api/landings" -H "authorization: Bearer $TOK")
+LCOUNT=$(printf '%s' "$LANDINGS" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String((JSON.parse(s).landings||[]).length))}catch(e){process.stdout.write("0")}})')
+if [ "$LCOUNT" -eq 0 ]; then
+  if [ -z "${SERVICES_IP:-}" ] || [ -z "${SERVICES_USER:-}" ] || [ -z "${SERVICES_CODE:-}" ]; then
+    echo "ERROR default-landing-secrets-missing"
+    exit 17
+  fi
+  LANDING_SEED=$(node -e 'process.stdout.write(JSON.stringify({name:"默认落地机",hostname:process.env.SERVICES_IP,port:40008,username:process.env.SERVICES_USER,password:process.env.SERVICES_CODE,region:"default",matchHosts:[],priority:100,enabled:true}))')
+  CREATED=$(curl -fsS --max-time 20 -X POST "$API_URL/api/landings" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d "$LANDING_SEED")
+  CREATED_ID=$(printf '%s' "$CREATED" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).landing.id||"")}catch(e){}})')
+  if [ -z "$CREATED_ID" ]; then echo "ERROR default-landing-create"; exit 18; fi
+  echo "OK default-landing-imported"
+  LANDINGS=$(curl -fsS --max-time 15 "$API_URL/api/landings" -H "authorization: Bearer $TOK")
+  LCOUNT=1
+fi
+echo "OK smoke-landings count=$LCOUNT"
+LANDING_ID=$(printf '%s' "$LANDINGS" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write((JSON.parse(s).landings||[])[0]?.id||"")}catch(e){}})')
+if [ -n "$LANDING_ID" ]; then
+  TEST_CODE=$(curl -sS -o /tmp/landing-test.json -w '%{http_code}' --max-time 25 -X POST "$API_URL/api/landings/$LANDING_ID/test" -H "authorization: Bearer $TOK" || true)
+  if [ "$TEST_CODE" = "200" ]; then
+    echo "OK smoke-landing-socks5"
+  else
+    echo "ERROR smoke-landing-socks5 http=$TEST_CODE"
+    exit 19
+  fi
+fi
+
 ROUTES=$(curl -fsS --max-time 15 "$API_URL/api/settings/unlock-hosts" -H "authorization: Bearer $TOK")
 RCOUNT=$(printf '%s' "$ROUTES" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String((JSON.parse(s).hosts||[]).length))}catch(e){process.stdout.write("0")}})')
-if [ "$RCOUNT" -gt 0 ]; then echo "OK smoke-unlock-hosts count=$RCOUNT"; else echo "ERROR smoke-unlock-hosts-empty"; exit 17; fi
+if [ "$RCOUNT" -gt 0 ]; then echo "OK smoke-unlock-hosts count=$RCOUNT"; else echo "ERROR smoke-unlock-hosts-empty"; exit 20; fi
 ORPH=$(curl -fsS --max-time 15 "$API_URL/api/users" -H "authorization: Bearer $TOK" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const u=JSON.parse(s).users||[];process.stdout.write(u.filter(x=>x.username==="__smoke__").map(x=>x.id).join(" "))}catch(e){}})')
 for id in $ORPH; do curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$id" -H "authorization: Bearer $TOK" >/dev/null; done
 [ -n "$ORPH" ] && echo "OK smoke-cleaned-orphans" || true
 CU=$(curl -fsS --max-time 15 -X POST "$API_URL/api/users" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"username":"__smoke__","durationDays":1}')
 SUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.id||"")}catch(e){process.stdout.write("")}})')
 SUB=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).subUrl||"")}catch(e){process.stdout.write("")}})')
-if [ -n "$SUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; exit 18; fi
+if [ -n "$SUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; exit 21; fi
 SUBBODY=$(curl -fsS --max-time 20 "$SUB")
-if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; exit 19; fi
-if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -q 'vless://'; then echo "OK smoke-sub-has-node"; else echo "ERROR smoke-sub-no-node"; exit 20; fi
+if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; exit 22; fi
+if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -q 'vless://'; then echo "OK smoke-sub-has-node"; else echo "ERROR smoke-sub-no-node"; exit 23; fi
 if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -qE 'vless://[^@]+@[0-9]{1,3}\.[0-9]{1,3}\.'; then
-  echo "ERROR smoke-sub-still-uses-unverified-ip"; exit 21
+  echo "ERROR smoke-sub-still-uses-unverified-ip"; exit 24
 else
   echo "OK smoke-sub-hostname-only"
 fi
-if curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-cleanup"; else echo "ERROR smoke-cleanup"; exit 22; fi
+if curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-cleanup"; else echo "ERROR smoke-cleanup"; exit 25; fi
 
 echo "DONE url=$API_URL"

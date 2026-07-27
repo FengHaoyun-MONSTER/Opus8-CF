@@ -6,6 +6,7 @@ export interface Env {
   ADMIN_PASSWORD: string;
   JWT_SECRET: string;
   NODE_HMAC_SECRET: string;
+  LANDING_CONFIG_KEY: string;
   DEFAULT_UNLOCK_HOSTS?: string;
   ROOT_DOMAIN?: string;
   SUB_BASE?: string;

@@ -68,12 +68,14 @@ if (!forwardBlock.includes(routeNeedle)) throw new Error("PATCH3 FAIL: 找不到
 const decision =
   "\tconst OPUS8_landingAllowed = OPUS8_canUseLanding(request, yourUUID);\n" +
   "\tconst OPUS8_landingDecision = OPUS8_decideLanding(request, yourUUID, host);\n" +
+  "\tconst OPUS8_hasLandingCandidate = OPUS8_hasLandingCandidates(request, yourUUID, host);\n" +
+  "\tconst OPUS8_hasLandingTransport = OPUS8_hasLandingCandidate || Boolean(启用SOCKS5反代);\n" +
   "\tconst OPUS8_useConfiguredProxy = OPUS8_landingDecision === null\n" +
   "\t\t? Boolean(启用SOCKS5反代 && (启用SOCKS5全局反代 || SOCKS5白名单.some(p => new RegExp(`^${p.replace(/\\*/g, '.*')}$`, 'i').test(host))))\n" +
-  "\t\t: Boolean(启用SOCKS5反代 && OPUS8_landingDecision);\n" +
+  "\t\t: Boolean(OPUS8_hasLandingTransport && OPUS8_landingDecision);\n" +
   "\tconst OPUS8_allowConfiguredProxy = OPUS8_landingAllowed === null\n" +
   "\t\t? Boolean(启用SOCKS5反代)\n" +
-  "\t\t: Boolean(启用SOCKS5反代 && OPUS8_landingAllowed);\n";
+  "\t\t: Boolean(OPUS8_hasLandingTransport && OPUS8_landingAllowed);\n";
 const connectorNeedle = /\tconst TCP连接 = 创建请求TCP连接器\(request\);\r?\n/;
 if (!connectorNeedle.test(forwardBlock)) throw new Error("PATCH3 FAIL: 找不到请求 TCP 连接器");
 forwardBlock = forwardBlock.replace(
@@ -88,6 +90,18 @@ for (const type of ["socks5", "http", "https", "turn", "sstp"]) {
   forwardBlock = forwardBlock.replace(needle, replacement);
   if (before === forwardBlock) throw new Error(`PATCH3 FAIL: 找不到 ${type} 代理分支`);
 }
+const socksBranchNeedle = "OPUS8_allowConfiguredProxy && 启用SOCKS5反代 === 'socks5'";
+if (!forwardBlock.includes(socksBranchNeedle)) throw new Error("PATCH3 FAIL: 找不到动态 SOCKS5 分支");
+forwardBlock = forwardBlock.replace(
+  socksBranchNeedle,
+  "OPUS8_allowConfiguredProxy && (启用SOCKS5反代 === 'socks5' || (OPUS8_hasLandingCandidate && !启用SOCKS5反代))",
+);
+const socksConnectNeedle = "newSocket = await socks5Connect(host, portNum, 本次首包数据, TCP连接);";
+if (!forwardBlock.includes(socksConnectNeedle)) throw new Error("PATCH3 FAIL: 找不到 SOCKS5 连接调用");
+forwardBlock = forwardBlock.replace(
+  socksConnectNeedle,
+  "newSocket = await OPUS8_connectViaLandings(request, yourUUID, host, portNum, 本次首包数据, TCP连接, socks5Connect, parsedSocks5Address);",
+);
 patchedCore = patchedCore.slice(0, forwardStart) + forwardBlock + patchedCore.slice(forwardEnd);
 
 // --- 补丁4：记录 VLESS 校验时真正命中的 UUID，供每用户出口权限判断。---
@@ -107,6 +121,21 @@ uuidMatchBlock = uuidMatchBlock.replace(
   "\t\t}",
 );
 patchedCore = patchedCore.slice(0, uuidMatchStart) + uuidMatchBlock + patchedCore.slice(uuidMatchEnd);
+
+// --- 补丁5：允许 SOCKS5 连接函数接收每次请求选择出的落地凭据，避免多落地并发串线。---
+const socksFunctionNeedle = "async function socks5Connect(targetHost, targetPort, initialData, TCP连接) {";
+const socksCredentialNeedle = "\tconst { username, password, hostname, port } = parsedSocks5Address;";
+if (!patchedCore.includes(socksFunctionNeedle) || !patchedCore.includes(socksCredentialNeedle)) {
+  throw new Error("PATCH5 FAIL: 找不到 SOCKS5 函数或凭据读取");
+}
+patchedCore = patchedCore.replace(
+  socksFunctionNeedle,
+  "async function socks5Connect(targetHost, targetPort, initialData, TCP连接, OPUS8_proxyAddress = null) {",
+);
+patchedCore = patchedCore.replace(
+  socksCredentialNeedle,
+  "\tconst { username, password, hostname, port } = OPUS8_proxyAddress || parsedSocks5Address;",
+);
 
 const out = "// [Opus8-CF build] prelude + patched vendor core\n" + prelude + "\n" + patchedCore;
 

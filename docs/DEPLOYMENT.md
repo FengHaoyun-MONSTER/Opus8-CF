@@ -15,15 +15,17 @@
 | `ACCESS_KEY_ID` / `SECRET_ACCESS_KEY` / `S3_API_ENDPOINT`（+`_NUM1`） | R2(S3) 凭据，用作优选IP/注册表产物存储 | acc1 / acc2 |
 | `SERVICES_IP` / `SERVICES_USER` / `SERVICES_CODE` | SOCKS5 落地机 IP/用户/密码 | — |
 
-### 生产密钥三件套
+### 生产密钥
 
 | Secret | 用途 |
 |---|---|
 | `ADMIN_PASSWORD` | 管理后台登录密码 |
 | `JWT_SECRET` | 管理 JWT 签名 |
 | `NODE_HMAC_SECRET` | 边缘节点 ↔ 控制面 请求签名共享密钥 |
+| `LANDING_CONFIG_KEY` | D1 中落地机账号密码的 AES-GCM 静态加密密钥（至少 32 字符） |
 
-三项均必须以 GitHub Actions Secrets 保存，不要写入仓库。生产轮换后需让控制面和全部节点依次重新部署。
+四项均必须以 GitHub Actions Secrets 保存，不要写入仓库。`LANDING_CONFIG_KEY` 不可随意轮换；直接更换会使已保存的
+落地机凭据无法解密，应先迁移或重新录入。`NODE_HMAC_SECRET` 轮换后需让控制面和全部节点依次重新部署。
 
 ## 动态落地域名
 
@@ -34,8 +36,22 @@
 - 允许使用落地机的 UUID；
 - 当前落地域名清单；
 - SOCKS5 全局开关。
+- 使用 `NODE_HMAC_SECRET` 加密的多落地机运行时配置包。
 
 修改默认清单并推送 `main` 会触发 `deploy-control`；控制面成功后再触发 `deploy-nodes`。
+
+## 多落地机
+
+管理站“落地机”页面支持配置多台带认证的 SOCKS5 服务器：
+
+- **负责域名为空**：默认落地，可服务全部解锁域名，也用于 CF 直连失败后的兜底。
+- **填写负责域名**：只服务该根域名及其子域名；仍需在“落地分流”页面把目标加入全局分流清单。
+- **多台负责同一域名**：按优先级数字从小到大尝试，单次连接超时或握手失败后自动切换。
+- **停用**：约 60 秒内从所有节点候选池移除，无需重部署。
+- **连通测试**：控制面执行用户名/密码认证并经落地机连接测试站点，结果和最近错误写回 D1。
+
+首次升级部署时，如果 `landings` 表为空，`deploy-control` 会把现有
+`SERVICES_IP` / `SERVICES_USER` / `SERVICES_CODE` 自动导入为端口 `40008` 的默认落地机。
 
 ## 首次流程
 

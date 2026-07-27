@@ -38,6 +38,36 @@ export interface UnlockHostsConfig {
   updatedAt: number;
 }
 
+export interface Landing {
+  id: string;
+  name: string;
+  hostname: string;
+  port: number;
+  username: string;
+  passwordConfigured: true;
+  region: string | null;
+  matchHosts: string[];
+  priority: number;
+  enabled: boolean;
+  health: "healthy" | "unhealthy" | "unknown";
+  lastChecked: number | null;
+  lastError: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface LandingInput {
+  name: string;
+  hostname: string;
+  port: number;
+  username?: string;
+  password?: string;
+  region?: string;
+  matchHosts: string[];
+  priority: number;
+  enabled: boolean;
+}
+
 interface Auth {
   base: string;
   token: string;
@@ -127,4 +157,21 @@ export const api = {
     }),
   resetUnlockHosts: () =>
     req<UnlockHostsConfig>("/api/settings/unlock-hosts", { method: "DELETE" }),
+  listLandings: () => req<{ landings: Landing[] }>("/api/landings"),
+  createLanding: (input: LandingInput) =>
+    req<{ landing: Landing }>("/api/landings", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateLanding: (id: string, input: Partial<LandingInput>) =>
+    req<{ landing: Landing }>(`/api/landings/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  deleteLanding: (id: string) =>
+    req<{ ok: boolean }>(`/api/landings/${id}`, { method: "DELETE" }),
+  testLanding: (id: string) =>
+    req<{ ok: boolean; latencyMs: number; error?: string }>(`/api/landings/${id}/test`, {
+      method: "POST",
+    }),
 };
