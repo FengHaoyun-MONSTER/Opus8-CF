@@ -222,8 +222,10 @@ jobs:
             --data "$create_body")"
           verify_user_id="$(printf '%s' "$verify_user" | jq -er '.user.id')"
           VERIFY_UUID="$(printf '%s' "$verify_user" | jq -er '.user.uuid')"
+          SUB_URL="$(printf '%s' "$verify_user" | jq -er '.subUrl')"
           echo "::add-mask::$verify_user_id"
           echo "::add-mask::$VERIFY_UUID"
+          echo "::add-mask::$SUB_URL"
 
           invalidation_acks="$(printf '%s' "$verify_user" \
             | jq -er '.cacheInvalidation.acknowledged // 0')"
@@ -239,6 +241,24 @@ jobs:
             echo "::warning::All nodes did not acknowledge invalidation; using TTL fallback"
             sleep 16
           fi
+
+          subscription="$(curl -fsS --max-time 20 "$SUB_URL" | base64 -d)"
+          for entry in "${nodes[@]}"; do
+            IFS='|' read -r node host <<<"$entry"
+            if ! printf '%s\n' "$subscription" | grep -Fq "$host"; then
+              echo "::error::Subscription is missing $node hostname"
+              exit 1
+            fi
+          done
+          if printf '%s\n' "$subscription" | grep -Fq "acc1-n1.${ROOT_DOMAIN_ACC1}"; then
+            echo "::error::Subscription still advertises retired acc1-n1 hostname"
+            exit 1
+          fi
+          if printf '%s\n' "$subscription" | grep -Eq 'type=grpc|serviceName='; then
+            echo "::error::Subscription still advertises gRPC transport"
+            exit 1
+          fi
+          echo "OK subscription-four-ws-hostnames"
 
           BEFORE_CONNECTIONS=0
           BEFORE_BYTES=0
