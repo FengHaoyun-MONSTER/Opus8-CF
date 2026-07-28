@@ -12,6 +12,7 @@ on:
           - enroll
           - diagnose
           - verify-routing
+          - canary-grpc
 
 permissions:
   contents: read
@@ -242,6 +243,78 @@ jobs:
             echo "OK edge-usage-accounting connections=$CONNECTION_DELTA"
           else
             echo "::error::Expected at least 8 metered WebSocket connections; got $CONNECTION_DELTA"
+            exit 1
+          fi
+
+      - name: Canary acc1-n1 VLESS gRPC with official Xray
+        if: inputs.operation == 'canary-grpc'
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${CONTROL_ROOT_DOMAIN:?ROOT_DOMAIN is required}"
+          : "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
+          : "${NODE_HMAC_SECRET:?NODE_HMAC_SECRET is required}"
+          : "${ROOT_DOMAIN_ACC1:?ROOT_DOMAIN is required}"
+
+          normalize_domain() {
+            local domain="${1#https://}"
+            domain="${domain#http://}"
+            printf '%s' "${domain%%/*}"
+          }
+
+          CONTROL_ROOT_DOMAIN="$(normalize_domain "$CONTROL_ROOT_DOMAIN")"
+          ROOT_DOMAIN_ACC1="$(normalize_domain "$ROOT_DOMAIN_ACC1")"
+          CONTROL_API="https://api.${CONTROL_ROOT_DOMAIN}"
+          NODE_ID="acc1-n1"
+          NODE_HOST="acc1-n1.${ROOT_DOMAIN_ACC1}"
+
+          timestamp="$(date +%s)000"
+          signature="$(printf '%s' "${timestamp}.${NODE_ID}." \
+            | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r \
+            | cut -d' ' -f1)"
+          uuid="$(curl -fsS --max-time 20 \
+            "$CONTROL_API/api/nodes/$NODE_ID/uuids" \
+            -H "x-opus8-ts: $timestamp" \
+            -H "x-opus8-node: $NODE_ID" \
+            -H "x-opus8-sign: $signature" \
+            | jq -er '.uuids[0]')"
+          echo "::add-mask::$uuid"
+
+          login_body="$(jq -nc --arg password "$ADMIN_PASSWORD" '{password:$password}')"
+          admin_token="$(curl -fsS --max-time 20 -X POST \
+            "$CONTROL_API/api/admin/login" \
+            -H 'content-type: application/json' \
+            --data "$login_body" | jq -er '.token')"
+          echo "::add-mask::$admin_token"
+          before_user="$(curl -fsS --max-time 20 "$CONTROL_API/api/users" \
+            -H "authorization: Bearer $admin_token" \
+            | jq -cer --arg uuid "$uuid" '.users[] | select(.uuid == $uuid)')"
+          before_connections="$(printf '%s' "$before_user" | jq -er '.connections')"
+          before_bytes="$(printf '%s' "$before_user" | jq -er '.bytes_up + .bytes_down')"
+
+          bash infra/scripts/smoke-vless-grpc-xray.sh "$NODE_HOST" "$uuid"
+
+          after_connections="$before_connections"
+          after_bytes="$before_bytes"
+          for attempt in 1 2 3 4 5 6; do
+            sleep 5
+            after_user="$(curl -fsS --max-time 20 "$CONTROL_API/api/users" \
+              -H "authorization: Bearer $admin_token" \
+              | jq -cer --arg uuid "$uuid" '.users[] | select(.uuid == $uuid)')"
+            after_connections="$(printf '%s' "$after_user" | jq -er '.connections')"
+            after_bytes="$(printf '%s' "$after_user" | jq -er '.bytes_up + .bytes_down')"
+            if [ "$after_connections" -gt "$before_connections" ] \
+              && [ "$after_bytes" -gt "$before_bytes" ]; then
+              break
+            fi
+          done
+
+          connection_delta=$((after_connections - before_connections))
+          byte_delta=$((after_bytes - before_bytes))
+          if [ "$connection_delta" -ge 1 ] && [ "$byte_delta" -gt 0 ]; then
+            echo "OK grpc-usage-accounting connections=$connection_delta bytes=$byte_delta"
+          else
+            echo "::error::gRPC connected but usage accounting did not increase"
             exit 1
           fi
 
