@@ -12,6 +12,7 @@ on:
           - enroll
           - diagnose
           - verify-routing
+          - canary-ws
           - canary-grpc
 
 permissions:
@@ -246,8 +247,8 @@ jobs:
             exit 1
           fi
 
-      - name: Canary acc1-n1 VLESS gRPC with official Xray
-        if: inputs.operation == 'canary-grpc'
+      - name: Canary account-1 VLESS transport with an isolated user
+        if: inputs.operation == 'canary-grpc' || inputs.operation == 'canary-ws'
         shell: bash
         run: |
           set -euo pipefail
@@ -314,7 +315,23 @@ jobs:
           before_connections="$(printf '%s' "$before_user" | jq -er '.connections')"
           before_bytes="$(printf '%s' "$before_user" | jq -er '.bytes_up + .bytes_down')"
 
-          bash infra/scripts/smoke-vless-grpc-xray.sh "$NODE_HOST" "$uuid"
+          expected_connections=1
+          if [ "${{ inputs.operation }}" = "canary-grpc" ]; then
+            bash infra/scripts/smoke-vless-grpc-xray.sh "$NODE_HOST" "$uuid"
+          else
+            expected_connections=2
+            for ws_host in \
+              "acc1-n1.${ROOT_DOMAIN_ACC1}" \
+              "acc1-n2.${ROOT_DOMAIN_ACC1}"; do
+              python3 infra/scripts/smoke-vless.py \
+                --url "wss://${ws_host}/?ed=2560" \
+                --uuid "$uuid" \
+                --target example.com \
+                --target-port 80 \
+                --expect-status 200
+              echo "OK vless-ws-egress host=$ws_host"
+            done
+          fi
 
           after_connections="$before_connections"
           after_bytes="$before_bytes"
@@ -333,10 +350,10 @@ jobs:
 
           connection_delta=$((after_connections - before_connections))
           byte_delta=$((after_bytes - before_bytes))
-          if [ "$connection_delta" -ge 1 ] && [ "$byte_delta" -gt 0 ]; then
-            echo "OK grpc-usage-accounting connections=$connection_delta bytes=$byte_delta"
+          if [ "$connection_delta" -ge "$expected_connections" ] && [ "$byte_delta" -gt 0 ]; then
+            echo "OK transport-usage-accounting connections=$connection_delta bytes=$byte_delta"
           else
-            echo "::error::gRPC connected but usage accounting did not increase; connections=$connection_delta bytes=$byte_delta"
+            echo "::error::Transport connected but usage accounting did not increase; connections=$connection_delta bytes=$byte_delta"
             exit 1
           fi
 
