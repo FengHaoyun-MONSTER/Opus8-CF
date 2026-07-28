@@ -134,11 +134,13 @@ else
   fi
   mkdir -p "$WORK_DIR/cfst"
   tar xzf "$WORK_DIR/cfst.tgz" -C "$WORK_DIR/cfst"
-  BIN="$(find "$WORK_DIR/cfst" -maxdepth 1 -type f |
+  BIN="$(find "$WORK_DIR/cfst" -maxdepth 3 -type f |
     grep -iE '(cloudflarest|cfst)$' |
     head -n1 || true)"
   if [ -z "$BIN" ]; then
     echo "ERROR cfst-binary-not-found"
+    find "$WORK_DIR/cfst" -maxdepth 3 -type f -printf 'INFO archive-file=%P\n' |
+      head -n 20
     exit 12
   fi
   chmod +x "$BIN"
