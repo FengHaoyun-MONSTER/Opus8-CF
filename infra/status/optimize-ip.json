@@ -1,5 +1,5 @@
 {
-  "result": "failure",
+  "result": "success",
   "markers": [
     "STEP prepare-vantages",
     "OK vantages=github-runner,landing-vps",
@@ -9,16 +9,20 @@
     "OK representative-nodes count=2",
     "STEP create-isolated-probe-user",
     "OK probe-user-created",
+    "STEP verify-domain-baseline",
+    "OK domain-baseline node=acc1-n1",
+    "OK domain-baseline node=acc2-n1",
     "STEP discover-candidates",
     "OK candidate-source=cfst",
     "OK candidates count=5",
     "STEP validate-candidates",
-    "WARN candidate=172.66.194.147 vantage=github-runner node=acc2-n1 reason=vless smoke failed: server closed before VLESS response ",
-    "WARN candidate=104.16.142.120 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
-    "WARN candidate=104.18.43.209 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
-    "WARN candidate=172.66.196.149 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
-    "WARN candidate=104.18.68.86 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
-    "ERROR no-candidate-passed-two-vantage-vless"
+    "WARN candidate=173.245.49.26 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
+    "WARN candidate=172.67.132.187 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
+    "WARN candidate=104.24.60.94 vantage=github-runner node=acc1-n1 reason=vless smoke failed: The read operation timed out ",
+    "WARN candidate=162.159.152.44 vantage=landing-vps node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
+    "WARN candidate=172.67.82.65 vantage=github-runner node=acc2-n1 reason=vless smoke failed: server closed before VLESS response ",
+    "OK no-safe-candidates domain-fallback=active existingActivePool=0",
+    "DONE published=0"
   ],
-  "finishedAt": "2026-07-28T13:38:22Z"
+  "finishedAt": "2026-07-28T13:44:30Z"
 }
