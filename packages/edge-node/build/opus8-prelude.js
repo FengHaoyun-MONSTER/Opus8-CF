@@ -375,6 +375,7 @@ function OPUS8_createUsageRuntime(request, env, ctx, uuidRef, transport, socket 
     queuedEvents: [],
     flushPromise: null,
     admissionPromise: null,
+    initialFlushScheduled: false,
     lastAdmission: 0,
     admitted: false,
     closed: false,
@@ -459,6 +460,19 @@ function OPUS8_finishUsage(requestOrRuntime) {
   if (runtime.closed) return runtime.flushPromise || Promise.resolve();
   runtime.closed = true;
   return OPUS8_scheduleUsage(runtime, true);
+}
+
+function OPUS8_scheduleInitialStreamUsage(runtime) {
+  if (
+    !runtime ||
+    runtime.transport === "websocket" ||
+    runtime.initialFlushScheduled
+  ) return;
+  runtime.initialFlushScheduled = true;
+  const promise = new Promise((resolve) => setTimeout(resolve, 2_000))
+    .then(() => OPUS8_flushUsage(runtime, false))
+    .catch(() => {});
+  try { runtime.ctx?.waitUntil?.(promise) } catch (_) { /* ignore */ }
 }
 
 async function OPUS8_ipHash(runtime) {
@@ -558,7 +572,9 @@ async function OPUS8_requireAdmission(request, uuidRef, force = false) {
   })().finally(() => {
     runtime.admissionPromise = null;
   });
-  return runtime.admissionPromise;
+  const admitted = await runtime.admissionPromise;
+  if (runtime.admitted) OPUS8_scheduleInitialStreamUsage(runtime);
+  return admitted;
 }
 
 function OPUS8_queueUsageEvent(runtime) {
