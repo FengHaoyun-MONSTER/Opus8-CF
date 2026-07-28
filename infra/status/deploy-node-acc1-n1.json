@@ -4,7 +4,7 @@
   "nodeUrl": "",
   "markers": [
     "STEP build",
-    "OK built (OK build: dist/index.js (300387 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (300943 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
@@ -26,5 +26,5 @@
     "OK landing-bundle-encrypted",
     "STEP vless-smoke"
   ],
-  "finishedAt": "2026-07-28T04:30:32Z"
+  "finishedAt": "2026-07-28T04:34:07Z"
 }
