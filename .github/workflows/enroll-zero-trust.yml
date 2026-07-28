@@ -319,18 +319,25 @@ jobs:
           if [ "${{ inputs.operation }}" = "canary-grpc" ]; then
             bash infra/scripts/smoke-vless-grpc-xray.sh "$NODE_HOST" "$uuid"
           else
-            expected_connections=2
+            expected_connections=0
+            ws_failed=0
             for ws_host in \
-              "acc1-n1.${ROOT_DOMAIN_ACC1}" \
-              "acc1-n2.${ROOT_DOMAIN_ACC1}"; do
-              python3 infra/scripts/smoke-vless.py \
+              "acc1-n2.${ROOT_DOMAIN_ACC1}" \
+              "acc1-n1.${ROOT_DOMAIN_ACC1}"; do
+              if python3 infra/scripts/smoke-vless.py \
                 --url "wss://${ws_host}/?ed=2560" \
                 --uuid "$uuid" \
                 --target example.com \
                 --target-port 80 \
-                --expect-status 200
-              echo "OK vless-ws-egress host=$ws_host"
+                --expect-status 200; then
+                expected_connections=$((expected_connections + 1))
+                echo "OK vless-ws-egress host=$ws_host"
+              else
+                ws_failed=1
+                echo "::error::vless-ws-egress failed host=$ws_host"
+              fi
             done
+            [ "$ws_failed" -eq 0 ] || exit 1
           fi
 
           after_connections="$before_connections"
