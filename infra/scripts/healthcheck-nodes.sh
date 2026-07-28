@@ -142,7 +142,8 @@ REPORT_BODY="$(jq -nc \
   --argjson checkedAt "$(date +%s)000" \
   --argjson results "$RESULTS" \
   '{runId:$runId,checkedAt:$checkedAt,results:$results}')"
-REPORT_RESPONSE="$(curl -fsS --max-time 30 -X POST \
+REPORT_RESPONSE="$(curl -fsS --max-time 30 \
+  --retry 4 --retry-delay 2 --retry-all-errors -X POST \
   "$CONTROL_API/api/operations/node-health/report" \
   -H "authorization: Bearer $ADMIN_TOKEN" \
   -H 'content-type: application/json' \
