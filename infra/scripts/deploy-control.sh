@@ -228,7 +228,13 @@ else
   echo "ERROR smoke-operations-overview"; exit 24
 fi
 
-NODE_HEALTH=$(curl -fsS --max-time 20 "$API_URL/api/operations/node-health" -H "authorization: Bearer $TOK")
+NODE_HEALTH=""
+for n in $(seq 1 12); do
+  if NODE_HEALTH=$(curl -fsS --max-time 20 "$API_URL/api/operations/node-health" -H "authorization: Bearer $TOK" 2>/dev/null); then
+    break
+  fi
+  sleep 5
+done
 if printf '%s' "$NODE_HEALTH" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);process.exit(x.thresholds?.failure===3&&x.thresholds?.recovery===2&&x.summary&&Array.isArray(x.nodes)&&Array.isArray(x.events)?0:1)})'; then
   echo "OK smoke-node-health-overview"
 else
