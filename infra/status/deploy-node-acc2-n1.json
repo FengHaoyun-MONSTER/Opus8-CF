@@ -22,17 +22,17 @@
     "OK custom-domain-ready",
     "STEP verify",
     "OK node-tls-http=200",
-    "OK uuids-endpoint-count=1",
+    "OK uuids-endpoint-count=2",
     "OK landing-bundle-encrypted",
     "STEP canary-user",
     "OK canary-user-created",
     "INFO edge-policy-invalidation acknowledged=4 target=1",
     "STEP policy-status",
-    "INFO policy-status={\"invalidatedVersion\":1785237407111,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785237410782,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785237407111,\"liveUuidCount\":2,\"liveContainsUuid\":true,\"liveError\":\"\"}",
+    "INFO policy-status={\"invalidatedVersion\":1785242366365,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785242370176,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785242366365,\"liveUuidCount\":3,\"liveContainsUuid\":true,\"liveError\":\"\"}",
     "STEP vless-smoke",
     "OK vless-ws-auth-egress",
     "OK unlock=on(AI域名走落地)",
     "DONE url=https://acc2-n1.openal.uk"
   ],
-  "finishedAt": "2026-07-28T11:16:52Z"
+  "finishedAt": "2026-07-28T12:40:39Z"
 }
