@@ -1,12 +1,16 @@
 {
-  "result": "success",
+  "result": "failure",
   "markers": [
-    "STEP fetch-cfst",
-    "OK cfst-ready (./cfst)",
-    "STEP speedtest",
-    "OK ips:172.64.98.29 172.65.56.144 172.65.75.77 172.65.42.93 162.159.41.173 172.65.212.112 162.159.134.51 172.65.76.179 172.65.50.59 162.159.42.171 ",
-    "STEP push-to-control",
-    "OK pushed:{\"ok\":true,\"count\":10}"
+    "STEP prepare-vantages",
+    "OK vantages=github-runner,landing-vps",
+    "STEP login",
+    "OK login",
+    "STEP representative-nodes",
+    "OK representative-nodes count=2",
+    "STEP create-isolated-probe-user",
+    "OK probe-user-created",
+    "STEP discover-candidates",
+    "ERROR cfst-binary-not-found"
   ],
-  "finishedAt": "2026-07-27T04:05:44Z"
+  "finishedAt": "2026-07-28T13:25:10Z"
 }
