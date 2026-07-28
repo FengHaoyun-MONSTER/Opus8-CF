@@ -1,4 +1,13 @@
-import type { NodeRecord, UserAccessPolicy, UserRecord } from "@opus8-cf/shared";
+import type {
+  NodeRecord,
+  UserAccessPolicy,
+  UserRecord,
+} from "@opus8-cf/shared";
+import {
+  evaluateAccessStatus,
+  type AccessSeverity,
+  type AccessState,
+} from "./access-status";
 
 export interface Env {
   DB: D1Database;
@@ -22,6 +31,9 @@ export interface AdminUserRecord extends UserRecord {
   connections: number;
   active_ips: number;
   recent_ips: number;
+  access_state: AccessState;
+  access_severity: AccessSeverity;
+  access_reason: string;
 }
 
 export interface UserLimitInput {
@@ -39,9 +51,14 @@ export async function getUserLimits(
             COALESCE(l.ip_limit_24h,5) AS ip_limit_24h
      FROM users u LEFT JOIN user_limits l ON l.user_id=u.id
      WHERE u.id=?1`,
-  ).bind(id).first<{ device_limit: number; ip_limit_24h: number }>();
+  )
+    .bind(id)
+    .first<{ device_limit: number; ip_limit_24h: number }>();
   return row
-    ? { deviceLimit: Number(row.device_limit), ipLimit24h: Number(row.ip_limit_24h) }
+    ? {
+        deviceLimit: Number(row.device_limit),
+        ipLimit24h: Number(row.ip_limit_24h),
+      }
     : null;
 }
 
@@ -62,18 +79,31 @@ export async function upsertNode(env: Env, n: NodeRecord): Promise<void> {
        health=excluded.health, last_seen=excluded.last_seen`,
   )
     .bind(
-      n.id, n.account_alias, n.hostname, n.region, n.capabilities,
-      n.preferred_ip, n.health, n.last_seen, n.created_at,
+      n.id,
+      n.account_alias,
+      n.hostname,
+      n.region,
+      n.capabilities,
+      n.preferred_ip,
+      n.health,
+      n.last_seen,
+      n.created_at,
     )
     .run();
 }
 
 export async function touchNode(
-  env: Env, id: string, health: NodeRecord["health"], preferredIp: string | null, ts: number,
+  env: Env,
+  id: string,
+  health: NodeRecord["health"],
+  preferredIp: string | null,
+  ts: number,
 ): Promise<void> {
   await env.DB.prepare(
     "UPDATE nodes SET last_seen=?2, health=?3, preferred_ip=COALESCE(?4, preferred_ip) WHERE id=?1",
-  ).bind(id, ts, health, preferredIp).run();
+  )
+    .bind(id, ts, health, preferredIp)
+    .run();
 }
 
 export async function listUsers(env: Env): Promise<AdminUserRecord[]> {
@@ -94,12 +124,27 @@ export async function listUsers(env: Env): Promise<AdminUserRecord[]> {
      FROM users u
      LEFT JOIN user_limits l ON l.user_id=u.id
      ORDER BY u.created_at DESC`,
-  ).bind(now, dayAgo).all<AdminUserRecord>();
-  return results ?? [];
+  )
+    .bind(now, dayAgo)
+    .all<AdminUserRecord>();
+  return (results ?? []).map((user) => {
+    const access = evaluateAccessStatus(user, now);
+    return {
+      ...user,
+      access_state: access.state,
+      access_severity: access.severity,
+      access_reason: access.reason,
+    };
+  });
 }
 
-export async function getUserByToken(env: Env, token: string): Promise<UserRecord | null> {
-  return env.DB.prepare("SELECT * FROM users WHERE sub_token=?1").bind(token).first<UserRecord>();
+export async function getUserByToken(
+  env: Env,
+  token: string,
+): Promise<UserRecord | null> {
+  return env.DB.prepare("SELECT * FROM users WHERE sub_token=?1")
+    .bind(token)
+    .first<UserRecord>();
 }
 
 export async function insertUser(
@@ -112,8 +157,15 @@ export async function insertUser(
       `INSERT INTO users (id, username, uuid, plan_id, node_group, unlock, sub_token, expire_at, enabled, created_at)
        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,1,?9)`,
     ).bind(
-      u.id, u.username, u.uuid, u.plan_id, u.node_group, u.unlock,
-      u.sub_token, u.expire_at, u.created_at,
+      u.id,
+      u.username,
+      u.uuid,
+      u.plan_id,
+      u.node_group,
+      u.unlock,
+      u.sub_token,
+      u.expire_at,
+      u.created_at,
     ),
     env.DB.prepare(
       `INSERT INTO user_limits
@@ -141,22 +193,25 @@ export async function updateUserPolicy(
   id: string,
   changes: { unlock?: boolean; enabled?: boolean } & UserLimitInput,
 ): Promise<void> {
-  const statements = [env.DB.prepare(
-    `UPDATE users
+  const statements = [
+    env.DB.prepare(
+      `UPDATE users
      SET unlock=COALESCE(?2, unlock), enabled=COALESCE(?3, enabled)
      WHERE id=?1`,
-  ).bind(
-    id,
-    changes.unlock === undefined ? null : (changes.unlock ? 1 : 0),
-    changes.enabled === undefined ? null : (changes.enabled ? 1 : 0),
-  )];
+    ).bind(
+      id,
+      changes.unlock === undefined ? null : changes.unlock ? 1 : 0,
+      changes.enabled === undefined ? null : changes.enabled ? 1 : 0,
+    ),
+  ];
   if (
     changes.deviceLimit !== undefined ||
     changes.ipLimit24h !== undefined ||
     changes.trafficLimitBytes !== undefined
   ) {
-    statements.push(env.DB.prepare(
-      `INSERT INTO user_limits
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO user_limits
        (user_id, device_limit, ip_limit_24h, traffic_limit_bytes, updated_at)
        VALUES (?1, COALESCE(?2,2), COALESCE(?3,5), COALESCE(?4,0), ?5)
        ON CONFLICT(user_id) DO UPDATE SET
@@ -164,21 +219,24 @@ export async function updateUserPolicy(
          ip_limit_24h=COALESCE(?3,ip_limit_24h),
          traffic_limit_bytes=COALESCE(?4,traffic_limit_bytes),
          updated_at=?5`,
-    ).bind(
-      id,
-      changes.deviceLimit ?? null,
-      changes.ipLimit24h ?? null,
-      changes.trafficLimitBytes ?? null,
-      Date.now(),
-    ));
+      ).bind(
+        id,
+        changes.deviceLimit ?? null,
+        changes.ipLimit24h ?? null,
+        changes.trafficLimitBytes ?? null,
+        Date.now(),
+      ),
+    );
   }
   await env.DB.batch(statements);
 }
 
 /** 当前有效用户及其落地权限：启用中且未过期。 */
-export async function activeUserPolicy(
-  env: Env,
-): Promise<{ uuids: string[]; unlockUuids: string[]; accessPolicies: UserAccessPolicy[] }> {
+export async function activeUserPolicy(env: Env): Promise<{
+  uuids: string[];
+  unlockUuids: string[];
+  accessPolicies: UserAccessPolicy[];
+}> {
   const now = Date.now();
   const { results } = await env.DB.prepare(
     `SELECT u.id, u.uuid, u.unlock,
@@ -189,15 +247,17 @@ export async function activeUserPolicy(
      FROM users u
      LEFT JOIN user_limits l ON l.user_id=u.id
      WHERE u.enabled=1 AND (u.expire_at IS NULL OR u.expire_at>?1)`,
-  ).bind(now).all<{
-    id: string;
-    uuid: string;
-    unlock: number;
-    device_limit: number;
-    ip_limit_24h: number;
-    traffic_limit_bytes: number;
-    used_bytes: number;
-  }>();
+  )
+    .bind(now)
+    .all<{
+      id: string;
+      uuid: string;
+      unlock: number;
+      device_limit: number;
+      ip_limit_24h: number;
+      traffic_limit_bytes: number;
+      used_bytes: number;
+    }>();
   const active = results ?? [];
   return {
     uuids: active.map((r) => r.uuid),
@@ -231,12 +291,14 @@ export async function getUserUsage(
        COALESCE((SELECT traffic_limit_bytes FROM user_limits WHERE user_id=?1),0)
          AS traffic_limit_bytes
      FROM usage WHERE user_id=?1`,
-  ).bind(userId).first<{
-    bytes_up: number;
-    bytes_down: number;
-    connections: number;
-    traffic_limit_bytes: number;
-  }>();
+  )
+    .bind(userId)
+    .first<{
+      bytes_up: number;
+      bytes_down: number;
+      connections: number;
+      traffic_limit_bytes: number;
+    }>();
   const bytesUp = Number(row?.bytes_up || 0);
   const bytesDown = Number(row?.bytes_down || 0);
   return {

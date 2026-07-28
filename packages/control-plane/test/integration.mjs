@@ -12,7 +12,8 @@ function assert(value, message) {
 
 async function jsonResponse(response) {
   const data = await response.json();
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${JSON.stringify(data)}`);
+  if (!response.ok)
+    throw new Error(`HTTP ${response.status}: ${JSON.stringify(data)}`);
   return data;
 }
 
@@ -35,36 +36,47 @@ async function signedPost(path, payload) {
   });
 }
 
-const login = await jsonResponse(await fetch(`${base}/api/admin/login`, {
-  method: "POST",
-  headers: { "content-type": "application/json" },
-  body: JSON.stringify({ password: adminPassword }),
-}));
+const login = await jsonResponse(
+  await fetch(`${base}/api/admin/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password: adminPassword }),
+  }),
+);
 const adminHeaders = {
   authorization: `Bearer ${login.token}`,
   "content-type": "application/json",
 };
 
-const initialUsers = await jsonResponse(await fetch(`${base}/api/users`, {
-  headers: adminHeaders,
-}));
-for (const user of initialUsers.users.filter((item) => item.username === username)) {
-  await fetch(`${base}/api/users/${user.id}`, { method: "DELETE", headers: adminHeaders });
+const initialUsers = await jsonResponse(
+  await fetch(`${base}/api/users`, {
+    headers: adminHeaders,
+  }),
+);
+for (const user of initialUsers.users.filter(
+  (item) => item.username === username,
+)) {
+  await fetch(`${base}/api/users/${user.id}`, {
+    method: "DELETE",
+    headers: adminHeaders,
+  });
 }
 
 let userId = "";
 try {
-  const created = await jsonResponse(await fetch(`${base}/api/users`, {
-    method: "POST",
-    headers: adminHeaders,
-    body: JSON.stringify({
-      username,
-      durationDays: 1,
-      deviceLimit: 1,
-      ipLimit24h: 2,
-      trafficLimitBytes: 1_048_576,
+  const created = await jsonResponse(
+    await fetch(`${base}/api/users`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        username,
+        durationDays: 1,
+        deviceLimit: 1,
+        ipLimit24h: 2,
+        trafficLimitBytes: 1_048_576,
+      }),
     }),
-  }));
+  );
   userId = created.user.id;
   const userUuid = created.user.uuid;
   assert(
@@ -75,12 +87,13 @@ try {
     `user mutation must publish an observable policy version: ${JSON.stringify(created)}`,
   );
 
-  const admit = (ipHash, leaseId) => signedPost("/api/nodes/admission", {
-    nodeId,
-    uuid: userUuid,
-    leaseId,
-    ipHash,
-  }).then(jsonResponse);
+  const admit = (ipHash, leaseId) =>
+    signedPost("/api/nodes/admission", {
+      nodeId,
+      uuid: userUuid,
+      leaseId,
+      ipHash,
+    }).then(jsonResponse);
 
   const first = await admit("iphash-a", "lease-a");
   const second = await admit("iphash-b", "lease-b");
@@ -98,28 +111,87 @@ try {
     bytesDown: 200,
     tsBucket: Math.floor(Date.now() / 3_600_000) * 3_600_000,
   };
-  await jsonResponse(await signedPost("/api/nodes/usage", { nodeId, events: [event] }));
-  await jsonResponse(await signedPost("/api/nodes/usage", { nodeId, events: [event] }));
+  await jsonResponse(
+    await signedPost("/api/nodes/usage", { nodeId, events: [event] }),
+  );
+  await jsonResponse(
+    await signedPost("/api/nodes/usage", { nodeId, events: [event] }),
+  );
 
-  const users = await jsonResponse(await fetch(`${base}/api/users`, { headers: adminHeaders }));
+  const users = await jsonResponse(
+    await fetch(`${base}/api/users`, { headers: adminHeaders }),
+  );
   const row = users.users.find((item) => item.id === userId);
   assert(
     row?.bytes_up === 100 && row?.bytes_down === 200 && row?.connections === 1,
     `usage event must be idempotent: ${JSON.stringify(row)}`,
   );
+  assert(
+    row?.access_state === "active_ip_limit_reached" &&
+      row?.access_severity === "warning",
+    `user list must expose the operational access reason: ${JSON.stringify(row)}`,
+  );
+
+  const activity = await jsonResponse(
+    await fetch(`${base}/api/users/${userId}/activity`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    activity.user.id === userId &&
+      activity.activeLeases.length === 1 &&
+      activity.activeLeases[0].nodeId === nodeId &&
+      activity.recentFingerprints.length === 1 &&
+      activity.usageByNode.some(
+        (item) =>
+          item.nodeId === nodeId &&
+          item.bytesUp === 100 &&
+          item.bytesDown === 200,
+      ),
+    `user activity must combine leases, fingerprints and usage: ${JSON.stringify(activity)}`,
+  );
+
+  const overview = await jsonResponse(
+    await fetch(`${base}/api/operations/overview`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    overview.summary.totalUsers >= 1 &&
+      overview.summary.attentionUsers >= 1 &&
+      Array.isArray(overview.series) &&
+      overview.series.length === 24 &&
+      Array.isArray(overview.topUsers) &&
+      Array.isArray(overview.alerts),
+    `operations overview must expose stable dashboard data: ${JSON.stringify(overview)}`,
+  );
 
   const subscription = await fetch(created.subUrl);
   const usageHeader = subscription.headers.get("subscription-userinfo") || "";
-  assert(usageHeader.includes("upload=100"), `missing upload usage: ${usageHeader}`);
-  assert(usageHeader.includes("download=200"), `missing download usage: ${usageHeader}`);
-  assert(usageHeader.includes("total=1048576"), `missing quota: ${usageHeader}`);
+  assert(
+    usageHeader.includes("upload=100"),
+    `missing upload usage: ${usageHeader}`,
+  );
+  assert(
+    usageHeader.includes("download=200"),
+    `missing download usage: ${usageHeader}`,
+  );
+  assert(
+    usageHeader.includes("total=1048576"),
+    `missing quota: ${usageHeader}`,
+  );
 
-  await jsonResponse(await fetch(`${base}/api/users/${userId}/leases/reset`, {
-    method: "POST",
-    headers: adminHeaders,
-  }));
+  await jsonResponse(
+    await fetch(`${base}/api/users/${userId}/leases/reset`, {
+      method: "POST",
+      headers: adminHeaders,
+    }),
+  );
   const afterReset = await admit("iphash-b", "lease-c");
-  assert(afterReset.allowed, `cleared lease should permit a new IP: ${JSON.stringify(afterReset)}`);
+  assert(
+    afterReset.allowed,
+    `cleared lease should permit a new IP: ${JSON.stringify(afterReset)}`,
+  );
 
   console.log("OK admission-first-ip");
   console.log("OK active-ip-limit-denial");
@@ -127,8 +199,13 @@ try {
   console.log("OK subscription-usage-header");
   console.log("OK lease-reset-readmission");
   console.log("OK policy-version-invalidation-summary");
+  console.log("OK operations-overview");
+  console.log("OK user-activity-privacy-view");
 } finally {
   if (userId) {
-    await fetch(`${base}/api/users/${userId}`, { method: "DELETE", headers: adminHeaders });
+    await fetch(`${base}/api/users/${userId}`, {
+      method: "DELETE",
+      headers: adminHeaders,
+    });
   }
 }

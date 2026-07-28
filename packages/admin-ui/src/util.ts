@@ -1,5 +1,30 @@
 import { apiBase } from "./api";
 
+export function fmtBytes(value: number, compact = false): string {
+  if (!value) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let amount = Math.abs(value);
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  const digits = compact
+    ? amount >= 100
+      ? 0
+      : amount >= 10
+        ? 1
+        : 2
+    : index >= 3
+      ? 2
+      : 1;
+  return `${value < 0 ? "-" : ""}${amount.toFixed(digits)} ${units[index]}`;
+}
+
+export function fmtNumber(value: number): string {
+  return new Intl.NumberFormat("zh-CN").format(value || 0);
+}
+
 export function fmtTime(ms: number | null): string {
   if (!ms) return "—";
   const d = new Date(ms);

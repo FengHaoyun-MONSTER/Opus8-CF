@@ -8,11 +8,22 @@ import { Routes } from "./views/Routes";
 import { Landings } from "./views/Landings";
 
 type Tab = "dashboard" | "users" | "nodes" | "routes" | "landings";
+const TABS: Tab[] = ["dashboard", "users", "nodes", "routes", "landings"];
+
+function initialTab(): Tab {
+  const value = window.location.hash.replace(/^#/, "") as Tab;
+  return TABS.includes(value) ? value : "dashboard";
+}
 
 export function App() {
   loadAuth();
   const [authed, setAuthed] = useState(isLoggedIn());
-  const [tab, setTab] = useState<Tab>("dashboard");
+  const [tab, setTab] = useState<Tab>(initialTab);
+
+  const selectTab = (value: Tab) => {
+    window.history.replaceState(null, "", `#${value}`);
+    setTab(value);
+  };
 
   if (!authed) return <Login onLoggedIn={() => setAuthed(true)} />;
 
@@ -26,22 +37,37 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           Opus8<span className="brand-cf">-CF</span>
-          <span className="brand-sub">控制台</span>
+          <span className="brand-sub">运营控制台</span>
         </div>
         <nav className="tabs">
-          <button className={tab === "dashboard" ? "active" : ""} onClick={() => setTab("dashboard")}>
-            仪表盘
+          <button
+            className={tab === "dashboard" ? "active" : ""}
+            onClick={() => selectTab("dashboard")}
+          >
+            运营总览
           </button>
-          <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}>
+          <button
+            className={tab === "users" ? "active" : ""}
+            onClick={() => selectTab("users")}
+          >
             用户
           </button>
-          <button className={tab === "nodes" ? "active" : ""} onClick={() => setTab("nodes")}>
+          <button
+            className={tab === "nodes" ? "active" : ""}
+            onClick={() => selectTab("nodes")}
+          >
             节点
           </button>
-          <button className={tab === "routes" ? "active" : ""} onClick={() => setTab("routes")}>
+          <button
+            className={tab === "routes" ? "active" : ""}
+            onClick={() => selectTab("routes")}
+          >
             落地分流
           </button>
-          <button className={tab === "landings" ? "active" : ""} onClick={() => setTab("landings")}>
+          <button
+            className={tab === "landings" ? "active" : ""}
+            onClick={() => selectTab("landings")}
+          >
             落地机
           </button>
         </nav>

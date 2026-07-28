@@ -19,6 +19,17 @@ export interface User {
   connections: number;
   active_ips: number;
   recent_ips: number;
+  access_state:
+    | "active"
+    | "disabled"
+    | "expired"
+    | "traffic_quota_exceeded"
+    | "active_ip_limit_reached"
+    | "ip_churn_limit_reached"
+    | "traffic_near_quota"
+    | "expiring_soon";
+  access_severity: "healthy" | "warning" | "danger";
+  access_reason: string;
 }
 
 export interface NodeRow {
@@ -77,6 +88,95 @@ export interface LandingInput {
   matchHosts: string[];
   priority: number;
   enabled: boolean;
+}
+
+export interface OperationsUser {
+  id: string;
+  username: string | null;
+  enabled: number;
+  expireAt: number | null;
+  unlock: number;
+  usedBytes: number;
+  trafficLimitBytes: number;
+  connections: number;
+  activeIps: number;
+  deviceLimit: number;
+  recentIps: number;
+  ipLimit24h: number;
+  accessState: User["access_state"];
+  accessSeverity: User["access_severity"];
+  accessReason: string;
+}
+
+export interface OperationsOverview {
+  generatedAt: number;
+  windowHours: number;
+  summary: {
+    totalUsers: number;
+    activeUsers: number;
+    blockedUsers: number;
+    attentionUsers: number;
+    activeIps: number;
+    recentIps: number;
+    totalTrafficBytes: number;
+    windowTrafficBytes: number;
+    windowConnections: number;
+    totalNodes: number;
+    healthyNodes: number;
+    totalLandings: number;
+    healthyLandings: number;
+    unhealthyLandings: number;
+  };
+  series: Array<{
+    ts: number;
+    bytesUp: number;
+    bytesDown: number;
+    connections: number;
+  }>;
+  topUsers: OperationsUser[];
+  nodeTraffic: Array<{
+    id: string;
+    hostname: string;
+    region: string | null;
+    health: string;
+    enabled: number;
+    lastSeen: number | null;
+    bytesUp: number;
+    bytesDown: number;
+    connections: number;
+  }>;
+  alerts: Array<{
+    kind: "user" | "node";
+    severity: "healthy" | "warning" | "danger";
+    id: string;
+    title: string;
+    detail: string;
+  }>;
+}
+
+export interface UserActivity {
+  generatedAt: number;
+  user: OperationsUser;
+  activeLeases: Array<{
+    fingerprint: string;
+    nodeId: string;
+    firstSeen: number;
+    lastSeen: number;
+    expiresAt: number;
+  }>;
+  recentFingerprints: Array<{
+    fingerprint: string;
+    firstSeen: number;
+    lastSeen: number;
+    active: boolean;
+  }>;
+  usageByNode: Array<{
+    nodeId: string;
+    bytesUp: number;
+    bytesDown: number;
+    connections: number;
+    lastActive: number;
+  }>;
 }
 
 interface Auth {
@@ -140,31 +240,41 @@ export async function login(base: string, password: string): Promise<string> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ password }),
   });
-  const data = (await res.json().catch(() => ({}))) as { token?: string; error?: string };
-  if (!res.ok || !data.token) throw new Error(data.error || `登录失败 (HTTP ${res.status})`);
+  const data = (await res.json().catch(() => ({}))) as {
+    token?: string;
+    error?: string;
+  };
+  if (!res.ok || !data.token)
+    throw new Error(data.error || `登录失败 (HTTP ${res.status})`);
   setAuth(b, data.token);
   return data.token;
 }
 
 export const api = {
+  operationsOverview: () => req<OperationsOverview>("/api/operations/overview"),
   listUsers: () => req<{ users: User[] }>("/api/users"),
+  userActivity: (id: string) => req<UserActivity>(`/api/users/${id}/activity`),
   createUser: (input: CreateUserInput) =>
     req<{ user: User; subUrl: string }>("/api/users", {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  updateUser: (id: string, input: {
-    unlock?: boolean;
-    enabled?: boolean;
-    deviceLimit?: number;
-    ipLimit24h?: number;
-    trafficLimitBytes?: number;
-  }) =>
+  updateUser: (
+    id: string,
+    input: {
+      unlock?: boolean;
+      enabled?: boolean;
+      deviceLimit?: number;
+      ipLimit24h?: number;
+      trafficLimitBytes?: number;
+    },
+  ) =>
     req<{ ok: boolean }>(`/api/users/${id}`, {
       method: "PATCH",
       body: JSON.stringify(input),
     }),
-  deleteUser: (id: string) => req<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
+  deleteUser: (id: string) =>
+    req<{ ok: boolean }>(`/api/users/${id}`, { method: "DELETE" }),
   resetUserUsage: (id: string) =>
     req<{ ok: boolean }>(`/api/users/${id}/usage/reset`, { method: "POST" }),
   resetUserLeases: (id: string) =>
@@ -192,7 +302,10 @@ export const api = {
   deleteLanding: (id: string) =>
     req<{ ok: boolean }>(`/api/landings/${id}`, { method: "DELETE" }),
   testLanding: (id: string) =>
-    req<{ ok: boolean; latencyMs: number; error?: string }>(`/api/landings/${id}/test`, {
-      method: "POST",
-    }),
+    req<{ ok: boolean; latencyMs: number; error?: string }>(
+      `/api/landings/${id}/test`,
+      {
+        method: "POST",
+      },
+    ),
 };

@@ -54,6 +54,12 @@
 首次升级部署时，如果 `landings` 表为空，`deploy-control` 会把现有
 `SERVICES_IP` / `SERVICES_USER` / `SERVICES_CODE` 自动导入为端口 `40008` 的默认落地机。
 
+## 运营管理站
+
+运营管理站由现有 Cloudflare Pages 项目承载，不需要单独 VPS。页面通过管理员 JWT 读取控制面
+Worker 的 `/api/operations/overview` 与用户活动接口；24 小时趋势和节点用量来自 D1 聚合。
+用户活动只展示 HMAC 后的 IP 指纹短标识，不保存或回显原始公网 IP。
+
 ## 首次流程
 
 1. **跑 `preflight` 工作流**（Actions 页手动触发）：

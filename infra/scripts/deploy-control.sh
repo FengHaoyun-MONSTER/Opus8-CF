@@ -197,6 +197,20 @@ else
   echo "ERROR smoke-idempotent-usage"; exit 23
 fi
 
+OVERVIEW=$(curl -fsS --max-time 20 "$API_URL/api/operations/overview" -H "authorization: Bearer $TOK")
+if printf '%s' "$OVERVIEW" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);process.exit(x.summary&&x.summary.totalUsers>=1&&Array.isArray(x.series)&&x.series.length===24&&Array.isArray(x.topUsers)&&Array.isArray(x.alerts)?0:1)})'; then
+  echo "OK smoke-operations-overview"
+else
+  echo "ERROR smoke-operations-overview"; exit 24
+fi
+
+ACTIVITY=$(curl -fsS --max-time 20 "$API_URL/api/users/$SUID/activity" -H "authorization: Bearer $TOK")
+if printf '%s' "$ACTIVITY" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);process.exit(x.user&&Array.isArray(x.activeLeases)&&Array.isArray(x.recentFingerprints)&&Array.isArray(x.usageByNode)&&x.usageByNode.some(y=>y.nodeId==="smoke-node"&&y.bytesUp===111&&y.bytesDown===222)?0:1)})'; then
+  echo "OK smoke-user-activity"
+else
+  echo "ERROR smoke-user-activity"; exit 25
+fi
+
 SUBBODY=$(curl -fsS -D /tmp/sub.headers --max-time 20 "$SUB")
 if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; exit 22; fi
 if grep -qiE '^subscription-userinfo:.*upload=111;.*download=222;' /tmp/sub.headers; then
