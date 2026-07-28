@@ -162,7 +162,7 @@ export interface OperationsOverview {
     connections: number;
   }>;
   alerts: Array<{
-    kind: "user" | "node";
+    kind: "user" | "node" | "landing";
     severity: "healthy" | "warning" | "danger";
     id: string;
     title: string;

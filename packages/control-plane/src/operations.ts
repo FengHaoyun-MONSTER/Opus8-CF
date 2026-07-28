@@ -74,7 +74,14 @@ function operationalUser(user: AdminUserRecord, now: number) {
 export async function operationsOverview(env: Env) {
   const now = Date.now();
   const windowStart = Math.floor((now - 23 * HOUR_MS) / HOUR_MS) * HOUR_MS;
-  const [users, nodes, usageResult, nodeUsageResult, landingResult] =
+  const [
+    users,
+    nodes,
+    usageResult,
+    nodeUsageResult,
+    landingResult,
+    landingAlertResult,
+  ] =
     await Promise.all([
       listUsers(env),
       listNodes(env),
@@ -118,6 +125,18 @@ export async function operationsOverview(env: Env) {
          SUM(CASE WHEN enabled=1 AND health='unhealthy' THEN 1 ELSE 0 END) AS unhealthy
        FROM landings`,
       ).first<{ total: number; healthy: number; unhealthy: number }>(),
+      env.DB.prepare(
+        `SELECT id,name,enabled,health,last_checked,last_error
+         FROM landings
+         ORDER BY priority ASC,created_at ASC`,
+      ).all<{
+        id: string;
+        name: string;
+        enabled: number;
+        health: string;
+        last_checked: number | null;
+        last_error: string | null;
+      }>(),
     ]);
 
   const series = fillHourlySeries(usageResult.results ?? [], now);
@@ -189,6 +208,31 @@ export async function operationsOverview(env: Env) {
                 )} 分钟未更新`
               : node.health_last_error || `节点状态：${node.health}`,
     }));
+  const landingAlerts = (landingAlertResult.results ?? [])
+    .filter(
+      (landing) =>
+        Number(landing.enabled) === 1 &&
+        (landing.health !== "healthy" ||
+          !landing.last_checked ||
+          now - landing.last_checked > NODE_HEALTH_STALE_MS),
+    )
+    .map((landing) => ({
+      kind: "landing" as const,
+      severity:
+        landing.health === "unhealthy"
+          ? ("danger" as const)
+          : ("warning" as const),
+      id: landing.id,
+      title: `落地机：${landing.name}`,
+      detail:
+        landing.health === "unhealthy"
+          ? landing.last_error || "SOCKS5 真实探测失败"
+          : !landing.last_checked
+            ? "尚未执行 SOCKS5 真实探测"
+            : `落地机探测已超过 ${Math.round(
+                (now - landing.last_checked) / 60_000,
+              )} 分钟未更新`,
+    }));
 
   const windowTrafficBytes = series.reduce(
     (sum, bucket) => sum + bucket.bytesUp + bucket.bytesDown,
@@ -242,7 +286,7 @@ export async function operationsOverview(env: Env) {
     series,
     topUsers,
     nodeTraffic,
-    alerts: [...userAlerts, ...nodeAlerts].slice(0, 12),
+    alerts: [...nodeAlerts, ...landingAlerts, ...userAlerts].slice(0, 12),
   };
 }
 

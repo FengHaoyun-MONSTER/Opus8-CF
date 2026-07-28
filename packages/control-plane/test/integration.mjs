@@ -95,7 +95,21 @@ for (const user of initialUsers.users.filter(
   });
 }
 
+const landingName = "__integration_unreachable__";
+const initialLandings = await jsonResponse(
+  await fetch(`${base}/api/landings`, { headers: adminHeaders }),
+);
+for (const landing of initialLandings.landings.filter(
+  (item) => item.name === landingName,
+)) {
+  await fetch(`${base}/api/landings/${landing.id}`, {
+    method: "DELETE",
+    headers: adminHeaders,
+  });
+}
+
 let userId = "";
+let landingId = "";
 try {
   const created = await jsonResponse(
     await fetch(`${base}/api/users`, {
@@ -197,6 +211,49 @@ try {
       Array.isArray(overview.topUsers) &&
       Array.isArray(overview.alerts),
     `operations overview must expose stable dashboard data: ${JSON.stringify(overview)}`,
+  );
+
+  const createdLanding = await jsonResponse(
+    await fetch(`${base}/api/landings`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        name: landingName,
+        hostname: "127.0.0.1",
+        port: 9,
+        username: "integration",
+        password: "integration",
+        region: "test",
+        matchHosts: [],
+        priority: 999,
+        enabled: true,
+      }),
+    }),
+  );
+  landingId = createdLanding.landing.id;
+  const landingTestResponse = await fetch(
+    `${base}/api/landings/${landingId}/test`,
+    {
+      method: "POST",
+      headers: adminHeaders,
+    },
+  );
+  const landingTest = await landingTestResponse.json();
+  assert(
+    landingTestResponse.status === 502 && landingTest.ok === false,
+    `unreachable landing must fail its real SOCKS5 probe: ${JSON.stringify(landingTest)}`,
+  );
+  const overviewWithLandingAlert = await jsonResponse(
+    await fetch(`${base}/api/operations/overview`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    overviewWithLandingAlert.summary.unhealthyLandings >= 1 &&
+      overviewWithLandingAlert.alerts.some(
+        (alert) => alert.kind === "landing" && alert.id === landingId,
+      ),
+    `operations overview must alert on an unhealthy landing: ${JSON.stringify(overviewWithLandingAlert)}`,
   );
 
   const runPrefix = `integration-health-${Date.now()}`;
@@ -324,7 +381,14 @@ try {
   console.log("OK node-health-recovery-threshold");
   console.log("OK landing-only-degradation");
   console.log("OK node-health-overview");
+  console.log("OK landing-real-probe-alert");
 } finally {
+  if (landingId) {
+    await fetch(`${base}/api/landings/${landingId}`, {
+      method: "DELETE",
+      headers: adminHeaders,
+    });
+  }
   if (userId) {
     await fetch(`${base}/api/users/${userId}`, {
       method: "DELETE",

@@ -209,7 +209,13 @@ export function Dashboard() {
                     <strong>{alert.title}</strong>
                     <span>{alert.detail}</span>
                   </div>
-                  <em>{alert.kind === "user" ? "用户" : "节点"}</em>
+                  <em>
+                    {alert.kind === "user"
+                      ? "用户"
+                      : alert.kind === "landing"
+                        ? "落地机"
+                        : "节点"}
+                  </em>
                 </div>
               ))
             ) : (

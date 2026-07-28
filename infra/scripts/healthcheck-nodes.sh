@@ -14,6 +14,7 @@ ROOT_DOMAIN="${ROOT_DOMAIN%%/*}"
 CONTROL_API="${CONTROL_PLANE_URL:-https://api.${ROOT_DOMAIN}}"
 RUN_ID="gh-${GITHUB_RUN_ID:-manual-$(date +%s)}-${GITHUB_RUN_ATTEMPT:-1}"
 WORK_DIR="$(mktemp -d)"
+HEALTH_ALERT_FILE="${HEALTH_ALERT_FILE:-${RUNNER_TEMP:-/tmp}/opus8-health-state.json}"
 USER_ID=""
 ADMIN_TOKEN=""
 
@@ -37,6 +38,77 @@ LOGIN_RESPONSE="$(curl -fsS --max-time 20 -X POST \
 ADMIN_TOKEN="$(printf '%s' "$LOGIN_RESPONSE" | jq -er '.token')"
 echo "::add-mask::$ADMIN_TOKEN"
 echo "OK login"
+
+echo "STEP probe-landings"
+LANDINGS_RESPONSE="$(curl -fsS --max-time 20 "$CONTROL_API/api/landings" \
+  -H "authorization: Bearer $ADMIN_TOKEN")"
+mapfile -t LANDINGS < <(
+  printf '%s' "$LANDINGS_RESPONSE" |
+    jq -r '.landings[] | select(.enabled == true) | @base64'
+)
+LANDING_RESULTS='[]'
+for encoded in "${LANDINGS[@]}"; do
+  LANDING="$(printf '%s' "$encoded" | base64 -d)"
+  LANDING_ID="$(printf '%s' "$LANDING" | jq -er '.id')"
+  LANDING_NAME="$(printf '%s' "$LANDING" | jq -er '.name')"
+  PREVIOUS_HEALTH="$(printf '%s' "$LANDING" | jq -er '.health')"
+  LANDING_OK=false
+  LANDING_LATENCY=null
+  LANDING_ERROR=""
+
+  for attempt in 1 2; do
+    set +e
+    LANDING_HTTP="$(curl -sS --max-time 25 -o "$WORK_DIR/landing.json" \
+      -w '%{http_code}' -X POST \
+      "$CONTROL_API/api/landings/$LANDING_ID/test" \
+      -H "authorization: Bearer $ADMIN_TOKEN")"
+    CURL_CODE=$?
+    set -e
+    if [ "$CURL_CODE" -eq 0 ]; then
+      LANDING_RESPONSE="$(cat "$WORK_DIR/landing.json")"
+      if printf '%s' "$LANDING_RESPONSE" | jq -e '.ok == true' >/dev/null 2>&1; then
+        LANDING_OK=true
+        LANDING_LATENCY="$(printf '%s' "$LANDING_RESPONSE" | jq -r '.latencyMs // null')"
+        LANDING_ERROR=""
+        break
+      fi
+      LANDING_ERROR="$(printf '%s' "$LANDING_RESPONSE" | jq -r '.error // "SOCKS5 probe failed"' | cut -c1-300)"
+    else
+      LANDING_ERROR="control API transport error (curl $CURL_CODE, HTTP $LANDING_HTTP)"
+    fi
+    [ "$attempt" -eq 1 ] && sleep 2
+  done
+
+  if [ "$LANDING_OK" = true ]; then
+    CURRENT_HEALTH=healthy
+    echo "OK landing name=$LANDING_NAME latencyMs=$LANDING_LATENCY"
+  else
+    CURRENT_HEALTH=unhealthy
+    echo "WARN landing name=$LANDING_NAME reason=$LANDING_ERROR"
+  fi
+  [ "$PREVIOUS_HEALTH" = "$CURRENT_HEALTH" ] && LANDING_TRANSITION=false || LANDING_TRANSITION=true
+  LANDING_RESULTS="$(printf '%s' "$LANDING_RESULTS" | jq -c \
+    --arg id "$LANDING_ID" \
+    --arg name "$LANDING_NAME" \
+    --arg previousHealth "$PREVIOUS_HEALTH" \
+    --arg health "$CURRENT_HEALTH" \
+    --argjson ok "$LANDING_OK" \
+    --argjson latencyMs "$LANDING_LATENCY" \
+    --arg error "$LANDING_ERROR" \
+    --argjson transition "$LANDING_TRANSITION" \
+    '. + [{
+      id:$id,
+      name:$name,
+      enabled:true,
+      previousHealth:$previousHealth,
+      health:$health,
+      ok:$ok,
+      latencyMs:$latencyMs,
+      error:(if $error == "" then null else $error end),
+      transition:$transition
+    }]')"
+done
+echo "OK enabled-landings count=${#LANDINGS[@]}"
 
 echo "STEP create-isolated-probe-user"
 PROBE_USERNAME="__healthcheck__-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
@@ -151,6 +223,20 @@ REPORT_RESPONSE="$(curl -fsS --max-time 30 \
 printf '%s' "$REPORT_RESPONSE" | jq -e '.ok == true' >/dev/null
 echo "OK health-reported run=$RUN_ID"
 
+mkdir -p "$(dirname "$HEALTH_ALERT_FILE")"
+jq -nc \
+  --argjson generatedAt "$(date +%s)000" \
+  --argjson report "$REPORT_RESPONSE" \
+  --argjson landings "$LANDING_RESULTS" \
+  '{
+    generatedAt:$generatedAt,
+    runId:$report.runId,
+    summary:$report.summary,
+    transitions:$report.transitions,
+    nodes:$report.nodes,
+    landings:$landings
+  }' >"$HEALTH_ALERT_FILE"
+
 HEALTHY="$(printf '%s' "$REPORT_RESPONSE" | jq -r '.summary.healthy')"
 DEGRADED="$(printf '%s' "$REPORT_RESPONSE" | jq -r '.summary.degraded')"
 BANNED="$(printf '%s' "$REPORT_RESPONSE" | jq -r '.summary.banned')"
@@ -165,6 +251,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "- Degraded: $DEGRADED"
     echo "- Removed from subscriptions: $BANNED"
     echo "- State transitions: $TRANSITIONS"
+    echo "- Healthy landings: $(printf '%s' "$LANDING_RESULTS" | jq '[.[] | select(.health == "healthy")] | length') / ${#LANDINGS[@]}"
     echo
     echo "| Node | Direct | Landing / WARP | State |"
     echo "| --- | --- | --- | --- |"
@@ -174,6 +261,14 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
       (if .health_direct_ok == 1 then "OK \(.health_direct_latency_ms // "-") ms" else "FAIL" end) +
       " | " +
       (if .health_landing_ok == 1 then "OK \(.health_landing_latency_ms // "-") ms" else "FAIL" end) +
+      " | \(.health) |"'
+    echo
+    echo "| Landing | SOCKS5 | State |"
+    echo "| --- | --- | --- |"
+    printf '%s' "$LANDING_RESULTS" | jq -r '
+      .[] |
+      "| \(.name) | " +
+      (if .ok then "OK \(.latencyMs // "-") ms" else (.error // "FAIL") end) +
       " | \(.health) |"'
   } >>"$GITHUB_STEP_SUMMARY"
 fi

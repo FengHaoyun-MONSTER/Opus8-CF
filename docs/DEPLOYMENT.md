@@ -25,6 +25,7 @@
 | `NODE_HMAC_SECRET` | 边缘节点 ↔ 控制面 请求签名共享密钥 |
 | `LANDING_CONFIG_KEY` | D1 中落地机账号密码的 AES-GCM 静态加密密钥（至少 32 字符） |
 | `ACCESS_ADMIN_EMAIL` | Cloudflare Access 唯一允许登录的管理邮箱 |
+| `ALERT_WEBHOOK_URL` | 可选；接收节点/落地机异常与恢复 JSON 事件的 HTTPS Webhook |
 
 以上各项均必须以 GitHub Actions Secrets 保存，不要写入仓库。`LANDING_CONFIG_KEY` 不可随意轮换；直接更换会使已保存的
 落地机凭据无法解密，应先迁移或重新录入。`NODE_HMAC_SECRET` 轮换后需让控制面和全部节点依次重新部署。
@@ -86,3 +87,16 @@ GitHub Secret `ACCESS_ADMIN_EMAIL` 保存唯一允许登录的管理员邮箱，
 `configure-admin-access` 工作流会幂等创建或更新应用及邮件白名单，并验证未认证请求已跳转到
 团队的 `cloudflareaccess.com` 登录页。生产 Pages 地址和哈希预览地址也使用相同白名单保护，
 避免绕过自定义域名。管理站自身的管理员密码继续保留，形成两层认证。
+
+## 健康告警
+
+`healthcheck-nodes` 每 10 分钟执行以下检查：
+
+1. 逐台测试已启用落地机的 SOCKS5 认证和 HTTP 出站；
+2. 为隔离测试用户验证每个边缘节点的 CF 直出与落地/WARP 链路；
+3. 把节点状态、落地机状态、延迟和状态变化写回控制面；
+4. 异常时维护一个带 `opus8-health-alert` 标签的 GitHub Issue，恢复后自动关闭。
+
+工作流自带 `issues: write` 权限，因此 GitHub Issue 告警不需要增加 Secret。若配置可选的
+`ALERT_WEBHOOK_URL`，状态变化还会发送 `opus8.health.alert` 或 `opus8.health.recovered`
+JSON 事件；Webhook 投递失败只产生工作流警告，不影响健康状态上报和节点摘除逻辑。
