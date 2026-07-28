@@ -14,6 +14,7 @@ SUB_HOST="sub.${ROOT_DOMAIN}"
 API_URL="https://${API_HOST}"
 SUB_URL="https://${SUB_HOST}"
 DEFAULT_UNLOCK_HOSTS=$(grep -E '^[A-Za-z0-9.-]+$' ../../infra/ai-unlock.txt | tr '[:upper:]' '[:lower:]' | paste -sd, -)
+OPUS8_BUILD_ID="${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
 
 echo "STEP ensure-d1-kv"
 wrangler d1 create opus8cf-db >/dev/null 2>&1 || true
@@ -37,6 +38,7 @@ workers_dev = true
 
 [vars]
 DEFAULT_UNLOCK_HOSTS = "$DEFAULT_UNLOCK_HOSTS"
+OPUS8_BUILD_ID = "$OPUS8_BUILD_ID"
 
 [[d1_databases]]
 binding = "DB"
@@ -83,13 +85,35 @@ printf '%s' "$LANDING_CONFIG_KEY"     | wrangler secret put LANDING_CONFIG_KEY >
 printf '%s' "$ROOT_DOMAIN" | wrangler secret put ROOT_DOMAIN >/dev/null 2>&1 && echo "OK secret ROOT_DOMAIN"
 printf '%s' "$SUB_URL"     | wrangler secret put SUB_BASE    >/dev/null 2>&1 && echo "OK secret SUB_BASE"
 
+echo "STEP wait-deployed-version"
+VERSION_READY=0
+for n in $(seq 1 36); do
+  CUSTOM_BUILD=$(curl -fsS --max-time 12 "$API_URL/__opus8/build" 2>/dev/null \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).buildId||""))}catch(e){}})' || true)
+  WORKERS_BUILD="$OPUS8_BUILD_ID"
+  if [ -n "$WORKERS_URL" ]; then
+    WORKERS_BUILD=$(curl -fsS --max-time 12 "$WORKERS_URL/__opus8/build" 2>/dev/null \
+      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).buildId||""))}catch(e){}})' || true)
+  fi
+  if [ "$CUSTOM_BUILD" = "$OPUS8_BUILD_ID" ] && [ "$WORKERS_BUILD" = "$OPUS8_BUILD_ID" ]; then
+    VERSION_READY=1
+    break
+  fi
+  sleep 5
+done
+if [ "$VERSION_READY" != "1" ]; then
+  echo "ERROR deployed-version-not-active"
+  exit 14
+fi
+echo "OK deployed-version-active custom=1 workers=1"
+
 echo "STEP wait-custom-domain"
 CUSTOM_OK=0
 for n in $(seq 1 24); do
   if curl -fsS --max-time 15 "$API_URL/health" | grep -q '"ok":true'; then CUSTOM_OK=1; break; fi
   sleep 10
 done
-if [ "$CUSTOM_OK" != "1" ]; then echo "ERROR custom-domain-unreachable"; exit 14; fi
+if [ "$CUSTOM_OK" != "1" ]; then echo "ERROR custom-domain-unreachable"; exit 15; fi
 echo "OK custom-domain-ready api=$API_URL sub=$SUB_URL"
 
 echo "STEP smoke"

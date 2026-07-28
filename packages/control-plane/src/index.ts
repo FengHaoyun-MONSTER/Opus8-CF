@@ -110,8 +110,18 @@ export default {
 
     try {
       // ---------- 健康 ----------
+      if (p === "/__opus8/build") {
+        return json({
+          service: "opus8-cf-control",
+          buildId: env.OPUS8_BUILD_ID || "unknown",
+        });
+      }
       if (p === "/" || p === "/health")
-        return json({ ok: true, service: "opus8-cf-control" });
+        return json({
+          ok: true,
+          service: "opus8-cf-control",
+          buildId: env.OPUS8_BUILD_ID || "unknown",
+        });
 
       // ---------- 管理员登录 ----------
       if (p === "/api/admin/login" && m === "POST") {

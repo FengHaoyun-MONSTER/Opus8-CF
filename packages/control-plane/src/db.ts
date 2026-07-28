@@ -20,6 +20,7 @@ export interface Env {
   ROOT_DOMAIN?: string;
   SUB_BASE?: string;
   USE_OPTIMIZED_IPS?: string;
+  OPUS8_BUILD_ID?: string;
 }
 
 export interface AdminUserRecord extends UserRecord {
