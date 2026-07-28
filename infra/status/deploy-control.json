@@ -1,6 +1,6 @@
 {
-  "result": "failure",
-  "controlUrl": "",
+  "result": "success",
+  "controlUrl": "https://api.thinderbox.com",
   "markers": [
     "STEP ensure-d1-kv",
     "OK ids-resolved d1=260b0f8f… kv=4526bc39…",
@@ -17,6 +17,8 @@
     "OK secret LANDING_CONFIG_KEY",
     "OK secret ROOT_DOMAIN",
     "OK secret SUB_BASE",
+    "STEP wait-deployed-version",
+    "OK deployed-version-active custom=1 workers=1",
     "STEP wait-custom-domain",
     "OK custom-domain-ready api=https://api.thinderbox.com sub=https://sub.thinderbox.com",
     "STEP smoke",
@@ -26,23 +28,32 @@
     "OK smoke-landings count=1",
     "OK smoke-landing-socks5",
     "OK smoke-unlock-hosts count=61",
-    "OK smoke-create-user(D1-write)",
-    "OK smoke-active-ip-limit",
-    "OK smoke-idempotent-usage"
-  ],
-  "tail": [
-    "OK custom-domain-ready api=https://api.thinderbox.com sub=https://sub.thinderbox.com",
-    "STEP smoke",
-    "OK smoke-health",
-    "OK smoke-login",
-    "STEP ensure-default-landing",
-    "OK smoke-landings count=1",
-    "OK smoke-landing-socks5",
-    "OK smoke-unlock-hosts count=61",
+    "OK smoke-cleaned-orphans",
     "OK smoke-create-user(D1-write)",
     "OK smoke-active-ip-limit",
     "OK smoke-idempotent-usage",
-    "curl: (22) The requested URL returned error: 404"
+    "OK smoke-operations-overview",
+    "OK smoke-user-activity",
+    "OK smoke-subscription",
+    "OK smoke-subscription-usage",
+    "OK smoke-sub-has-node",
+    "OK smoke-sub-hostname-only",
+    "OK smoke-cleanup",
+    "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-07-28T07:31:03Z"
+  "tail": [
+    "OK smoke-cleaned-orphans",
+    "OK smoke-create-user(D1-write)",
+    "OK smoke-active-ip-limit",
+    "OK smoke-idempotent-usage",
+    "OK <redacted>",
+    "OK smoke-user-activity",
+    "OK smoke-subscription",
+    "OK <redacted>",
+    "OK smoke-sub-has-node",
+    "OK smoke-sub-hostname-only",
+    "OK smoke-cleanup",
+    "DONE url=https://api.thinderbox.com"
+  ],
+  "finishedAt": "2026-07-28T07:34:44Z"
 }
