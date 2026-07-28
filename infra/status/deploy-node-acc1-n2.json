@@ -1,10 +1,10 @@
 {
   "node": "acc1-n2",
-  "result": "success",
-  "nodeUrl": "https://acc1-n2.thinderbox.com",
+  "result": "failure",
+  "nodeUrl": "",
   "markers": [
     "STEP build",
-    "OK built (OK build: dist/index.js (300387 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (304285 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
@@ -22,12 +22,13 @@
     "OK custom-domain-ready",
     "STEP verify",
     "OK node-tls-http=200",
-    "OK uuids-endpoint-count=2",
+    "OK uuids-endpoint-count=3",
     "OK landing-bundle-encrypted",
+    "STEP canary-user",
+    "OK canary-user-created",
+    "INFO edge-policy-invalidation acknowledged=2 target=1",
     "STEP vless-smoke",
-    "OK vless-ws-auth-egress",
-    "OK unlock=on(AI域名走落地)",
-    "DONE url=https://acc1-n2.thinderbox.com"
+    "ERROR vless-smoke"
   ],
-  "finishedAt": "2026-07-27T17:11:22Z"
+  "finishedAt": "2026-07-28T05:37:54Z"
 }
