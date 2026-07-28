@@ -1,6 +1,6 @@
 {
-  "result": "failure",
-  "adminUrl": "",
+  "result": "success",
+  "adminUrl": "https://opus8cf-admin-openal.pages.dev",
   "markers": [
     "STEP install",
     "OK installed",
@@ -8,11 +8,8 @@
     "OK built",
     "STEP pages-project",
     "STEP deploy",
-    "OK deployed deploy=https://9b54f7f8.opus8cf-admin-openal.pages.dev",
-    "STEP pages-custom-domain",
-    "OK pages-custom-domain-exists",
-    "STEP pages-custom-domain-dns",
-    "ERROR pages-custom-domain-dns-list status=403"
+    "OK deployed deploy=https://328696eb.opus8cf-admin-openal.pages.dev",
+    "DONE url=https://opus8cf-admin-openal.pages.dev"
   ],
   "tail": [
     "STEP install",
@@ -21,11 +18,8 @@
     "OK built",
     "STEP pages-project",
     "STEP deploy",
-    "OK deployed deploy=https://9b54f7f8.opus8cf-admin-openal.pages.dev",
-    "STEP pages-custom-domain",
-    "OK <redacted>",
-    "STEP pages-custom-domain-dns",
-    "ERROR <redacted> status=403"
+    "OK deployed deploy=https://328696eb.opus8cf-admin-openal.pages.dev",
+    "DONE url=https://opus8cf-admin-openal.pages.dev"
   ],
-  "finishedAt": "2026-07-28T09:31:56Z"
+  "finishedAt": "2026-07-28T09:34:59Z"
 }
