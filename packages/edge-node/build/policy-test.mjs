@@ -179,6 +179,34 @@ if (
 ) {
   throw new Error("an older signed invalidation must not lower the policy marker");
 }
+await kv.put(OPUS8_policyCacheKey(controlEnv), JSON.stringify({
+  raw: { version: 12, uuids: ["status-user"] },
+  exp: Date.now() + 10_000,
+}));
+const statusTimestamp = String(Date.now());
+const statusSignature = await OPUS8_hmac(
+  controlEnv.NODE_HMAC_SECRET,
+  statusTimestamp + "." + controlEnv.NODE_ID + ".",
+);
+const statusResponse = await OPUS8_handleControlRequest(new Request(
+  "https://node.example/__opus8/policy/status?uuid=status-user",
+  {
+    headers: {
+      "x-opus8-ts": statusTimestamp,
+      "x-opus8-node": controlEnv.NODE_ID,
+      "x-opus8-sign": statusSignature,
+    },
+  },
+), controlEnv);
+const status = await statusResponse.json();
+if (
+  statusResponse.status !== 200 ||
+  status.cachedVersion !== 12 ||
+  status.cachedContainsUuid !== true ||
+  status.liveContainsUuid !== true
+) {
+  throw new Error("signed policy status must report cache and live control state");
+}
 })();`;
 
 await runInNewContext(`${prelude}\n${tests}`, {
@@ -187,6 +215,10 @@ await runInNewContext(`${prelude}\n${tests}`, {
   Request,
   Response,
   URL,
+  fetch: async () => new Response(JSON.stringify({
+    version: 12,
+    uuids: ["status-user"],
+  })),
   TextEncoder,
   TextDecoder,
   WeakMap,

@@ -185,6 +185,34 @@ else
   sleep 16
 fi
 
+echo "STEP policy-status"
+STATUS_TS=$(date +%s)000
+STATUS_SIG=$(printf '%s' "${STATUS_TS}.${NODE_ID}." | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+POLICY_STATUS=$(curl -fsS --max-time 20 \
+  "${CUSTOM_URL}/__opus8/policy/status?uuid=${TEST_UUID}" \
+  -H "x-opus8-ts: $STATUS_TS" \
+  -H "x-opus8-node: $NODE_ID" \
+  -H "x-opus8-sign: $STATUS_SIG")
+printf '%s' "$POLICY_STATUS" | node -e '
+  let s="";
+  process.stdin.on("data",d=>s+=d).on("end",()=>{
+    const j=JSON.parse(s);
+    const safe={
+      invalidatedVersion:j.invalidatedVersion,
+      cachedVersion:j.cachedVersion,
+      cachedUuidCount:j.cachedUuidCount,
+      cachedContainsUuid:j.cachedContainsUuid,
+      cachedExpiresInMs:j.cachedExpiresInMs,
+      liveOk:j.liveOk,
+      liveStatus:j.liveStatus,
+      liveVersion:j.liveVersion,
+      liveUuidCount:j.liveUuidCount,
+      liveContainsUuid:j.liveContainsUuid,
+      liveError:j.liveError
+    };
+    console.log("INFO policy-status="+JSON.stringify(safe));
+  })'
+
 echo "STEP vless-smoke"
 SMOKE_OK=0
 for n in $(seq 1 18); do

@@ -280,8 +280,13 @@ function OPUS8_constantTimeEqual(left, right) {
 
 async function OPUS8_handleControlRequest(request, env) {
   const url = new URL(request.url);
-  if (url.pathname !== "/__opus8/policy/invalidate") return null;
-  if (request.method !== "POST") {
+  const isInvalidation = url.pathname === "/__opus8/policy/invalidate";
+  const isStatus = url.pathname === "/__opus8/policy/status";
+  if (!isInvalidation && !isStatus) return null;
+  if (
+    (isInvalidation && request.method !== "POST") ||
+    (isStatus && request.method !== "GET")
+  ) {
     return new Response("Method Not Allowed", {
       status: 405,
       headers: { "cache-control": "no-store" },
@@ -293,7 +298,7 @@ async function OPUS8_handleControlRequest(request, env) {
       headers: { "cache-control": "no-store" },
     });
   }
-  const body = await request.text();
+  const body = isInvalidation ? await request.text() : "";
   const timestamp = request.headers.get("x-opus8-ts") || "";
   const nodeId = request.headers.get("x-opus8-node") || "";
   const signature = request.headers.get("x-opus8-sign") || "";
@@ -316,6 +321,60 @@ async function OPUS8_handleControlRequest(request, env) {
     return new Response("Unauthorized", {
       status: 401,
       headers: { "cache-control": "no-store" },
+    });
+  }
+  if (isStatus) {
+    const requestedUuid = String(url.searchParams.get("uuid") || "").toLowerCase();
+    const invalidatedVersion = await OPUS8_invalidatedPolicyVersion(env);
+    let cached = null;
+    try {
+      const cacheText = await env.KV.get(OPUS8_policyCacheKey(env));
+      if (cacheText) cached = JSON.parse(cacheText);
+    } catch (_) { /* report an empty cache */ }
+    const cachedUuids = Array.isArray(cached?.raw?.uuids)
+      ? cached.raw.uuids.map((value) => String(value).toLowerCase())
+      : [];
+    const status = {
+      nodeId: env.NODE_ID,
+      invalidatedVersion,
+      cachedVersion: OPUS8_policyVersion(cached?.raw),
+      cachedUuidCount: cachedUuids.length,
+      cachedContainsUuid: Boolean(requestedUuid && cachedUuids.includes(requestedUuid)),
+      cachedExpiresInMs: Number(cached?.exp || 0) - Date.now(),
+      liveOk: false,
+      liveStatus: 0,
+      liveVersion: 0,
+      liveUuidCount: 0,
+      liveContainsUuid: false,
+      liveError: "",
+    };
+    try {
+      const liveResponse = await OPUS8_signedFetch(
+        env,
+        "GET",
+        "/api/nodes/" + env.NODE_ID + "/uuids",
+      );
+      status.liveStatus = liveResponse.status;
+      status.liveOk = liveResponse.ok;
+      if (liveResponse.ok) {
+        const live = await liveResponse.json();
+        const liveUuids = Array.isArray(live?.uuids)
+          ? live.uuids.map((value) => String(value).toLowerCase())
+          : [];
+        status.liveVersion = OPUS8_policyVersion(live);
+        status.liveUuidCount = liveUuids.length;
+        status.liveContainsUuid = Boolean(
+          requestedUuid && liveUuids.includes(requestedUuid)
+        );
+      }
+    } catch (error) {
+      status.liveError = String(error?.message || error || "unknown").slice(0, 160);
+    }
+    return new Response(JSON.stringify(status), {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      },
     });
   }
   let payload;
