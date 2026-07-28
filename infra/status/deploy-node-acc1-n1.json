@@ -1,7 +1,7 @@
 {
   "node": "acc1-n1",
-  "result": "failure",
-  "nodeUrl": "",
+  "result": "success",
+  "nodeUrl": "https://acc1-n1.thinderbox.com",
   "markers": [
     "STEP build",
     "OK built (OK build: dist/index.js (306807 bytes), patch replaced 961 chars)",
@@ -28,9 +28,11 @@
     "OK canary-user-created",
     "INFO edge-policy-invalidation acknowledged=4 target=1",
     "STEP policy-status",
-    "INFO policy-status={\"invalidatedVersion\":1785217919536,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785217923324,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785217919536,\"liveUuidCount\":4,\"liveContainsUuid\":true,\"liveError\":\"\"}",
+    "INFO policy-status={\"invalidatedVersion\":1785218767184,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785218770851,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785218767184,\"liveUuidCount\":4,\"liveContainsUuid\":true,\"liveError\":\"\"}",
     "STEP vless-smoke",
-    "ERROR vless-smoke"
+    "OK vless-ws-auth-egress",
+    "OK unlock=on(AI域名走落地)",
+    "DONE url=https://acc1-n1.thinderbox.com"
   ],
-  "finishedAt": "2026-07-28T05:58:00Z"
+  "finishedAt": "2026-07-28T06:06:42Z"
 }
