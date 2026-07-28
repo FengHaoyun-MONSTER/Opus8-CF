@@ -18,15 +18,11 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN_NUM1 }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID_NUM1 }}
       ACCESS_ADMIN_EMAIL: ${{ secrets.ACCESS_ADMIN_EMAIL }}
-      ACCESS_HOSTNAME: admin.openal.uk
+      ACCESS_HOSTNAME: opus8cf-admin-openal.pages.dev
       CF_ZERO_TRUST_TEAM: ${{ secrets.CF_ZERO_TRUST_TEAM }}
     steps:
       - uses: actions/checkout@v4
-      - name: Protect custom admin hostname
-        run: bash infra/scripts/configure-admin-access.sh
       - name: Protect production Pages hostname
-        env:
-          ACCESS_HOSTNAME: opus8cf-admin-openal.pages.dev
         run: bash infra/scripts/configure-admin-access.sh
       - name: Read latest Pages deployment hostname
         id: pages
