@@ -321,9 +321,12 @@ jobs:
           else
             expected_connections=0
             ws_failed=0
-            for ws_host in \
-              "acc1-n2.${ROOT_DOMAIN_ACC1}" \
-              "acc1-n1.${ROOT_DOMAIN_ACC1}"; do
+            for ws_entry in \
+              "acc1-n2-workers|opus8cf-node-acc1-n2.techtoolhub-office.workers.dev" \
+              "acc1-n2-custom|acc1-n2.${ROOT_DOMAIN_ACC1}" \
+              "acc1-n1-workers|opus8cf-node-acc1-n1.techtoolhub-office.workers.dev" \
+              "acc1-n1-custom|acc1-n1.${ROOT_DOMAIN_ACC1}"; do
+              IFS='|' read -r ws_label ws_host <<<"$ws_entry"
               if python3 infra/scripts/smoke-vless.py \
                 --url "wss://${ws_host}/?ed=2560" \
                 --uuid "$uuid" \
@@ -331,10 +334,10 @@ jobs:
                 --target-port 80 \
                 --expect-status 200; then
                 expected_connections=$((expected_connections + 1))
-                echo "OK vless-ws-egress host=$ws_host"
+                echo "OK vless-ws-egress route=$ws_label"
               else
                 ws_failed=1
-                echo "::error::vless-ws-egress failed host=$ws_host"
+                echo "::error::vless-ws-egress failed route=$ws_label"
               fi
             done
             [ "$ws_failed" -eq 0 ] || exit 1
