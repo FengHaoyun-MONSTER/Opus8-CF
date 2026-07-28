@@ -188,7 +188,7 @@ fi
 echo "OK candidates count=${#CANDIDATES[@]}"
 
 local_candidate_ok() {
-  local ip="$1" entry node_id node_host
+  local ip="$1" entry node_id node_host reason
   for entry in "${REPRESENTATIVES[@]}"; do
     IFS=$'\t' read -r node_id node_host <<<"$entry"
     if ! python3 infra/scripts/smoke-vless.py \
@@ -199,14 +199,17 @@ local_candidate_ok() {
       --target-port 80 \
       --expect-status 0 \
       --timeout 12 >"$WORK_DIR/local-candidate.log" 2>&1; then
-      echo "WARN candidate=$ip vantage=github-runner node=$node_id failed"
+      reason="$(tail -n 1 "$WORK_DIR/local-candidate.log" |
+        tr '\r\n\t' ' ' |
+        cut -c1-300)"
+      echo "WARN candidate=$ip vantage=github-runner node=$node_id reason=$reason"
       return 1
     fi
   done
 }
 
 remote_candidate_ok() {
-  local ip="$1" entry node_id node_host remote_command
+  local ip="$1" entry node_id node_host remote_command reason
   for entry in "${REPRESENTATIVES[@]}"; do
     IFS=$'\t' read -r node_id node_host <<<"$entry"
     printf -v remote_command '%q ' \
@@ -219,7 +222,10 @@ remote_candidate_ok() {
       --expect-status 0 \
       --timeout 12
     if ! "${SSH_BASE[@]}" "$remote_command" >"$WORK_DIR/remote-candidate.log" 2>&1; then
-      echo "WARN candidate=$ip vantage=landing-vps node=$node_id failed"
+      reason="$(tail -n 1 "$WORK_DIR/remote-candidate.log" |
+        tr '\r\n\t' ' ' |
+        cut -c1-300)"
+      echo "WARN candidate=$ip vantage=landing-vps node=$node_id reason=$reason"
       return 1
     fi
   done
