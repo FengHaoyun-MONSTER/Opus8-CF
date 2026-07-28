@@ -1,10 +1,10 @@
 {
   "node": "acc1-n1",
-  "result": "cancelled",
+  "result": "failure",
   "nodeUrl": "",
   "markers": [
     "STEP build",
-    "OK built (OK build: dist/index.js (300943 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (304285 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
@@ -22,12 +22,13 @@
     "OK custom-domain-ready",
     "STEP verify",
     "OK node-tls-http=200",
-    "OK uuids-endpoint-count=2",
+    "OK uuids-endpoint-count=4",
     "OK landing-bundle-encrypted",
     "STEP canary-user",
     "OK canary-user-created",
-    "INFO wait-policy-cache=65s",
-    "STEP vless-smoke"
+    "INFO edge-policy-invalidation acknowledged=0 target=0",
+    "STEP vless-smoke",
+    "ERROR vless-smoke"
   ],
-  "finishedAt": "2026-07-28T04:40:11Z"
+  "finishedAt": "2026-07-28T05:35:36Z"
 }
