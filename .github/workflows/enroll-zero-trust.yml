@@ -402,6 +402,23 @@ jobs:
                     }
                 ]
               } end'
+            versions="$(curl -fsS --max-time 30 \
+              -H "authorization: Bearer ${CF_API_TOKEN}" \
+              "${api}/${script}/versions?per_page=40")"
+            printf '%s' "$versions" | jq -cer --arg node "$node" '
+              if .success != true then error("Cloudflare versions request failed")
+              else {
+                node:$node,
+                versions:[
+                  .result.items[]?
+                  | {
+                      id,
+                      number,
+                      created_on:.metadata.created_on,
+                      source:.metadata.source
+                    }
+                ]
+              } end'
           done
 
       - name: Diagnose recent Zero Trust enrollment
