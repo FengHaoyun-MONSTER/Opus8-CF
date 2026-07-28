@@ -172,9 +172,6 @@ jobs:
             "acc2-n1|acc2-n1.${ROOT_DOMAIN_ACC2}"
             "acc2-n2|acc2-n2.${ROOT_DOMAIN_ACC2}"
           )
-          VERIFY_UUID=""
-          BEFORE_CONNECTIONS=0
-          BEFORE_BYTES=0
 
           smoke_with_retry() {
             local label="$1"
@@ -191,6 +188,61 @@ jobs:
             return 1
           }
 
+          login_body="$(jq -nc --arg password "$ADMIN_PASSWORD" '{password:$password}')"
+          admin_token="$(curl -fsS --max-time 20 -X POST \
+            "$CONTROL_API/api/admin/login" \
+            -H 'content-type: application/json' \
+            --data "$login_body" | jq -er '.token')"
+          echo "::add-mask::$admin_token"
+
+          verify_user_id=""
+          cleanup_verify_user() {
+            if [ -n "$verify_user_id" ]; then
+              curl -fsS --max-time 20 -X DELETE \
+                "$CONTROL_API/api/users/$verify_user_id" \
+                -H "authorization: Bearer $admin_token" >/dev/null || true
+            fi
+          }
+          trap cleanup_verify_user EXIT
+
+          create_body="$(jq -nc \
+            --arg username "opus8-routing-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            '{
+              username:$username,
+              unlock:true,
+              durationDays:1,
+              deviceLimit:20,
+              ipLimit24h:100,
+              trafficLimitBytes:0
+            }')"
+          verify_user="$(curl -fsS --max-time 20 -X POST \
+            "$CONTROL_API/api/users" \
+            -H "authorization: Bearer $admin_token" \
+            -H 'content-type: application/json' \
+            --data "$create_body")"
+          verify_user_id="$(printf '%s' "$verify_user" | jq -er '.user.id')"
+          VERIFY_UUID="$(printf '%s' "$verify_user" | jq -er '.user.uuid')"
+          echo "::add-mask::$verify_user_id"
+          echo "::add-mask::$VERIFY_UUID"
+
+          invalidation_acks="$(printf '%s' "$verify_user" \
+            | jq -er '.cacheInvalidation.acknowledged // 0')"
+          all_nodes_invalidated="$(printf '%s' "$verify_user" \
+            | jq -er '
+              ((.cacheInvalidation.acknowledgedNodes // [])
+              | contains(["acc1-n1","acc1-n2","acc2-n1","acc2-n2"]))
+            ')"
+          echo "INFO edge-policy-invalidation acknowledged=$invalidation_acks allNodes=$all_nodes_invalidated"
+          if [ "$all_nodes_invalidated" = "true" ]; then
+            sleep 3
+          else
+            echo "::warning::All nodes did not acknowledge invalidation; using TTL fallback"
+            sleep 16
+          fi
+
+          BEFORE_CONNECTIONS=0
+          BEFORE_BYTES=0
+
           for entry in "${nodes[@]}"; do
             IFS='|' read -r node host <<<"$entry"
             timestamp="$(date +%s)000"
@@ -201,36 +253,24 @@ jobs:
               "$CONTROL_API/api/nodes/$node/uuids" \
               -H "x-opus8-ts: $timestamp" \
               -H "x-opus8-node: $node" \
-              -H "x-opus8-sign: $signature" \
-              | jq -er '.uuids[0]')"
-            if [ -z "$VERIFY_UUID" ]; then
-              VERIFY_UUID="$uuid"
-              login_body="$(jq -nc --arg password "$ADMIN_PASSWORD" '{password:$password}')"
-              admin_token="$(curl -fsS --max-time 20 -X POST \
-                "$CONTROL_API/api/admin/login" \
-                -H 'content-type: application/json' \
-                --data "$login_body" | jq -er '.token')"
-              before_user="$(curl -fsS --max-time 20 "$CONTROL_API/api/users" \
-                -H "authorization: Bearer $admin_token" \
-                | jq -cer --arg uuid "$VERIFY_UUID" '.users[] | select(.uuid == $uuid)')"
-              BEFORE_CONNECTIONS="$(printf '%s' "$before_user" | jq -er '.connections')"
-              BEFORE_BYTES="$(printf '%s' "$before_user" | jq -er '.bytes_up + .bytes_down')"
-            elif [ "$uuid" != "$VERIFY_UUID" ]; then
-              echo "::error::Nodes returned inconsistent first active UUIDs"
-              exit 1
-            fi
+              -H "x-opus8-sign: $signature")"
+            printf '%s' "$uuid" | jq -e \
+              --arg uuid "$VERIFY_UUID" \
+              '(.uuids | index($uuid) != null) and (.unlockUuids | index($uuid) != null)' \
+              >/dev/null
+            echo "OK $node isolated-policy-active"
 
             smoke_with_retry "$node direct-cf-egress" \
               infra/scripts/smoke-vless.py \
               --url "wss://${host}/?ed=2560" \
-              --uuid "$uuid" \
+              --uuid "$VERIFY_UUID" \
               --target example.com \
               --target-port 80 \
               --expect-status 0
             smoke_with_retry "$node ai-landing-warp-egress" \
               infra/scripts/smoke-vless.py \
               --url "wss://${host}/?ed=2560" \
-              --uuid "$uuid" \
+              --uuid "$VERIFY_UUID" \
               --target openai.com \
               --target-port 80 \
               --expect-status 0
