@@ -144,6 +144,11 @@ else
     exit 12
   fi
   chmod +x "$BIN"
+  if ! curl -fsSL https://www.cloudflare.com/ips-v4 \
+    -o "$WORK_DIR/cfst/ip.txt"; then
+    echo "ERROR cloudflare-ip-ranges-download"
+    exit 13
+  fi
   if ! (
     cd "$WORK_DIR/cfst"
     "$BIN" -dd -tp 443 -n 200 -t 4 -o result.csv
