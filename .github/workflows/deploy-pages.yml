@@ -26,6 +26,7 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID_NUM1 }}
       PAGES_PROJECT_NAME: opus8cf-admin-openal
       ADMIN_CUSTOM_DOMAIN: admin.openal.uk
+      ADMIN_CUSTOM_ZONE: openal.uk
       ADMIN_CANONICAL_URL: https://admin.openal.uk
       ACCESS_ADMIN_EMAIL: ${{ secrets.ACCESS_ADMIN_EMAIL }}
       ACCESS_HOSTNAME: admin.openal.uk

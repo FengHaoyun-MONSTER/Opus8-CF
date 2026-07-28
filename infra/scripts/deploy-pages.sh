@@ -5,6 +5,7 @@ cd "$(dirname "$0")/../.."          # repo root
 REPO_ROOT="$PWD"
 PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-opus8cf-admin}"
 ADMIN_CUSTOM_DOMAIN="${ADMIN_CUSTOM_DOMAIN:-}"
+ADMIN_CUSTOM_ZONE="${ADMIN_CUSTOM_ZONE:-}"
 ADMIN_CANONICAL_URL="${ADMIN_CANONICAL_URL:-https://${PAGES_PROJECT_NAME}.pages.dev}"
 cd packages/admin-ui
 
@@ -65,6 +66,69 @@ if [ -n "$ADMIN_CUSTOM_DOMAIN" ]; then
     echo "OK pages-custom-domain-exists"
   fi
 
+  if [ -n "$ADMIN_CUSTOM_ZONE" ]; then
+    echo "STEP pages-custom-domain-dns"
+    ZONE_STATUS="$(
+      curl --silent --show-error \
+        --output /tmp/pages-zone.json \
+        --write-out '%{http_code}' \
+        --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+        "https://api.cloudflare.com/client/v4/zones?name=${ADMIN_CUSTOM_ZONE}&account.id=${CLOUDFLARE_ACCOUNT_ID}"
+    )"
+    if [ "$ZONE_STATUS" != "200" ] \
+      || ! jq -e '.success == true and (.result | length) == 1' /tmp/pages-zone.json >/dev/null 2>&1; then
+      echo "ERROR pages-custom-domain-zone status=${ZONE_STATUS}"
+      exit 14
+    fi
+    ZONE_ID="$(jq -r '.result[0].id' /tmp/pages-zone.json)"
+    RECORDS_STATUS="$(
+      curl --silent --show-error \
+        --output /tmp/pages-dns-records.json \
+        --write-out '%{http_code}' \
+        --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+        "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records?name=${ADMIN_CUSTOM_DOMAIN}"
+    )"
+    if [ "$RECORDS_STATUS" != "200" ] \
+      || ! jq -e '.success == true' /tmp/pages-dns-records.json >/dev/null 2>&1; then
+      echo "ERROR pages-custom-domain-dns-list status=${RECORDS_STATUS}"
+      exit 14
+    fi
+    RECORD_COUNT="$(jq '.result | length' /tmp/pages-dns-records.json)"
+    EXPECTED_TARGET="${PAGES_PROJECT_NAME}.pages.dev"
+    if [ "$RECORD_COUNT" -eq 0 ]; then
+      DNS_STATUS="$(
+        jq -n \
+          --arg name "$ADMIN_CUSTOM_DOMAIN" \
+          --arg content "$EXPECTED_TARGET" \
+          '{type: "CNAME", name: $name, content: $content, proxied: true, ttl: 1}' \
+          | curl --silent --show-error \
+            --request POST \
+            --output /tmp/pages-dns-add.json \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            --header 'Content-Type: application/json' \
+            --data-binary @- \
+            "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/dns_records"
+      )"
+      if ! [[ "$DNS_STATUS" =~ ^2[0-9][0-9]$ ]] \
+        || ! jq -e '.success == true' /tmp/pages-dns-add.json >/dev/null 2>&1; then
+        MESSAGE="$(jq -r '[.errors[]?.message] | join("; ")' /tmp/pages-dns-add.json 2>/dev/null || true)"
+        echo "ERROR pages-custom-domain-dns-add status=${DNS_STATUS} message=${MESSAGE:-unknown}"
+        exit 14
+      fi
+      echo "OK pages-custom-domain-dns-added"
+    elif [ "$RECORD_COUNT" -eq 1 ] \
+      && jq -e \
+        --arg target "$EXPECTED_TARGET" \
+        '.result[0].type == "CNAME" and .result[0].content == $target and .result[0].proxied == true' \
+        /tmp/pages-dns-records.json >/dev/null 2>&1; then
+      echo "OK pages-custom-domain-dns-exists"
+    else
+      echo "ERROR pages-custom-domain-dns-conflict count=${RECORD_COUNT}"
+      exit 14
+    fi
+  fi
+
   DOMAIN_ACTIVE=0
   for attempt in $(seq 1 36); do
     STATUS="$(
@@ -84,7 +148,7 @@ if [ -n "$ADMIN_CUSTOM_DOMAIN" ]; then
   if [ "$DOMAIN_ACTIVE" -ne 1 ]; then
     DOMAIN_STATE="$(jq -r '.result.status // "unknown"' /tmp/pages-domain-check.json 2>/dev/null || true)"
     echo "ERROR pages-custom-domain-not-active state=${DOMAIN_STATE:-unknown}"
-    exit 14
+    exit 15
   fi
   echo "OK pages-custom-domain-active"
 fi
