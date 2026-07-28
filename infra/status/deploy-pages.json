@@ -8,10 +8,11 @@
     "OK built",
     "STEP pages-project",
     "STEP deploy",
-    "OK deployed deploy=https://74013393.opus8cf-admin-openal.pages.dev",
+    "OK deployed deploy=https://9b54f7f8.opus8cf-admin-openal.pages.dev",
     "STEP pages-custom-domain",
-    "OK pages-custom-domain-added",
-    "ERROR pages-custom-domain-not-active state=pending"
+    "OK pages-custom-domain-exists",
+    "STEP pages-custom-domain-dns",
+    "ERROR pages-custom-domain-dns-list status=403"
   ],
   "tail": [
     "STEP install",
@@ -20,10 +21,11 @@
     "OK built",
     "STEP pages-project",
     "STEP deploy",
-    "OK deployed deploy=https://74013393.opus8cf-admin-openal.pages.dev",
+    "OK deployed deploy=https://9b54f7f8.opus8cf-admin-openal.pages.dev",
     "STEP pages-custom-domain",
     "OK <redacted>",
-    "ERROR <redacted> state=pending"
+    "STEP pages-custom-domain-dns",
+    "ERROR <redacted> status=403"
   ],
-  "finishedAt": "2026-07-28T09:28:25Z"
+  "finishedAt": "2026-07-28T09:31:56Z"
 }
