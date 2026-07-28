@@ -20,6 +20,7 @@ CONTROL_PLANE_URL="https://api.${CONTROL_ROOT_DOMAIN}"
 CUSTOM_HOST="${NODE_ID}.${ROOT_DOMAIN}"
 CUSTOM_URL="https://${CUSTOM_HOST}"
 WORKER_NAME="opus8cf-node-${NODE_ID}"
+OPUS8_BUILD_ID="${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
 
 echo "STEP build"
 if ! node build/build.mjs >/tmp/nb.log 2>&1; then echo "ERROR build"; tail -n 8 /tmp/nb.log; exit 10; fi
@@ -92,6 +93,7 @@ CONTROL_PLANE_URL = "${CONTROL_PLANE_URL}"
 NODE_ID = "${NODE_ID}"
 NODE_ACCOUNT_ALIAS = "${NODE_ACCOUNT_ALIAS}"
 NODE_REGION = "${NODE_REGION}"
+OPUS8_BUILD_ID = "${OPUS8_BUILD_ID}"
 GO2SOCKS5 = "${GO2}"
 
 [[kv_namespaces]]
@@ -111,11 +113,42 @@ HOST="$CUSTOM_HOST"
 echo "OK deployed workers=${WORKERS_URL:-unreported} custom=$URL"
 
 echo "STEP secrets"
-printf '%s' "$NODE_HMAC_SECRET" | wrangler secret put NODE_HMAC_SECRET >/dev/null 2>&1 && echo "OK secret hmac"
-printf '%s' "$NODE_UUID"        | wrangler secret put UUID            >/dev/null 2>&1 && echo "OK secret uuid"
+NODE_HMAC_SECRET="$NODE_HMAC_SECRET" NODE_UUID="$NODE_UUID" LAND="$LAND" node -e '
+  const secrets = {
+    NODE_HMAC_SECRET: process.env.NODE_HMAC_SECRET,
+    UUID: process.env.NODE_UUID,
+  };
+  if (process.env.LAND) secrets.SOCKS5 = process.env.LAND;
+  process.stdout.write(JSON.stringify(secrets));
+' | wrangler secret bulk >/dev/null 2>&1
 if [ -n "$LAND" ]; then
-  printf '%s' "$LAND" | wrangler secret put SOCKS5 >/dev/null 2>&1 && echo "OK secret socks5-landing(解锁已启用)"
+  echo "OK secrets-bulk hmac+uuid+socks5"
+else
+  echo "OK secrets-bulk hmac+uuid"
 fi
+
+echo "STEP wait-deployed-version"
+VERSION_READY=0
+for n in $(seq 1 36); do
+  CUSTOM_BUILD=$(curl -fsS --max-time 12 "${CUSTOM_URL}/__opus8/build" 2>/dev/null \
+    | EXPECTED_NODE="$NODE_ID" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j.nodeId===process.env.EXPECTED_NODE?String(j.buildId||""):"")}catch(e){}})' || true)
+  WORKERS_BUILD=""
+  if [ -n "$WORKERS_URL" ]; then
+    WORKERS_BUILD=$(curl -fsS --max-time 12 "${WORKERS_URL}/__opus8/build" 2>/dev/null \
+      | EXPECTED_NODE="$NODE_ID" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j.nodeId===process.env.EXPECTED_NODE?String(j.buildId||""):"")}catch(e){}})' || true)
+  fi
+  if [ "$CUSTOM_BUILD" = "$OPUS8_BUILD_ID" ] \
+    && { [ -z "$WORKERS_URL" ] || [ "$WORKERS_BUILD" = "$OPUS8_BUILD_ID" ]; }; then
+    VERSION_READY=1
+    break
+  fi
+  sleep 5
+done
+if [ "$VERSION_READY" != "1" ]; then
+  echo "ERROR deployed-version-not-active"
+  exit 12
+fi
+echo "OK deployed-version-active custom=1 workers=1"
 
 echo "STEP register"
 RCODE=000

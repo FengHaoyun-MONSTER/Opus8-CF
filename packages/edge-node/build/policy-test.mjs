@@ -126,7 +126,15 @@ const controlEnv = {
   NODE_ID: "test-node",
   NODE_HMAC_SECRET: "test-secret",
   CONTROL_PLANE_URL: "https://control.example",
+  OPUS8_BUILD_ID: "test-build",
 };
+const buildResponse = await OPUS8_handleControlRequest(new Request(
+  "https://node.example/__opus8/build",
+), controlEnv);
+const build = await buildResponse.json();
+if (buildResponse.status !== 200 || build.buildId !== "test-build") {
+  throw new Error("build probe must expose the active deployment identifier");
+}
 await kv.put(OPUS8_policyCacheKey(controlEnv), "cached");
 await kv.put("opus8:policy:v3", "legacy");
 const invalidateBody = JSON.stringify({ version: 12 });

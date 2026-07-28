@@ -280,6 +280,17 @@ function OPUS8_constantTimeEqual(left, right) {
 
 async function OPUS8_handleControlRequest(request, env) {
   const url = new URL(request.url);
+  if (url.pathname === "/__opus8/build" && request.method === "GET") {
+    return new Response(JSON.stringify({
+      nodeId: String(env?.NODE_ID || ""),
+      buildId: String(env?.OPUS8_BUILD_ID || ""),
+    }), {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
+  }
   const isInvalidation = url.pathname === "/__opus8/policy/invalidate";
   const isStatus = url.pathname === "/__opus8/policy/status";
   if (!isInvalidation && !isStatus) return null;
