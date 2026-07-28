@@ -120,6 +120,33 @@ echo "::add-mask::$PROBE_UUID"
 echo "OK probe-user-created"
 sleep 8
 
+echo "STEP verify-domain-baseline"
+for entry in "${REPRESENTATIVES[@]}"; do
+  IFS=$'\t' read -r node_id node_host <<<"$entry"
+  baseline_ok=0
+  for attempt in 1 2 3 4 5 6; do
+    if python3 infra/scripts/smoke-vless.py \
+      --url "wss://${node_host}/?ed=2560" \
+      --uuid "$PROBE_UUID" \
+      --target example.com \
+      --target-port 80 \
+      --expect-status 0 \
+      --timeout 12 >"$WORK_DIR/domain-baseline.log" 2>&1; then
+      baseline_ok=1
+      break
+    fi
+    [ "$attempt" -lt 6 ] && sleep 5
+  done
+  if [ "$baseline_ok" != "1" ]; then
+    reason="$(tail -n 1 "$WORK_DIR/domain-baseline.log" |
+      tr '\r\n\t' ' ' |
+      cut -c1-300)"
+    echo "ERROR domain-baseline node=$node_id reason=$reason"
+    exit 15
+  fi
+  echo "OK domain-baseline node=$node_id"
+done
+
 echo "STEP discover-candidates"
 RAW_IPS="$WORK_DIR/raw-ips.txt"
 if [ -s "$WS/infra/optimized-ips.txt" ]; then
@@ -241,8 +268,13 @@ for ip in "${CANDIDATES[@]}"; do
   [ "${#VALIDATED[@]}" -ge 3 ] && break
 done
 if [ "${#VALIDATED[@]}" -eq 0 ]; then
-  echo "ERROR no-candidate-passed-two-vantage-vless"
-  exit 15
+  POOL_RESPONSE="$(curl -fsS --max-time 20 \
+    "$CONTROL_PLANE_URL/api/optimized-ips" \
+    -H "authorization: Bearer $ADMIN_TOKEN")"
+  ACTIVE_COUNT="$(printf '%s' "$POOL_RESPONSE" | jq -r '.ips | length')"
+  echo "OK no-safe-candidates domain-fallback=active existingActivePool=$ACTIVE_COUNT"
+  echo "DONE published=0"
+  exit 0
 fi
 
 echo "STEP push-to-control"
