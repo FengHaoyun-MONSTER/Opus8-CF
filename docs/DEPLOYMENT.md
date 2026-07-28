@@ -73,13 +73,16 @@ Worker 的 `/api/operations/overview` 与用户活动接口；24 小时趋势和
 
 ## Token 权限要求
 
-`API_TOKEN` 至少需要：Account → Workers Scripts:Edit、Workers KV Storage:Edit、D1:Edit、
-Cloudflare Pages:Edit、Access: Apps and Policies Write；Zone → DNS:Edit（用自定义域时）。
+各账号对应的 `API_TOKEN` / `API_TOKEN_NUM1` 至少需要：Account → Workers Scripts:Edit、
+Workers KV Storage:Edit、D1:Edit、Cloudflare Pages:Edit；Zone → DNS:Edit（用自定义域时）。
+其中承载 Zero Trust 管理站的 `API_TOKEN_NUM1` 还需要 Access: Apps and Policies Write。
 你标注的是 "develop services" 权限组——preflight 会逐项探测并在 Summary 报告哪项缺失，据此补齐即可。
 ### Cloudflare Access 保护管理站
 
-生产管理站使用账号级 Cloudflare Access 应用保护
-`opus8cf-admin.pages.dev`。GitHub Secret `ACCESS_ADMIN_EMAIL` 保存唯一允许登录的管理员邮箱，
-主账号 `API_TOKEN` 还必须拥有账号级 `Access: Apps and Policies Write` 权限。执行
+生产管理站部署在拥有 Zero Trust 的 `openal.uk` 账号，使用账号级 Cloudflare Access 应用保护
+`admin.openal.uk`。旧地址 `opus8cf-admin.pages.dev` 只负责跳转到受保护域名。GitHub Secret
+`ACCESS_ADMIN_EMAIL` 保存唯一允许登录的管理员邮箱，`API_TOKEN_NUM1` 还必须拥有账号级
+`Access: Apps and Policies Write` 权限。执行
 `configure-admin-access` 工作流会幂等创建或更新应用及邮件白名单，并验证未认证请求已跳转到
-团队的 `cloudflareaccess.com` 登录页。管理站自身的管理员密码继续保留，形成两层认证。
+团队的 `cloudflareaccess.com` 登录页。生产 Pages 地址和哈希预览地址也使用相同白名单保护，
+避免绕过自定义域名。管理站自身的管理员密码继续保留，形成两层认证。

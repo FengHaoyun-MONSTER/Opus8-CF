@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/deploy-pages.yml'
       - 'infra/scripts/deploy-pages.sh'
+      - 'infra/scripts/configure-admin-access.sh'
+      - 'infra/pages-legacy/**'
       - 'packages/admin-ui/**'
 
 permissions:
@@ -20,8 +22,14 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN_NUM1 }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID_NUM1 }}
+      PAGES_PROJECT_NAME: opus8cf-admin-openal
+      ADMIN_CUSTOM_DOMAIN: admin.openal.uk
+      ADMIN_CANONICAL_URL: https://admin.openal.uk
+      ACCESS_ADMIN_EMAIL: ${{ secrets.ACCESS_ADMIN_EMAIL }}
+      ACCESS_HOSTNAME: admin.openal.uk
+      CF_ZERO_TRUST_TEAM: ${{ secrets.CF_ZERO_TRUST_TEAM }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,12 +41,37 @@ jobs:
         run: |
           set -o pipefail
           bash infra/scripts/deploy-pages.sh 2>&1 | tee /tmp/dp.log
+          DEPLOYMENT_URL=$(grep -oE 'https://[a-z0-9-]+\.opus8cf-admin-openal\.pages\.dev' /tmp/dp.log | tail -n1)
+          echo "deployment_url=$DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Protect custom admin hostname with Cloudflare Access
+        run: bash infra/scripts/configure-admin-access.sh
+
+      - name: Protect production Pages hostname with Cloudflare Access
+        env:
+          ACCESS_HOSTNAME: opus8cf-admin-openal.pages.dev
+        run: bash infra/scripts/configure-admin-access.sh
+
+      - name: Protect Pages preview hostnames with Cloudflare Access
+        env:
+          ACCESS_HOSTNAME: '*.opus8cf-admin-openal.pages.dev'
+          ACCESS_VERIFY_HOSTNAME: ${{ steps.deploy.outputs.deployment_url }}
+        run: bash infra/scripts/configure-admin-access.sh
+
+      - name: Redirect legacy admin hostname
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+        run: |
+          wrangler pages deploy infra/pages-legacy \
+            --project-name opus8cf-admin \
+            --branch main
 
       - name: Publish status back to repo
         if: always()
         run: |
           mkdir -p infra/status
-          URL=$(grep -oE 'https://[a-z0-9._-]+pages\.dev' /tmp/dp.log | tail -n1 || true)
+          URL=$(sed -n 's/^DONE url=//p' /tmp/dp.log | tail -n1 || true)
           MARKERS=$(grep -E '^(STEP|OK|ERROR|DONE) ' /tmp/dp.log || true)
           TAIL=$(tail -n 14 /tmp/dp.log | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g' || true)
           jq -n \

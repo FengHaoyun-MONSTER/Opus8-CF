@@ -7,13 +7,20 @@ set -euo pipefail
 : "${ACCESS_ADMIN_EMAIL:?ACCESS_ADMIN_EMAIL is required}"
 
 ACCESS_HOSTNAME="${ACCESS_HOSTNAME:-opus8cf-admin.pages.dev}"
-ACCESS_APP_NAME="${ACCESS_APP_NAME:-Opus8 Operations Admin}"
+ACCESS_VERIFY_HOSTNAME="${ACCESS_VERIFY_HOSTNAME:-$ACCESS_HOSTNAME}"
+ACCESS_VERIFY_HOSTNAME="${ACCESS_VERIFY_HOSTNAME#https://}"
+ACCESS_VERIFY_HOSTNAME="${ACCESS_VERIFY_HOSTNAME%%/*}"
+ACCESS_APP_NAME="${ACCESS_APP_NAME:-Opus8 Admin (${ACCESS_HOSTNAME})}"
 ACCESS_POLICY_NAME="${ACCESS_POLICY_NAME:-Opus8 administrator email}"
 ACCESS_SESSION_DURATION="${ACCESS_SESSION_DURATION:-8h}"
 CF_ZERO_TRUST_TEAM="${CF_ZERO_TRUST_TEAM:-}"
 
-if ! printf '%s' "$ACCESS_HOSTNAME" | grep -qE '^[a-z0-9.-]+\.[a-z]{2,}$'; then
+if ! printf '%s' "$ACCESS_HOSTNAME" | grep -qE '^(\*\.)?[a-z0-9.-]+\.[a-z]{2,}$'; then
   echo "ERROR invalid-access-hostname"
+  exit 10
+fi
+if ! printf '%s' "$ACCESS_VERIFY_HOSTNAME" | grep -qE '^[a-z0-9.-]+\.[a-z]{2,}$'; then
+  echo "ERROR invalid-access-verify-hostname"
   exit 10
 fi
 if ! printf '%s' "$ACCESS_ADMIN_EMAIL" | grep -qE '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'; then
@@ -166,7 +173,7 @@ for attempt in $(seq 1 30); do
       --output /dev/null \
       --dump-header "$HEADERS" \
       --write-out '%{http_code}' \
-      "https://${ACCESS_HOSTNAME}/"
+      "https://${ACCESS_VERIFY_HOSTNAME}/"
   )"
   LOCATION="$(tr -d '\r' < "$HEADERS" | awk 'BEGIN{IGNORECASE=1} /^location:/{sub(/^[^:]+:[[:space:]]*/, ""); print; exit}')"
   if [ "$STATUS" = "302" ] \

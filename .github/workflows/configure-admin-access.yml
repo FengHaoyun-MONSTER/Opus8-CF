@@ -15,12 +15,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN_NUM1 }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID_NUM1 }}
       ACCESS_ADMIN_EMAIL: ${{ secrets.ACCESS_ADMIN_EMAIL }}
-      ACCESS_HOSTNAME: opus8cf-admin.pages.dev
+      ACCESS_HOSTNAME: admin.openal.uk
       CF_ZERO_TRUST_TEAM: ${{ secrets.CF_ZERO_TRUST_TEAM }}
     steps:
       - uses: actions/checkout@v4
-      - name: Configure and verify Cloudflare Access
+      - name: Protect custom admin hostname
+        run: bash infra/scripts/configure-admin-access.sh
+      - name: Protect production Pages hostname
+        env:
+          ACCESS_HOSTNAME: opus8cf-admin-openal.pages.dev
+        run: bash infra/scripts/configure-admin-access.sh
+      - name: Read latest Pages deployment hostname
+        id: pages
+        run: |
+          RESPONSE=$(curl --fail-with-body --silent --show-error \
+            --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/opus8cf-admin-openal")
+          URL=$(jq -r '.result.canonical_deployment.url' <<< "$RESPONSE")
+          test -n "$URL" && test "$URL" != "null"
+          echo "deployment_url=$URL" >> "$GITHUB_OUTPUT"
+      - name: Protect Pages preview hostnames
+        env:
+          ACCESS_HOSTNAME: '*.opus8cf-admin-openal.pages.dev'
+          ACCESS_VERIFY_HOSTNAME: ${{ steps.pages.outputs.deployment_url }}
         run: bash infra/scripts/configure-admin-access.sh
