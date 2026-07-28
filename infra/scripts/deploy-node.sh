@@ -73,7 +73,10 @@ echo "OK kv=${KVID:0:8}…"
 # AI 解锁白名单（*<domain> 形式，仅命中这些域名走落地）
 GO2=$(sed 's/^/*/' "${REPO_ROOT}/infra/ai-unlock.txt" 2>/dev/null | paste -sd, -)
 
-NODE_UUID=$(cat /proc/sys/kernel/random/uuid)
+NODE_UUID_HEX=$(printf 'node-fallback:%s' "$NODE_ID" \
+  | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r \
+  | cut -d' ' -f1)
+NODE_UUID="${NODE_UUID_HEX:0:8}-${NODE_UUID_HEX:8:4}-4${NODE_UUID_HEX:13:3}-8${NODE_UUID_HEX:17:3}-${NODE_UUID_HEX:20:12}"
 
 cat > wrangler.toml <<EOF
 name = "${WORKER_NAME}"

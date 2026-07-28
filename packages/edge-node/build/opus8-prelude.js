@@ -558,13 +558,7 @@ async function OPUS8_requireAdmission(request, uuidRef, force = false) {
   })().finally(() => {
     runtime.admissionPromise = null;
   });
-  const admitted = await runtime.admissionPromise;
-  if (
-    runtime.admitted &&
-    runtime.transport !== "websocket" &&
-    !runtime.connectionReported
-  ) OPUS8_scheduleUsage(runtime, false);
-  return admitted;
+  return runtime.admissionPromise;
 }
 
 function OPUS8_queueUsageEvent(runtime) {
