@@ -1,5 +1,5 @@
 {
-  "result": "success",
+  "result": "failure",
   "markers": [
     "STEP prepare-vantages",
     "OK vantages=github-runner,landing-vps",
@@ -10,19 +10,7 @@
     "STEP create-isolated-probe-user",
     "OK probe-user-created",
     "STEP verify-domain-baseline",
-    "OK domain-baseline node=acc1-n1",
-    "OK domain-baseline node=acc2-n1",
-    "STEP discover-candidates",
-    "OK candidate-source=cfst",
-    "OK candidates count=5",
-    "STEP validate-candidates",
-    "WARN candidate=173.245.49.26 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
-    "WARN candidate=172.67.132.187 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
-    "WARN candidate=104.24.60.94 vantage=github-runner node=acc1-n1 reason=vless smoke failed: The read operation timed out ",
-    "WARN candidate=162.159.152.44 vantage=landing-vps node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
-    "WARN candidate=172.67.82.65 vantage=github-runner node=acc2-n1 reason=vless smoke failed: server closed before VLESS response ",
-    "OK no-safe-candidates domain-fallback=active existingActivePool=0",
-    "DONE published=0"
+    "ERROR domain-baseline node=acc1-n1 reason=vless smoke failed: server closed before VLESS response "
   ],
-  "finishedAt": "2026-07-28T13:44:30Z"
+  "finishedAt": "2026-07-28T17:46:53Z"
 }
