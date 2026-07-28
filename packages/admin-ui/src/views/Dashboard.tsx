@@ -301,7 +301,15 @@ export function Dashboard() {
                     <div>
                       <strong>{node.id}</strong>
                       <span>
-                        {node.region || "未标注"} · {relTime(node.lastSeen)}
+                        {node.region || "未标注"} ·{" "}
+                        {node.health === "healthy"
+                          ? "探测正常"
+                          : node.health === "banned"
+                            ? "已摘除"
+                            : node.health === "degraded"
+                              ? "探测降级"
+                              : "等待检查"}{" "}
+                        · {relTime(node.lastSeen)}
                       </span>
                     </div>
                     <div className="node-meter-value">

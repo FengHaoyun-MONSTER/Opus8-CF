@@ -302,6 +302,9 @@ body {
   color: var(--red);
   background: rgba(248, 81, 73, 0.14);
 }
+.text-danger {
+  color: var(--red);
+}
 
 /* ---------- forms / buttons ---------- */
 .create-bar {

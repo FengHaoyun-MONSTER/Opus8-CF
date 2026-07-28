@@ -55,6 +55,11 @@ import { sealJson } from "./secret-box";
 import { admitConnection, recordUsage, type AdmissionInput } from "./usage";
 import { getEdgePolicyVersion, publishEdgePolicyChange } from "./policy-cache";
 import { operationsOverview, userOperationsActivity } from "./operations";
+import {
+  applyNodeHealthReport,
+  nodeHealthOverview,
+  type NodeHealthReportInput,
+} from "./node-health";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const CORS = {
@@ -143,6 +148,19 @@ export default {
       if (p === "/api/operations/overview" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         return json(await operationsOverview(env));
+      }
+      if (p === "/api/operations/node-health" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return json(await nodeHealthOverview(env));
+      }
+      if (p === "/api/operations/node-health/report" && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        try {
+          const input = (await req.json()) as NodeHealthReportInput;
+          return json(await applyNodeHealthReport(env, input));
+        } catch (error) {
+          return err((error as Error).message, 400);
+        }
       }
       const activityMatch = p.match(/^\/api\/users\/([^/]+)\/activity$/);
       if (activityMatch && m === "GET") {

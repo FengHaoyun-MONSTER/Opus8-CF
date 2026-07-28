@@ -3,6 +3,7 @@ import { evaluateAccessStatus } from "./access-status";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
+const NODE_HEALTH_STALE_MS = 30 * 60_000;
 
 interface UsageBucket {
   ts: number;
@@ -143,6 +144,11 @@ export async function operationsOverview(env: Env) {
       health: node.health,
       enabled: Number(node.enabled),
       lastSeen: node.last_seen,
+      lastChecked: node.health_last_checked ?? null,
+      directOk: node.health_direct_ok ?? null,
+      landingOk: node.health_landing_ok ?? null,
+      directLatencyMs: node.health_direct_latency_ms ?? null,
+      landingLatencyMs: node.health_landing_latency_ms ?? null,
       bytesUp: usage?.bytesUp || 0,
       bytesDown: usage?.bytesDown || 0,
       connections: usage?.connections || 0,
@@ -159,7 +165,13 @@ export async function operationsOverview(env: Env) {
       detail: user.accessReason,
     }));
   const nodeAlerts = nodes
-    .filter((node) => Number(node.enabled) !== 1 || node.health !== "healthy")
+    .filter(
+      (node) =>
+        Number(node.enabled) !== 1 ||
+        node.health !== "healthy" ||
+        !node.health_last_checked ||
+        now - node.health_last_checked > NODE_HEALTH_STALE_MS,
+    )
     .map((node) => ({
       kind: "node" as const,
       severity:
@@ -167,7 +179,15 @@ export async function operationsOverview(env: Env) {
       id: node.id,
       title: node.hostname || node.id,
       detail:
-        Number(node.enabled) !== 1 ? "节点已停用" : `节点状态：${node.health}`,
+        Number(node.enabled) !== 1
+          ? "节点已停用"
+          : !node.health_last_checked
+            ? "尚未执行真实 VLESS 探测"
+            : now - node.health_last_checked > NODE_HEALTH_STALE_MS
+              ? `真实探测已超过 ${Math.round(
+                  (now - node.health_last_checked) / 60_000,
+                )} 分钟未更新`
+              : node.health_last_error || `节点状态：${node.health}`,
     }));
 
   const windowTrafficBytes = series.reduce(

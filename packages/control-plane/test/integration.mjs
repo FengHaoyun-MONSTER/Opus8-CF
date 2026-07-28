@@ -3,7 +3,8 @@ import crypto from "node:crypto";
 const base = process.env.OPUS8_TEST_BASE || "http://127.0.0.1:8787";
 const adminPassword = process.env.OPUS8_TEST_ADMIN || "test-admin";
 const nodeSecret = process.env.OPUS8_TEST_NODE_SECRET || "test-node-hmac";
-const nodeId = "test-node";
+const nodeId = `test-node-${process.pid}-${Date.now()}`;
+const nodeHost = `${nodeId}.example.com`;
 const username = "__limits_integration__";
 
 function assert(value, message) {
@@ -47,6 +48,38 @@ const adminHeaders = {
   authorization: `Bearer ${login.token}`,
   "content-type": "application/json",
 };
+
+await jsonResponse(
+  await signedPost("/api/nodes/register", {
+    nodeId,
+    accountAlias: "integration",
+    hostname: nodeHost,
+    region: "test",
+    capabilities: ["vless", "ws"],
+  }),
+);
+
+const reportNodeHealth = async (runId, directOk, landingOk = true) =>
+  jsonResponse(
+    await fetch(`${base}/api/operations/node-health/report`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        runId,
+        results: [
+          {
+            nodeId,
+            directOk,
+            landingOk,
+            directLatencyMs: directOk ? 42 : null,
+            landingLatencyMs: landingOk ? 84 : null,
+            directError: directOk ? null : "integration direct failure",
+            landingError: landingOk ? null : "integration landing failure",
+          },
+        ],
+      }),
+    }),
+  );
 
 const initialUsers = await jsonResponse(
   await fetch(`${base}/api/users`, {
@@ -166,6 +199,90 @@ try {
     `operations overview must expose stable dashboard data: ${JSON.stringify(overview)}`,
   );
 
+  const runPrefix = `integration-health-${Date.now()}`;
+  const failedOnce = await reportNodeHealth(`${runPrefix}-fail-1`, false);
+  const failedTwice = await reportNodeHealth(`${runPrefix}-fail-2`, false);
+  const failedThird = await reportNodeHealth(`${runPrefix}-fail-3`, false);
+  assert(
+    failedOnce.nodes.find((item) => item.id === nodeId)?.health ===
+      "degraded" &&
+      failedTwice.nodes.find((item) => item.id === nodeId)?.health ===
+        "degraded" &&
+      failedThird.nodes.find((item) => item.id === nodeId)?.health === "banned",
+    "node must degrade twice and be banned after the third direct failure",
+  );
+  const duplicateFailure = await reportNodeHealth(
+    `${runPrefix}-fail-3`,
+    false,
+  );
+  const duplicateNode = duplicateFailure.nodes.find(
+    (item) => item.id === nodeId,
+  );
+  assert(
+    duplicateFailure.idempotent === true &&
+      duplicateNode?.health_consecutive_failures === 3,
+    `duplicate health report must be idempotent: ${JSON.stringify(duplicateFailure)}`,
+  );
+
+  const bannedSubscription = await fetch(created.subUrl);
+  const bannedBody = Buffer.from(
+    await bannedSubscription.text(),
+    "base64",
+  ).toString("utf8");
+  assert(
+    !bannedBody.includes(nodeHost),
+    `banned node must be removed from subscription: ${bannedBody}`,
+  );
+
+  const recoveredOnce = await reportNodeHealth(
+    `${runPrefix}-recover-1`,
+    true,
+  );
+  const recoveredTwice = await reportNodeHealth(
+    `${runPrefix}-recover-2`,
+    true,
+  );
+  assert(
+    recoveredOnce.nodes.find((item) => item.id === nodeId)?.health ===
+      "banned" &&
+      recoveredTwice.nodes.find((item) => item.id === nodeId)?.health ===
+        "healthy",
+    "banned node must require two consecutive direct successes to recover",
+  );
+
+  const landingFailure = await reportNodeHealth(
+    `${runPrefix}-landing-fail`,
+    true,
+    false,
+  );
+  assert(
+    landingFailure.nodes.find((item) => item.id === nodeId)?.health ===
+      "degraded",
+    "landing-only failure must degrade but not ban the node",
+  );
+  const degradedSubscription = Buffer.from(
+    await (await fetch(created.subUrl)).text(),
+    "base64",
+  ).toString("utf8");
+  assert(
+    degradedSubscription.includes(nodeHost),
+    "degraded node must remain in the subscription",
+  );
+
+  const healthOverview = await jsonResponse(
+    await fetch(`${base}/api/operations/node-health`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    healthOverview.thresholds.failure === 3 &&
+      healthOverview.thresholds.recovery === 2 &&
+      healthOverview.events.some((item) => item.nodeId === nodeId),
+    `health overview must expose policy and event history: ${JSON.stringify(healthOverview)}`,
+  );
+
+  await reportNodeHealth(`${runPrefix}-final-healthy`, true, true);
+
   const subscription = await fetch(created.subUrl);
   const usageHeader = subscription.headers.get("subscription-userinfo") || "";
   assert(
@@ -201,6 +318,12 @@ try {
   console.log("OK policy-version-invalidation-summary");
   console.log("OK operations-overview");
   console.log("OK user-activity-privacy-view");
+  console.log("OK node-health-failure-threshold");
+  console.log("OK node-health-idempotent-report");
+  console.log("OK banned-node-subscription-removal");
+  console.log("OK node-health-recovery-threshold");
+  console.log("OK landing-only-degradation");
+  console.log("OK node-health-overview");
 } finally {
   if (userId) {
     await fetch(`${base}/api/users/${userId}`, {

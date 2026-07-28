@@ -17,6 +17,48 @@ CREATE TABLE IF NOT EXISTS nodes (
   created_at    INTEGER NOT NULL
 );
 
+-- 外部端到端健康检查状态。节点心跳只证明 Worker 仍能运行，不能覆盖这里的真实 VLESS 探测结论。
+CREATE TABLE IF NOT EXISTS node_health_state (
+  node_id               TEXT PRIMARY KEY,
+  consecutive_failures  INTEGER NOT NULL DEFAULT 0,
+  consecutive_successes INTEGER NOT NULL DEFAULT 0,
+  direct_ok             INTEGER,
+  landing_ok            INTEGER,
+  direct_latency_ms     INTEGER,
+  landing_latency_ms    INTEGER,
+  last_checked          INTEGER,
+  last_success          INTEGER,
+  last_failure          INTEGER,
+  last_error            TEXT,
+  last_run_id           TEXT,
+  updated_at            INTEGER NOT NULL,
+  FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS node_health_runs (
+  run_id       TEXT PRIMARY KEY,
+  checked_at   INTEGER NOT NULL,
+  received_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS node_health_events (
+  run_id             TEXT NOT NULL,
+  node_id             TEXT NOT NULL,
+  checked_at          INTEGER NOT NULL,
+  direct_ok           INTEGER NOT NULL,
+  landing_ok          INTEGER NOT NULL,
+  direct_latency_ms   INTEGER,
+  landing_latency_ms  INTEGER,
+  error               TEXT,
+  details             TEXT,
+  PRIMARY KEY (run_id, node_id),
+  FOREIGN KEY (run_id) REFERENCES node_health_runs(run_id) ON DELETE CASCADE,
+  FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_health_events_checked
+  ON node_health_events(checked_at DESC);
+
 -- 用户/UUID 注册表：管理员创建；边缘节点据此鉴权
 CREATE TABLE IF NOT EXISTS users (
   id          TEXT PRIMARY KEY,

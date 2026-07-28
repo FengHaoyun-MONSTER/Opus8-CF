@@ -42,6 +42,17 @@ export interface NodeRow {
   enabled: number;
   last_seen: number | null;
   created_at: number;
+  health_consecutive_failures?: number;
+  health_consecutive_successes?: number;
+  health_direct_ok?: number | null;
+  health_landing_ok?: number | null;
+  health_direct_latency_ms?: number | null;
+  health_landing_latency_ms?: number | null;
+  health_last_checked?: number | null;
+  health_last_success?: number | null;
+  health_last_failure?: number | null;
+  health_last_error?: string | null;
+  health_last_run_id?: string | null;
 }
 
 export interface CreateUserInput {
@@ -141,6 +152,11 @@ export interface OperationsOverview {
     health: string;
     enabled: number;
     lastSeen: number | null;
+    lastChecked: number | null;
+    directOk: number | null;
+    landingOk: number | null;
+    directLatencyMs: number | null;
+    landingLatencyMs: number | null;
     bytesUp: number;
     bytesDown: number;
     connections: number;

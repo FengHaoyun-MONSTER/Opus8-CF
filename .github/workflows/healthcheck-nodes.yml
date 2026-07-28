@@ -1,0 +1,25 @@
+name: healthcheck-nodes
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/10 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: healthcheck-nodes
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Probe every enabled node
+        run: bash infra/scripts/healthcheck-nodes.sh

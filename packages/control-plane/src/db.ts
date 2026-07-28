@@ -65,7 +65,21 @@ export async function getUserLimits(
 
 export async function listNodes(env: Env): Promise<NodeRecord[]> {
   const { results } = await env.DB.prepare(
-    "SELECT * FROM nodes ORDER BY created_at DESC",
+    `SELECT n.*,
+       COALESCE(h.consecutive_failures,0) AS health_consecutive_failures,
+       COALESCE(h.consecutive_successes,0) AS health_consecutive_successes,
+       h.direct_ok AS health_direct_ok,
+       h.landing_ok AS health_landing_ok,
+       h.direct_latency_ms AS health_direct_latency_ms,
+       h.landing_latency_ms AS health_landing_latency_ms,
+       h.last_checked AS health_last_checked,
+       h.last_success AS health_last_success,
+       h.last_failure AS health_last_failure,
+       h.last_error AS health_last_error,
+       h.last_run_id AS health_last_run_id
+     FROM nodes n
+     LEFT JOIN node_health_state h ON h.node_id=n.id
+     ORDER BY n.created_at DESC`,
   ).all<NodeRecord>();
   return results ?? [];
 }
@@ -77,7 +91,8 @@ export async function upsertNode(env: Env, n: NodeRecord): Promise<void> {
      ON CONFLICT(id) DO UPDATE SET
        account_alias=excluded.account_alias, hostname=excluded.hostname, region=excluded.region,
        capabilities=excluded.capabilities, preferred_ip=excluded.preferred_ip,
-       health=excluded.health, last_seen=excluded.last_seen`,
+       health=CASE WHEN nodes.health='unknown' THEN excluded.health ELSE nodes.health END,
+       last_seen=excluded.last_seen`,
   )
     .bind(
       n.id,
@@ -96,14 +111,14 @@ export async function upsertNode(env: Env, n: NodeRecord): Promise<void> {
 export async function touchNode(
   env: Env,
   id: string,
-  health: NodeRecord["health"],
+  _health: NodeRecord["health"],
   preferredIp: string | null,
   ts: number,
 ): Promise<void> {
   await env.DB.prepare(
-    "UPDATE nodes SET last_seen=?2, health=?3, preferred_ip=COALESCE(?4, preferred_ip) WHERE id=?1",
+    "UPDATE nodes SET last_seen=?2, preferred_ip=COALESCE(?3, preferred_ip) WHERE id=?1",
   )
-    .bind(id, ts, health, preferredIp)
+    .bind(id, ts, preferredIp)
     .run();
 }
 
