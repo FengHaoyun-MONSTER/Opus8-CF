@@ -1,38 +1,9 @@
 {
   "node": "acc2-n2",
-  "result": "success",
-  "nodeUrl": "https://acc2-n2.openal.uk",
+  "result": "failure",
+  "nodeUrl": "",
   "markers": [
-    "STEP build",
-    "OK built (OK build: dist/index.js (306807 bytes), patch replaced 961 chars)",
-    "OK policy-test",
-    "STEP probe-landing",
-    "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
-    "STEP kv",
-    "OK kv=f634843a…",
-    "STEP deploy",
-    "OK deployed workers=https://opus8cf-node-acc2-n2.fengy2020212122.workers.dev custom=https://acc2-n2.openal.uk",
-    "STEP secrets",
-    "OK secrets-bulk hmac+uuid+socks5",
-    "STEP wait-deployed-version",
-    "OK deployed-version-active custom=1 workers=1",
-    "STEP register",
-    "OK registered host=acc2-n2.openal.uk",
-    "STEP wait-custom-domain",
-    "OK custom-domain-ready",
-    "STEP verify",
-    "OK node-tls-http=200",
-    "OK uuids-endpoint-count=4",
-    "OK landing-bundle-encrypted",
-    "STEP canary-user",
-    "OK canary-user-created",
-    "INFO edge-policy-invalidation acknowledged=4 target=1",
-    "STEP policy-status",
-    "INFO policy-status={\"invalidatedVersion\":1785219013710,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785219017530,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785219013710,\"liveUuidCount\":5,\"liveContainsUuid\":true,\"liveError\":\"\"}",
-    "STEP vless-smoke",
-    "OK vless-ws-auth-egress",
-    "OK unlock=on(AI域名走落地)",
-    "DONE url=https://acc2-n2.openal.uk"
+    "ERROR invalid-node-deploy-suffix"
   ],
-  "finishedAt": "2026-07-28T06:14:26Z"
+  "finishedAt": "2026-07-28T07:35:54Z"
 }
