@@ -135,6 +135,16 @@ CREATE TABLE IF NOT EXISTS usage_events (
 CREATE INDEX IF NOT EXISTS idx_usage_events_created
   ON usage_events(created_at);
 
+-- 边缘策略版本。用户准入策略变更时单调递增，用于主动失效各节点缓存。
+CREATE TABLE IF NOT EXISTS runtime_state (
+  key         TEXT PRIMARY KEY,
+  value       INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO runtime_state (key, value, updated_at)
+VALUES ('edge_policy_version', 1, 0);
+
 -- 计费预留（P7，一期不写入）
 CREATE TABLE IF NOT EXISTS orders (
   id          TEXT PRIMARY KEY,

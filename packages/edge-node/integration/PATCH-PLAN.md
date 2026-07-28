@@ -1,7 +1,8 @@
 # 边缘节点接入方案（把平台层注入现有 `_worker.js`）
 
-原则：**不重写** `_worker.js` 里久经考验的代理核心（VLESS/gRPC/XHTTP 解析、ECH、TLS 分片、proxyIP/NAT64、
-拨号），只在 4 个明确锚点注入平台能力。上游更新时，重打这 4 个补丁即可。
+原则：**不重写** `_worker.js` 里久经考验的代理核心（VLESS/XHTTP 解析、ECH、TLS 分片、proxyIP/NAT64、
+拨号），只在明确锚点注入平台能力。vendor 中的 gRPC 源码仅为上游同步保留，生产构建会把入口替换为
+404，并强制分享链接回落到 WS/XHTTP。上游更新时重新执行构建补丁即可。
 
 ## 打包方式
 
@@ -21,9 +22,8 @@
   const state = await getActiveState(env)
   let activeUUIDs = buildActiveUuidSet(state, userID)   // 同步来的用户 UUID + 本地管理员兜底
   ```
-- 效果：面板新增/禁用/到期 → 节点下次拉取即生效；秒级吊销可加控制面 purge。
-  WS/gRPC/XHTTP 三个处理器（`处理WS请求` **L112** / `处理gRPC请求` **L119** / `处理XHTTP请求` **L122**）
-  已经吃 `activeUUIDs`，无需再改。
+- 效果：面板新增/修改/停用/删除会推进策略版本，控制面主动通知节点清理独立缓存；通知失败时由
+  15 秒 TTL 兜底。WS/XHTTP 处理器使用同一份 `activeUUIDs`，gRPC 入口在构建时禁用。
 
 ### ② 分流出口 —— 用 AI 解锁清单决定走 SOCKS5 还是 CF
 - 现状：`GO2SOCKS5` / `SOCKS5白名单`（约 **L93**）按域名白名单决定是否走 SOCKS5。

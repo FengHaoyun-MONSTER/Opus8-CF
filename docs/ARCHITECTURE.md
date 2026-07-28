@@ -34,7 +34,7 @@
 Opus8‑CF 的五个「别人没有」的核心创新：
 
 1. **统一控制面覆盖分散 Worker**：中心 D1 注册表管理跨账号的所有节点、用户、订阅，而部署仍然分散免费。
-2. **实时 UUID 同步总线**：让分散的边缘节点按用户级鉴权 + 秒级吊销，彻底解决「CF Worker 只认自己 UUID、无法接入面板每用户 UUID」这个所有面板都卡住的问题。
+2. **实时 UUID 同步总线**：让分散的边缘节点按用户级鉴权；用户变更推进单调版本并主动通知节点清理独立缓存，15 秒 TTL 负责失败兜底。
 3. **按用户的可切换分流出口**：解锁节点(走落地)与普通节点(走 CF)按套餐/域名下发，集成进订阅。
 4. **自愈轮换**：CI 健康探测发现被封的 Worker/域名，自动换域名/换账号重部署，订阅链接不变、客户端下次拉取即恢复。
 5. **优选 IP 全自动**：CloudflareSpeedTest 进 CI，定时刷新优选 IP 灌进节点与订阅。
@@ -62,7 +62,7 @@ Opus8‑CF 的五个「别人没有」的核心创新：
           │ wrangler deploy                 ▼                        ▼
    ┌──────▼───────────────────────────────────────────────────┐   ┌──────────────┐
    │                数据面 Edge Nodes (N×账号 × M×Worker)       │   │  终端用户客户端 │
-   │  增强版 edgetunnel：VLESS/Trojan-WS · gRPC · XHTTP         │◀──┤  (导入订阅)    │
+   │  增强版 edgetunnel：生产 VLESS-WS · XHTTP 预留             │◀──┤  (导入订阅)    │
    │  ECH · TLS分片 · 优选IP/域名 · proxyIP · NAT64 兜底         │   └──────────────┘
    │  多租户鉴权(校验同步来的UUID集) · 可切换分流出口            │
    └───────────────────────┬───────────────────┬──────────────┘
@@ -77,10 +77,10 @@ Opus8‑CF 的五个「别人没有」的核心创新：
 ### 数据流关键路径
 
 1. **部署**：CI 用「多账号矩阵」把边缘节点 Worker 批量 `wrangler deploy` 到 N 个 CF 账号，每个节点部署后向控制面 `POST /api/nodes/register`（带签名）自报身份(账号别名、域名、地区、能力、优选IP)。
-2. **鉴权同步**：边缘节点冷启动/定时向控制面 `GET /api/nodes/uuids?node=<id>`（带 HMAC 签名）拉取「当前有效用户 UUID 集」，写入本地 KV/内存；控制面在用户新增/到期/封禁时使名单变更，节点下次拉取即生效（可选：主动 purge KV 做秒级吊销）。
+2. **鉴权同步**：边缘节点冷启动/定时向控制面 `GET /api/nodes/<id>/uuids`（带 HMAC 签名）拉取「当前有效用户 UUID 集」，写入以节点 ID 隔离的 KV 缓存。控制面在用户新增、修改、停用或删除时推进策略版本，并向每个节点的内部端点发送 HMAC 签名通知清理缓存；通知失败时最迟由 15 秒 TTL 重新拉取。
 3. **连接**：用户客户端用其专属 UUID 连边缘节点 → 节点校验 UUID ∈ 有效集 → 按域名决定走 CF 出口还是 SOCKS5 落地 → 出网。
 4. **订阅**：客户端定时拉 `GET /sub/<token>` → 控制面按该用户的节点组 + 最新优选IP 实时生成订阅 → 被封节点已被健康探测剔除，用户无感知愈合。
-5. **遥测**：节点用 `ctx.waitUntil` 把连接数/粗略字节数尽力回传控制面聚合（硬限额在 CF 上是弱能力，见 §7 诚实说明）。
+5. **遥测**：节点按 UUID 汇总 WebSocket 连接数和上下行字节，以幂等事件批量回传控制面；控制面写入 D1 并用于流量额度判断。
 
 ---
 
@@ -88,10 +88,10 @@ Opus8‑CF 的五个「别人没有」的核心创新：
 
 ### 3.1 边缘节点 Edge Node（数据面）— 增强版 edgetunnel
 
-以你本地 `_worker.js` 为基线**模块化重构**（拆成可维护的 src/，用 esbuild/wrangler 打包成单文件产物），**全部保留**其现有能力，并新增平台化能力：
+以你本地 `_worker.js` 为上游基线，通过可重复构建补丁生成单文件 Worker，并新增平台化能力。上游 gRPC 实现仅为便于同步继续保留在 vendor 源码中，生产构建会拦截并返回 404：
 
 保留（继承自 edgetunnel / yonggekkk / DUQIA / ToyaX66）：
-- 协议：VLESS/Trojan over WS、gRPC、XHTTP（`处理WS请求` / `处理gRPC请求` / `处理XHTTP请求`）。
+- 协议：生产订阅和节点能力仅下发 VLESS over WebSocket；XHTTP 作为预留能力保留；gRPC 不下发且运行时禁用。
 - 抗审查：ECH（`ECHLINK参数`）、TLS 分片（`TLS分片参数`）、优选IP/优选域名。
 - 出口：proxyIP 反代、NAT64 兜底（`解析地址端口`）、SOCKS5/HTTP 落地分流（`GO2SOCKS5` / `SOCKS5白名单`）。
 - 性能：竞速拨号、TCP 并发拨号、运营商识别降级。
@@ -112,7 +112,7 @@ Opus8‑CF 的五个「别人没有」的核心创新：
 - **① 节点注册表**（D1 `nodes`）：node_id、account_alias、hostname、region、capabilities、preferred_ip、health、last_seen。
 - **② 用户/UUID 注册表**（D1 `users`）：user_id、uuid、plan、node_group、expire_at、enabled、sub_token。
 - **③ 订阅生成器**：按用户节点组 + 实时优选IP 生成 Clash / sing‑box / v2rayN / base64 多格式（继承 cmliu‑SUB / WorkerVless2sub 思路，内建化）。
-- **④ UUID 同步总线**：给边缘节点提供「有效 UUID 集」拉取端点 + 变更时可选主动 purge。
+- **④ UUID 同步总线**：提供有效 UUID 集拉取端点、单调策略版本和用户变更后的节点级主动失效。
 - **⑤ Admin API**：用户/节点/套餐/订阅 CRUD，JWT 鉴权。
 - **⑥ 遥测汇聚**：接收节点上报，聚合到 D1 `usage`。
 - **⑦ 计费接口（一期仅预留）**：`plans`、`orders` 表结构与 hook 点先留好，不实现支付。

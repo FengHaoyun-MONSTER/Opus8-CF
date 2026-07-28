@@ -24,6 +24,7 @@ import {
 } from "./landings";
 import { sealJson } from "./secret-box";
 import { admitConnection, recordUsage, type AdmissionInput } from "./usage";
+import { getEdgePolicyVersion, publishEdgePolicyChange } from "./policy-cache";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const CORS = {
@@ -119,9 +120,15 @@ export default {
           created_at: now,
         };
         await insertUser(env, user, { deviceLimit, ipLimit24h, trafficLimitBytes });
+        const policy = await publishEdgePolicyChange(env);
         // 订阅链接用 worker 实际访问源（workers.dev）；接入自定义域名后可改为 SUB_BASE。
         const base = env.SUB_BASE || url.origin;
-        return json({ user, subUrl: `${base}/sub/${user.sub_token}` }, 201);
+        return json({
+          user,
+          subUrl: `${base}/sub/${user.sub_token}`,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        }, 201);
       }
       const userMatch = p.match(/^\/api\/users\/([^/]+)$/);
       if (userMatch && m === "PATCH") {
@@ -166,12 +173,22 @@ export default {
           ipLimit24h: ipLimit24h as number | undefined,
           trafficLimitBytes: trafficLimitBytes as number | undefined,
         });
-        return json({ ok: true });
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          ok: true,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
       }
       if (userMatch && m === "DELETE") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         await deleteUser(env, userMatch[1]);
-        return json({ ok: true });
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          ok: true,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
       }
       const usageResetMatch = p.match(/^\/api\/users\/([^/]+)\/usage\/reset$/);
       if (usageResetMatch && m === "POST") {
@@ -201,11 +218,23 @@ export default {
             invalidHosts: validated.invalidHosts.slice(0, 20),
           }, 400);
         }
-        return json(await putUnlockHosts(env, validated.hosts));
+        const routing = await putUnlockHosts(env, validated.hosts);
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          ...routing,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
       }
       if (p === "/api/settings/unlock-hosts" && m === "DELETE") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
-        return json(await resetUnlockHosts(env));
+        const routing = await resetUnlockHosts(env);
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          ...routing,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
       }
 
       // ---------- 多落地机配置（admin） ----------
@@ -216,11 +245,18 @@ export default {
       if (p === "/api/landings" && m === "POST") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         const input = (await req.json().catch(() => ({}))) as LandingInput;
+        let landing: Awaited<ReturnType<typeof createLanding>>;
         try {
-          return json({ landing: await createLanding(env, input) }, 201);
+          landing = await createLanding(env, input);
         } catch (error) {
           return err((error as Error).message, 400);
         }
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          landing,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        }, 201);
       }
       const landingTestMatch = p.match(/^\/api\/landings\/([^/]+)\/test$/);
       if (landingTestMatch && m === "POST") {
@@ -232,18 +268,31 @@ export default {
       if (landingMatch && m === "PATCH") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         const input = (await req.json().catch(() => ({}))) as LandingInput;
+        let landing: Awaited<ReturnType<typeof updateLanding>>;
         try {
-          const landing = await updateLanding(env, landingMatch[1], input);
-          return landing ? json({ landing }) : err("落地机不存在", 404);
+          landing = await updateLanding(env, landingMatch[1], input);
         } catch (error) {
           return err((error as Error).message, 400);
         }
+        if (!landing) return err("落地机不存在", 404);
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          landing,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
       }
       if (landingMatch && m === "DELETE") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
-        return (await deleteLanding(env, landingMatch[1]))
-          ? json({ ok: true })
-          : err("落地机不存在", 404);
+        if (!(await deleteLanding(env, landingMatch[1]))) {
+          return err("落地机不存在", 404);
+        }
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          ok: true,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
       }
 
       // ---------- 节点接口 ----------
@@ -317,13 +366,14 @@ export default {
         const body = "";
         const nodeId = await verifyNodeSig(req, env, body);
         if (!nodeId || nodeId !== uuidsMatch[1]) return err("签名校验失败", 401);
-        const [policy, routing, landings] = await Promise.all([
+        const [policy, routing, landings, policyVersion] = await Promise.all([
           activeUserPolicy(env),
           getUnlockHosts(env),
           runtimeLandings(env),
+          getEdgePolicyVersion(env),
         ]);
         const resp: ActiveUuidsResponse = {
-          version: Date.now(), ttl: 60,
+          version: policyVersion, ttl: 15,
           uuids: policy.uuids,
           unlockUuids: policy.unlockUuids,
           unlockHosts: routing.hosts,

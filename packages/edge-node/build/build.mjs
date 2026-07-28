@@ -35,7 +35,9 @@ if (!replaced.includes("sub-links.json")) {
 }
 
 const injection =
-  "const OPUS8_activeState = await OPUS8_getActiveState(env, userID, ctx);\n" +
+  "const OPUS8_controlResponse = await OPUS8_handleControlRequest(request, env);\n" +
+  "\t\tif (OPUS8_controlResponse) return OPUS8_controlResponse;\n" +
+  "\t\tconst OPUS8_activeState = await OPUS8_getActiveState(env, userID, ctx);\n" +
   "\t\tlet activeUUIDs = OPUS8_activeState.uuids;\n" +
   "\t\tlet activeSubLinks = [];\n" +
   "\t\tOPUS8_setRequestPolicy(request, OPUS8_activeState);\n" +
@@ -183,7 +185,7 @@ patchedCore = patchedCore.replace(
   "async function WebSocket发送并等待(webSocket, payload) {\n\tOPUS8_noteDownlink(webSocket, payload);\n\tconst sendResult = webSocket.send(payload);",
 );
 
-// --- 补丁7：把 gRPC/XHTTP 流式传输接入同一套准入、配额和计量。 ---
+// --- 补丁7：明确禁用 gRPC；仅把 XHTTP 流式传输接入准入、配额和计量。 ---
 const grpcCallNeedle = "return await 处理gRPC请求(request, activeUUIDs);";
 const xhttpCallNeedle = "return await 处理XHTTP请求(request, activeUUIDs);";
 if (!patchedCore.includes(grpcCallNeedle) || !patchedCore.includes(xhttpCallNeedle)) {
@@ -191,7 +193,7 @@ if (!patchedCore.includes(grpcCallNeedle) || !patchedCore.includes(xhttpCallNeed
 }
 patchedCore = patchedCore.replace(
   grpcCallNeedle,
-  "return await 处理gRPC请求(request, activeUUIDs, env, ctx);",
+  'return new Response("Not Found", { status: 404, headers: { "cache-control": "no-store" } });',
 );
 patchedCore = patchedCore.replace(
   xhttpCallNeedle,
@@ -235,8 +237,7 @@ function patchStreamTransport(source, {
   }
   block = block.replace(
     loopPayloadNeedle,
-    loopPayloadNeedle + "\n\t\t\t\t\tOPUS8_noteUplink(request, " +
-      (transport === "grpc" ? "payload" : "value") + ");",
+    loopPayloadNeedle + "\n\t\t\t\t\tOPUS8_noteUplink(request, value);",
   );
   const finallyNeedle = /\t\t\t\} finally \{\r?\n/;
   if (!finallyNeedle.test(block)) {
@@ -283,17 +284,8 @@ patchedCore = patchStreamTransport(patchedCore, {
   initialPayload: "首包.rawData",
   loopPayloadNeedle: "if (!value || value.byteLength === 0) continue;",
 });
-patchedCore = patchStreamTransport(patchedCore, {
-  functionStart: "async function 处理gRPC请求(",
-  functionEnd: "\nfunction 是有效WS早期数据(",
-  signature: "async function 处理gRPC请求(request, yourUUID) {",
-  transport: "grpc",
-  initialHookNeedle: null,
-  initialPayload: null,
-  loopPayloadNeedle: "if (!payload.byteLength) continue;",
-});
 
-// --- 补丁8：XHTTP 关闭 gRPC Header 伪装，兼容未开启 Zone gRPC 的自定义域名。 ---
+// --- 补丁8：不生成 gRPC 分享链接；XHTTP 同时关闭 gRPC Header 伪装。 ---
 const xhttpLinkNeedle =
   "type: 是gRPC ? (配置.gRPC模式 === 'multi' ? 'grpc&mode=multi' : 'grpc&mode=gun') : (配置.传输协议 === 'xhttp' ? 'xhttp&mode=stream-one' : 'ws'),";
 if (!patchedCore.includes(xhttpLinkNeedle)) {
@@ -301,7 +293,7 @@ if (!patchedCore.includes(xhttpLinkNeedle)) {
 }
 patchedCore = patchedCore.replace(
   xhttpLinkNeedle,
-  "type: 是gRPC ? (配置.gRPC模式 === 'multi' ? 'grpc&mode=multi' : 'grpc&mode=gun') : (配置.传输协议 === 'xhttp' ? `xhttp&mode=stream-one&extra=${encodeURIComponent(JSON.stringify({ noGRPCHeader: true }))}` : 'ws'),",
+  "type: 配置.传输协议 === 'xhttp' ? `xhttp&mode=stream-one&extra=${encodeURIComponent(JSON.stringify({ noGRPCHeader: true }))}` : 'ws',",
 );
 
 const out = "// [Opus8-CF build] prelude + patched vendor core\n" + prelude + "\n" + patchedCore;

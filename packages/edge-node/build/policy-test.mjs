@@ -114,11 +114,79 @@ OPUS8_setRequestPolicy(oldRequest, await OPUS8_normalizeState({
 if (OPUS8_decideLanding(oldRequest, "legacy-user", "openai.com") !== null) {
   throw new Error("old control-plane response must preserve vendor fallback");
 }
+
+const kvValues = new Map();
+const kv = {
+  async get(key) { return kvValues.get(key) ?? null; },
+  async put(key, value) { kvValues.set(key, String(value)); },
+  async delete(key) { kvValues.delete(key); },
+};
+const controlEnv = {
+  KV: kv,
+  NODE_ID: "test-node",
+  NODE_HMAC_SECRET: "test-secret",
+  CONTROL_PLANE_URL: "https://control.example",
+};
+await kv.put(OPUS8_policyCacheKey(controlEnv), "cached");
+await kv.put("opus8:policy:v3", "legacy");
+const invalidateBody = JSON.stringify({ version: 12 });
+const invalidateTimestamp = String(Date.now());
+const invalidateSignature = await OPUS8_hmac(
+  controlEnv.NODE_HMAC_SECRET,
+  invalidateTimestamp + "." + controlEnv.NODE_ID + "." + invalidateBody,
+);
+const invalidateResponse = await OPUS8_handleControlRequest(new Request(
+  "https://node.example/__opus8/policy/invalidate",
+  {
+    method: "POST",
+    headers: {
+      "x-opus8-ts": invalidateTimestamp,
+      "x-opus8-node": controlEnv.NODE_ID,
+      "x-opus8-sign": invalidateSignature,
+    },
+    body: invalidateBody,
+  },
+), controlEnv);
+if (
+  invalidateResponse.status !== 200 ||
+  await kv.get(OPUS8_policyInvalidationKey(controlEnv)) !== "12" ||
+  await kv.get(OPUS8_policyCacheKey(controlEnv)) !== null ||
+  await kv.get("opus8:policy:v3") !== null
+) {
+  throw new Error("signed policy invalidation must advance the marker and clear caches");
+}
+const replayBody = JSON.stringify({ version: 10 });
+const replayTimestamp = String(Date.now());
+const replaySignature = await OPUS8_hmac(
+  controlEnv.NODE_HMAC_SECRET,
+  replayTimestamp + "." + controlEnv.NODE_ID + "." + replayBody,
+);
+const replayResponse = await OPUS8_handleControlRequest(new Request(
+  "https://node.example/__opus8/policy/invalidate",
+  {
+    method: "POST",
+    headers: {
+      "x-opus8-ts": replayTimestamp,
+      "x-opus8-node": controlEnv.NODE_ID,
+      "x-opus8-sign": replaySignature,
+    },
+    body: replayBody,
+  },
+), controlEnv);
+if (
+  replayResponse.status !== 200 ||
+  await kv.get(OPUS8_policyInvalidationKey(controlEnv)) !== "12"
+) {
+  throw new Error("an older signed invalidation must not lower the policy marker");
+}
 })();`;
 
 await runInNewContext(`${prelude}\n${tests}`, {
   console,
   crypto: globalThis.crypto,
+  Request,
+  Response,
+  URL,
   TextEncoder,
   TextDecoder,
   WeakMap,

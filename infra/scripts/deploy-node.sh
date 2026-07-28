@@ -168,14 +168,21 @@ CANARY_USER_ID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on
 TEST_UUID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.uuid)process.exit(1);process.stdout.write(j.user.uuid)})')
 echo "::add-mask::$CANARY_USER_ID"
 echo "::add-mask::$TEST_UUID"
+INVALIDATION_ACKS=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(String(j.cacheInvalidation?.acknowledged||0))})')
+TARGET_INVALIDATED=$(printf '%s' "$CANARY_USER" | NODE_ID="$NODE_ID" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write((j.cacheInvalidation?.acknowledgedNodes||[]).includes(process.env.NODE_ID)?"1":"0")})')
 cleanup_canary_user() {
   curl -fsS --max-time 20 -X DELETE "$CONTROL_PLANE_URL/api/users/$CANARY_USER_ID" \
     -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null 2>&1 || true
 }
 trap cleanup_canary_user EXIT
 echo "OK canary-user-created"
-echo "INFO wait-policy-cache=65s"
-sleep 65
+echo "INFO edge-policy-invalidation acknowledged=$INVALIDATION_ACKS target=$TARGET_INVALIDATED"
+if [ "$TARGET_INVALIDATED" = "1" ]; then
+  sleep 3
+else
+  echo "WARN target-node-did-not-acknowledge-active-invalidation; using-ttl-fallback"
+  sleep 16
+fi
 
 echo "STEP vless-smoke"
 SMOKE_OK=0

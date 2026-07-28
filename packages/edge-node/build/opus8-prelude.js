@@ -246,17 +246,126 @@ async function OPUS8_connectViaLandings(
   throw lastError || new Error("没有可用的 SOCKS5 落地机");
 }
 
-// 多级缓存：KV(未过期) -> 控制面 -> KV(过期兜底) -> 本地管理员。
+function OPUS8_policyCacheKey(env) {
+  return "opus8:policy:v4:" + String(env?.NODE_ID || "unknown");
+}
+
+function OPUS8_policyInvalidationKey(env) {
+  return "opus8:policy:invalidated:v1:" + String(env?.NODE_ID || "unknown");
+}
+
+async function OPUS8_invalidatedPolicyVersion(env) {
+  if (!env?.KV) return 0;
+  try {
+    return Math.max(0, Number(await env.KV.get(OPUS8_policyInvalidationKey(env))) || 0);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function OPUS8_policyVersion(raw) {
+  return Math.max(0, Number(raw?.version) || 0);
+}
+
+function OPUS8_constantTimeEqual(left, right) {
+  const a = String(left || "").toLowerCase();
+  const b = String(right || "").toLowerCase();
+  if (a.length !== b.length) return false;
+  let difference = 0;
+  for (let index = 0; index < a.length; index++) {
+    difference |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+async function OPUS8_handleControlRequest(request, env) {
+  const url = new URL(request.url);
+  if (url.pathname !== "/__opus8/policy/invalidate") return null;
+  if (request.method !== "POST") {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+  if (!OPUS8_ready(env) || !env.KV) {
+    return new Response("Unavailable", {
+      status: 503,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+  const body = await request.text();
+  const timestamp = request.headers.get("x-opus8-ts") || "";
+  const nodeId = request.headers.get("x-opus8-node") || "";
+  const signature = request.headers.get("x-opus8-sign") || "";
+  const timestampNumber = Number(timestamp);
+  if (
+    nodeId !== env.NODE_ID ||
+    !Number.isFinite(timestampNumber) ||
+    Math.abs(Date.now() - timestampNumber) > 5 * 60 * 1000
+  ) {
+    return new Response("Unauthorized", {
+      status: 401,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+  const expected = await OPUS8_hmac(
+    env.NODE_HMAC_SECRET,
+    timestamp + "." + nodeId + "." + body,
+  );
+  if (!OPUS8_constantTimeEqual(expected, signature)) {
+    return new Response("Unauthorized", {
+      status: 401,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch (_) {
+    return new Response("Bad Request", {
+      status: 400,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+  const requestedVersion = Number(payload?.version);
+  if (!Number.isSafeInteger(requestedVersion) || requestedVersion < 1) {
+    return new Response("Bad Request", {
+      status: 400,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+  const currentVersion = await OPUS8_invalidatedPolicyVersion(env);
+  const version = Math.max(currentVersion, requestedVersion);
+  await Promise.all([
+    env.KV.put(OPUS8_policyInvalidationKey(env), String(version)),
+    env.KV.delete(OPUS8_policyCacheKey(env)),
+    env.KV.delete("opus8:policy:v3"),
+  ]);
+  return new Response(JSON.stringify({ ok: true, version }), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+// 多级缓存：节点独立 KV(未过期) -> 控制面 -> 合格的过期 KV 兜底 -> 本地管理员。
 async function OPUS8_getActiveState(env, userID, ctx) {
   const fallback = await OPUS8_fallbackState(userID);
   if (!OPUS8_ready(env)) return fallback;
-  const KVKEY = "opus8:policy:v3";
+  const KVKEY = OPUS8_policyCacheKey(env);
+  const invalidatedVersion = await OPUS8_invalidatedPolicyVersion(env);
   try {
     if (env.KV) {
       const raw = await env.KV.get(KVKEY);
       if (raw) {
         const c = JSON.parse(raw);
-        if (c && c.exp > Date.now() && c.raw) {
+        if (
+          c &&
+          c.exp > Date.now() &&
+          c.raw &&
+          OPUS8_policyVersion(c.raw) >= invalidatedVersion
+        ) {
           return await OPUS8_normalizeState(c.raw, userID, true, env);
         }
       }
@@ -266,13 +375,14 @@ async function OPUS8_getActiveState(env, userID, ctx) {
     const res = await OPUS8_signedFetch(env, "GET", "/api/nodes/" + env.NODE_ID + "/uuids");
     if (res.ok) {
       const rawState = await res.json();
+      if (OPUS8_policyVersion(rawState) < invalidatedVersion) return fallback;
       const state = await OPUS8_normalizeState(rawState, userID, true, env);
       if (env.KV) {
-        ctx.waitUntil(env.KV.put(
+        await env.KV.put(
           KVKEY,
           JSON.stringify({ raw: rawState, exp: Date.now() + state.ttl * 1000 }),
-          { expirationTtl: Math.max(120, state.ttl * 4) },
-        ));
+          { expirationTtl: Math.max(60, state.ttl * 4) },
+        );
       }
       return state;
     }
@@ -282,7 +392,9 @@ async function OPUS8_getActiveState(env, userID, ctx) {
       const raw = await env.KV.get(KVKEY);
       if (raw) {
         const c = JSON.parse(raw);
-        if (c?.raw) return await OPUS8_normalizeState(c.raw, userID, true, env);
+        if (c?.raw && OPUS8_policyVersion(c.raw) >= invalidatedVersion) {
+          return await OPUS8_normalizeState(c.raw, userID, true, env);
+        }
       }
     }
   } catch (e) { /* ignore */ }

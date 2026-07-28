@@ -67,6 +67,13 @@ try {
   }));
   userId = created.user.id;
   const userUuid = created.user.uuid;
+  assert(
+    Number.isSafeInteger(created.policyVersion) &&
+      created.policyVersion > 0 &&
+      Array.isArray(created.cacheInvalidation?.acknowledgedNodes) &&
+      Array.isArray(created.cacheInvalidation?.failedNodes),
+    `user mutation must publish an observable policy version: ${JSON.stringify(created)}`,
+  );
 
   const admit = (ipHash, leaseId) => signedPost("/api/nodes/admission", {
     nodeId,
@@ -119,6 +126,7 @@ try {
   console.log("OK idempotent-usage-accounting");
   console.log("OK subscription-usage-header");
   console.log("OK lease-reset-readmission");
+  console.log("OK policy-version-invalidation-summary");
 } finally {
   if (userId) {
     await fetch(`${base}/api/users/${userId}`, { method: "DELETE", headers: adminHeaders });
