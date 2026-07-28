@@ -2,6 +2,18 @@ name: deploy-nodes
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Edge node to deploy
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - acc1-n1
+          - acc1-n2
+          - acc2-n1
+          - acc2-n2
   workflow_run:
     workflows: ["deploy-control"]
     types: [completed]
@@ -54,12 +66,13 @@ jobs:
       - run: npm i -g wrangler@3
       - name: Deploy edge node
         id: deploy
+        if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.node_id
         run: |
           set -o pipefail
           bash infra/scripts/deploy-node.sh 2>&1 | tee /tmp/dn.log
 
       - name: Publish status back to repo
-        if: always()
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == matrix.node_id)
         run: |
           mkdir -p infra/status
           URL=$(grep '^DONE url=' /tmp/dn.log | tail -n1 | sed 's/^DONE url=//' || true)
