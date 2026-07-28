@@ -1,7 +1,7 @@
 {
   "node": "acc1-n1",
-  "result": "failure",
-  "nodeUrl": "",
+  "result": "success",
+  "nodeUrl": "https://acc1-n1-v2.thinderbox.com",
   "markers": [
     "STEP build",
     "OK built (OK build: dist/index.js (306807 bytes), patch replaced 961 chars)",
@@ -11,13 +11,13 @@
     "STEP kv",
     "OK kv=40a6527c…",
     "STEP deploy",
-    "OK deployed workers=https://opus8cf-node-acc1-n1.techtoolhub-office.workers.dev custom=https://acc1-n1.thinderbox.com",
+    "OK deployed workers=https://opus8cf-node-acc1-n1-v2.techtoolhub-office.workers.dev custom=https://acc1-n1-v2.thinderbox.com",
     "STEP secrets",
     "OK secrets-bulk hmac+uuid+socks5",
     "STEP wait-deployed-version",
     "OK deployed-version-active custom=1 workers=1",
     "STEP register",
-    "OK registered host=acc1-n1.thinderbox.com",
+    "OK registered host=acc1-n1-v2.thinderbox.com",
     "STEP wait-custom-domain",
     "OK custom-domain-ready",
     "STEP verify",
@@ -28,9 +28,11 @@
     "OK canary-user-created",
     "INFO edge-policy-invalidation acknowledged=4 target=1",
     "STEP policy-status",
-    "INFO policy-status={\"invalidatedVersion\":1785218930135,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785218933788,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785218930135,\"liveUuidCount\":4,\"liveContainsUuid\":true,\"liveError\":\"\"}",
+    "INFO policy-status={\"invalidatedVersion\":1785219634051,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785219637900,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785219634051,\"liveUuidCount\":4,\"liveContainsUuid\":true,\"liveError\":\"\"}",
     "STEP vless-smoke",
-    "ERROR vless-smoke"
+    "OK vless-ws-auth-egress",
+    "OK unlock=on(AI域名走落地)",
+    "DONE url=https://acc1-n1-v2.thinderbox.com"
   ],
-  "finishedAt": "2026-07-28T06:15:14Z"
+  "finishedAt": "2026-07-28T06:21:37Z"
 }
