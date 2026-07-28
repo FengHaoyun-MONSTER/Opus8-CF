@@ -4,7 +4,7 @@
   "nodeUrl": "https://acc2-n2.openal.uk",
   "markers": [
     "STEP build",
-    "OK built (OK build: dist/index.js (300387 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (304285 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
@@ -22,12 +22,15 @@
     "OK custom-domain-ready",
     "STEP verify",
     "OK node-tls-http=200",
-    "OK uuids-endpoint-count=2",
+    "OK uuids-endpoint-count=4",
     "OK landing-bundle-encrypted",
+    "STEP canary-user",
+    "OK canary-user-created",
+    "INFO edge-policy-invalidation acknowledged=4 target=1",
     "STEP vless-smoke",
     "OK vless-ws-auth-egress",
     "OK unlock=on(AI域名走落地)",
     "DONE url=https://acc2-n2.openal.uk"
   ],
-  "finishedAt": "2026-07-27T17:12:25Z"
+  "finishedAt": "2026-07-28T05:37:21Z"
 }
