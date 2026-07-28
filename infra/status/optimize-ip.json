@@ -13,12 +13,12 @@
     "OK candidate-source=cfst",
     "OK candidates count=5",
     "STEP validate-candidates",
-    "WARN candidate=172.65.136.173 vantage=github-runner node=acc1-n1 failed",
-    "WARN candidate=172.65.121.1 vantage=github-runner node=acc1-n1 failed",
-    "WARN candidate=104.18.210.119 vantage=github-runner node=acc1-n1 failed",
-    "WARN candidate=172.65.139.183 vantage=github-runner node=acc1-n1 failed",
-    "WARN candidate=172.65.69.62 vantage=github-runner node=acc1-n1 failed",
+    "WARN candidate=172.66.194.147 vantage=github-runner node=acc2-n1 reason=vless smoke failed: server closed before VLESS response ",
+    "WARN candidate=104.16.142.120 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
+    "WARN candidate=104.18.43.209 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
+    "WARN candidate=172.66.196.149 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
+    "WARN candidate=104.18.68.86 vantage=github-runner node=acc1-n1 reason=vless smoke failed: server closed before VLESS response ",
     "ERROR no-candidate-passed-two-vantage-vless"
   ],
-  "finishedAt": "2026-07-28T13:34:12Z"
+  "finishedAt": "2026-07-28T13:38:22Z"
 }
