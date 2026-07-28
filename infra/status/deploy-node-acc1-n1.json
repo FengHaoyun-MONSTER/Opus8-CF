@@ -4,7 +4,7 @@
   "nodeUrl": "",
   "markers": [
     "STEP build",
-    "OK built (OK build: dist/index.js (304285 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (306459 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
@@ -27,8 +27,7 @@
     "STEP canary-user",
     "OK canary-user-created",
     "INFO edge-policy-invalidation acknowledged=4 target=1",
-    "STEP vless-smoke",
-    "ERROR vless-smoke"
+    "STEP policy-status"
   ],
-  "finishedAt": "2026-07-28T05:45:38Z"
+  "finishedAt": "2026-07-28T05:48:29Z"
 }
