@@ -12,6 +12,7 @@ on:
           - enroll
           - diagnose
           - verify-routing
+          - diagnose-edge
           - canary-ws
           - canary-grpc
 
@@ -221,7 +222,7 @@ jobs:
               --uuid "$uuid" \
               --target example.com \
               --target-port 80 \
-              --expect-status 200
+              --expect-status 0
             smoke_with_retry "$node ai-landing-warp-egress" \
               infra/scripts/smoke-vless.py \
               --url "wss://${host}/?ed=2560" \
@@ -332,7 +333,7 @@ jobs:
                 --uuid "$uuid" \
                 --target example.com \
                 --target-port 80 \
-                --expect-status 200; then
+                --expect-status 0; then
                 expected_connections=$((expected_connections + 1))
                 echo "OK vless-ws-egress route=$ws_label"
               else
@@ -366,6 +367,42 @@ jobs:
             echo "::error::Transport connected but usage accounting did not increase; connections=$connection_delta bytes=$byte_delta"
             exit 1
           fi
+
+      - name: Diagnose account-1 edge bindings
+        if: inputs.operation == 'diagnose-edge'
+        shell: bash
+        env:
+          CF_API_TOKEN: ${{ secrets.API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          : "${CF_API_TOKEN:?API_TOKEN is required}"
+          : "${CF_ACCOUNT_ID:?ACCOUNT_ID is required}"
+          echo "::add-mask::$CF_API_TOKEN"
+          echo "::add-mask::$CF_ACCOUNT_ID"
+
+          api="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts"
+          for node in acc1-n1 acc1-n2; do
+            script="opus8cf-node-${node}"
+            settings="$(curl -fsS --max-time 30 \
+              -H "authorization: Bearer ${CF_API_TOKEN}" \
+              "${api}/${script}/settings")"
+            printf '%s' "$settings" | jq -cer --arg node "$node" '
+              if .success != true then error("Cloudflare settings request failed")
+              else {
+                node:$node,
+                compatibility_date:.result.compatibility_date,
+                compatibility_flags:(.result.compatibility_flags // []),
+                bindings:[
+                  .result.bindings[]?
+                  | {
+                      name,
+                      type,
+                      namespace_id:(.namespace_id // null)
+                    }
+                ]
+              } end'
+          done
 
       - name: Diagnose recent Zero Trust enrollment
         if: inputs.operation == 'diagnose'

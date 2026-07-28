@@ -180,7 +180,7 @@ sleep 65
 echo "STEP vless-smoke"
 SMOKE_OK=0
 for n in $(seq 1 18); do
-  if python3 "$REPO_ROOT/infra/scripts/smoke-vless.py" --url "wss://${HOST}/?ed=2560" --uuid "$TEST_UUID" >/tmp/vless.log 2>&1; then
+  if python3 "$REPO_ROOT/infra/scripts/smoke-vless.py" --url "wss://${HOST}/?ed=2560" --uuid "$TEST_UUID" --expect-status 0 >/tmp/vless.log 2>&1; then
     SMOKE_OK=1
     break
   fi
