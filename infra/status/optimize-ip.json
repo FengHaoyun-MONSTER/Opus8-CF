@@ -10,7 +10,7 @@
     "STEP create-isolated-probe-user",
     "OK probe-user-created",
     "STEP discover-candidates",
-    "ERROR cfst-binary-not-found"
+    "ERROR speedtest"
   ],
-  "finishedAt": "2026-07-28T13:25:10Z"
+  "finishedAt": "2026-07-28T13:30:41Z"
 }
