@@ -75,6 +75,16 @@ const reportNodeHealth = async (runId, directOk, landingOk = true) =>
             landingLatencyMs: landingOk ? 84 : null,
             directError: directOk ? null : "integration direct failure",
             landingError: landingOk ? null : "integration landing failure",
+            vantages: {
+              direct: {
+                github: { available: true, ok: directOk, latencyMs: 42 },
+                landingVps: { available: true, ok: directOk, latencyMs: 45 },
+              },
+              landing: {
+                github: { available: true, ok: landingOk, latencyMs: 84 },
+                landingVps: { available: true, ok: landingOk, latencyMs: 88 },
+              },
+            },
           },
         ],
       }),
@@ -334,8 +344,54 @@ try {
   assert(
     healthOverview.thresholds.failure === 3 &&
       healthOverview.thresholds.recovery === 2 &&
-      healthOverview.events.some((item) => item.nodeId === nodeId),
+      healthOverview.events.some(
+        (item) =>
+          item.nodeId === nodeId &&
+          item.details?.vantages?.direct?.github?.available === true,
+      ),
     `health overview must expose policy and event history: ${JSON.stringify(healthOverview)}`,
+  );
+
+  const invalidPoolResponse = await fetch(`${base}/api/optimized-ips`, {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({
+      version: 2,
+      ips: ["172.64.1.1"],
+      validatedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      vantages: ["github-runner"],
+      nodeIds: [nodeId, `${nodeId}-second`],
+    }),
+  });
+  assert(
+    invalidPoolResponse.status === 400,
+    `single-vantage optimized pool must be rejected: ${invalidPoolResponse.status}`,
+  );
+
+  const validatedAt = Date.now();
+  await jsonResponse(
+    await fetch(`${base}/api/optimized-ips`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        version: 2,
+        ips: ["172.64.1.1"],
+        validatedAt,
+        expiresAt: validatedAt + 60_000,
+        vantages: ["github-runner", "landing-vps"],
+        nodeIds: [nodeId, `${nodeId}-second`],
+      }),
+    }),
+  );
+  const optimizedPool = await jsonResponse(
+    await fetch(`${base}/api/optimized-ips`, { headers: adminHeaders }),
+  );
+  assert(
+    optimizedPool.active === true &&
+      optimizedPool.pool?.version === 2 &&
+      optimizedPool.pool?.vantages?.length === 2,
+    `validated optimized pool must be observable: ${JSON.stringify(optimizedPool)}`,
   );
 
   await reportNodeHealth(`${runPrefix}-final-healthy`, true, true);
@@ -382,6 +438,7 @@ try {
   console.log("OK landing-only-degradation");
   console.log("OK node-health-overview");
   console.log("OK landing-real-probe-alert");
+  console.log("OK optimized-ip-two-vantage-admission");
 } finally {
   if (landingId) {
     await fetch(`${base}/api/landings/${landingId}`, {

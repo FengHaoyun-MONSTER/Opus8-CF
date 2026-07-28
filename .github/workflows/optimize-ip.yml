@@ -2,6 +2,8 @@ name: optimize-ip
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 */4 * * *'
 
 permissions:
   contents: write
@@ -13,14 +15,26 @@ concurrency:
 jobs:
   optimize:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       CONTROL_PLANE_URL: https://opus8cf-control.techtoolhub-office.workers.dev
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      VPS_HOST: ${{ secrets.SERVICES_IP }}
+      VPS_SSH_USER: ${{ secrets.SERVICES_USER }}
+      VPS_SSH_PASSWORD: ${{ secrets.SERVICES_CODE }}
+      VPS_SSH_PORT: ${{ secrets.SERVICES_SSH_PORT }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Install probe dependencies
+        run: |
+          echo "::add-mask::${VPS_HOST:-}"
+          echo "::add-mask::${VPS_SSH_USER:-}"
+          echo "::add-mask::${VPS_SSH_PASSWORD:-}"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
       - name: Optimize CF IPs
         id: opt
         run: |
@@ -31,7 +45,7 @@ jobs:
         if: always()
         run: |
           mkdir -p infra/status
-          MARKERS=$(grep -E '^(STEP|OK|ERROR|DONE) ' /tmp/oi.log || true)
+          MARKERS=$(grep -E '^(STEP|OK|WARN|ERROR|DONE) ' /tmp/oi.log || true)
           jq -n --arg r "${{ steps.opt.outcome }}" --arg m "$MARKERS" \
             '{result:$r, markers:($m|split("\n")|map(select(length>0))), finishedAt:(now|todate)}' \
             > infra/status/optimize-ip.json

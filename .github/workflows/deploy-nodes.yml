@@ -62,13 +62,21 @@ jobs:
       NODE_REGION: ${{ matrix.region }}
       NODE_DEPLOY_SUFFIX: ${{ matrix.deploy_suffix }}
       SERVICES_IP: ${{ secrets.SERVICES_IP }}
-      SERVICES_USER: ${{ secrets.SOCKS_USER }}
-      SERVICES_CODE: ${{ secrets.SOCKS_PASSWORD }}
+      SOCKS_USER: ${{ secrets.SOCKS_USER }}
+      SOCKS_PASSWORD: ${{ secrets.SOCKS_PASSWORD }}
+      VPS_HOST: ${{ secrets.SERVICES_IP }}
+      VPS_SSH_USER: ${{ secrets.SERVICES_USER }}
+      VPS_SSH_PASSWORD: ${{ secrets.SERVICES_CODE }}
+      VPS_SSH_PORT: ${{ secrets.SERVICES_SSH_PORT }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Install probe dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
       - run: npm i -g wrangler@3
       - name: Deploy edge node
         id: deploy

@@ -39,6 +39,7 @@ workers_dev = true
 [vars]
 DEFAULT_UNLOCK_HOSTS = "$DEFAULT_UNLOCK_HOSTS"
 OPUS8_BUILD_ID = "$OPUS8_BUILD_ID"
+USE_OPTIMIZED_IPS = "1"
 
 [[d1_databases]]
 binding = "DB"

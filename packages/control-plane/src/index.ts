@@ -492,20 +492,31 @@ export default {
       // 优选 IP 池（供订阅使用；由 CFST 工作流写入）
       if (p === "/api/optimized-ips" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
-        return json({ ips: await getOptimizedIps(env) });
+        const pool = await getOptimizedIpPool(env);
+        return json({
+          ips: pool?.ips ?? [],
+          active: Boolean(pool),
+          subscriptionEnabled: env.USE_OPTIMIZED_IPS === "1",
+          pool,
+        });
       }
       if (p === "/api/optimized-ips" && m === "POST") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
-        const b = (await req.json().catch(() => ({}))) as { ips?: string[] };
-        const ips = Array.isArray(b.ips)
-          ? b.ips
-              .filter(
-                (x) => typeof x === "string" && /^[0-9a-fA-F.:]+$/.test(x),
-              )
-              .slice(0, 50)
-          : [];
-        await env.KV.put("opus8:opt-ips", JSON.stringify(ips));
-        return json({ ok: true, count: ips.length });
+        try {
+          const b = (await req.json().catch(() => ({}))) as Partial<OptimizedIpPool>;
+          const pool = normalizeOptimizedIpPool(b);
+          await env.KV.put("opus8:opt-ips", JSON.stringify(pool));
+          return json({
+            ok: true,
+            count: pool.ips.length,
+            validatedAt: pool.validatedAt,
+            expiresAt: pool.expiresAt,
+            vantages: pool.vantages,
+            nodeIds: pool.nodeIds,
+          });
+        } catch (error) {
+          return err((error as Error).message, 400);
+        }
       }
       // 有效 UUID 集（UUID 同步总线核心）
       const uuidsMatch = p.match(/^\/api\/nodes\/([^/]+)\/uuids$/);
@@ -578,14 +589,100 @@ export default {
   },
 };
 
-async function getOptimizedIps(env: Env): Promise<string[]> {
+interface OptimizedIpPool {
+  version: 2;
+  ips: string[];
+  validatedAt: number;
+  expiresAt: number;
+  vantages: string[];
+  nodeIds: string[];
+}
+
+function uniqueCleanStrings(
+  value: unknown,
+  pattern: RegExp,
+  limit: number,
+): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0 && pattern.test(item)),
+    ),
+  ].slice(0, limit);
+}
+
+function normalizeOptimizedIpPool(
+  value: Partial<OptimizedIpPool>,
+  requireFreshValidation = true,
+): OptimizedIpPool {
+  const now = Date.now();
+  const ips = uniqueCleanStrings(value.ips, /^[0-9a-fA-F.:]+$/, 10);
+  const vantages = uniqueCleanStrings(
+    value.vantages,
+    /^[A-Za-z0-9._:-]+$/,
+    10,
+  );
+  const nodeIds = uniqueCleanStrings(
+    value.nodeIds,
+    /^[A-Za-z0-9._:-]+$/,
+    50,
+  );
+  const validatedAt = Number(value.validatedAt);
+  const expiresAt = Number(value.expiresAt);
+  if (ips.length === 0) throw new Error("优选 IP 池不能为空");
+  if (
+    !Number.isSafeInteger(validatedAt) ||
+    validatedAt <= 0 ||
+    validatedAt > now + 15 * 60_000 ||
+    (requireFreshValidation && now - validatedAt > 15 * 60_000)
+  ) {
+    throw new Error("优选 IP 验证时间无效");
+  }
+  if (
+    !Number.isSafeInteger(expiresAt) ||
+    expiresAt <= now ||
+    expiresAt > validatedAt + 24 * 60 * 60_000
+  ) {
+    throw new Error("优选 IP 有效期无效");
+  }
+  if (
+    !vantages.includes("github-runner") ||
+    !vantages.includes("landing-vps")
+  ) {
+    throw new Error("优选 IP 必须通过 GitHub Runner 与落地 VPS 双视角验证");
+  }
+  if (nodeIds.length < 2) {
+    throw new Error("优选 IP 必须覆盖至少两个代表节点");
+  }
+  return {
+    version: 2,
+    ips,
+    validatedAt,
+    expiresAt,
+    vantages,
+    nodeIds,
+  };
+}
+
+async function getOptimizedIpPool(env: Env): Promise<OptimizedIpPool | null> {
   try {
     const raw = await env.KV.get("opus8:opt-ips");
-    const arr = raw ? (JSON.parse(raw) as unknown) : [];
-    return Array.isArray(arr) ? (arr as string[]) : [];
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<OptimizedIpPool>;
+    if (value.version !== 2) return null;
+    const pool = normalizeOptimizedIpPool(value, false);
+    if (pool.expiresAt <= Date.now()) return null;
+    return pool;
   } catch {
-    return [];
+    return null;
   }
+}
+
+async function getOptimizedIps(env: Env): Promise<string[]> {
+  return (await getOptimizedIpPool(env))?.ips ?? [];
 }
 
 function subUserInfo(

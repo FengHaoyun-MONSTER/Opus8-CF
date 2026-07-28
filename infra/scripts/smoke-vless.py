@@ -108,18 +108,24 @@ def run(
     target: str,
     target_port: int,
     expect_status: int,
+    connect_host: str | None = None,
+    connect_port: int | None = None,
 ) -> None:
     parsed = urlsplit(url)
     if parsed.scheme != "wss" or not parsed.hostname:
         raise ValueError("--url must be a wss:// URL")
     host = parsed.hostname
     port = parsed.port or 443
+    socket_host = connect_host or host
+    socket_port = connect_port or port
     path = parsed.path or "/"
     if parsed.query:
         path += "?" + parsed.query
 
     context = ssl.create_default_context()
-    with socket.create_connection((host, port), timeout=timeout) as raw:
+    # The TCP destination may be an optimized Cloudflare anycast IP while TLS
+    # SNI and the WebSocket Host header must continue to use the node hostname.
+    with socket.create_connection((socket_host, socket_port), timeout=timeout) as raw:
         with context.wrap_socket(raw, server_hostname=host) as sock:
             sock.settimeout(timeout)
             websocket_upgrade(sock, host, path)
@@ -158,6 +164,11 @@ def main() -> int:
     parser.add_argument("--target", default="example.com")
     parser.add_argument("--target-port", type=int, default=80)
     parser.add_argument(
+        "--connect-host",
+        help="Override only the TCP destination; TLS SNI and Host still use --url.",
+    )
+    parser.add_argument("--connect-port", type=int)
+    parser.add_argument(
         "--expect-status",
         type=int,
         default=200,
@@ -172,6 +183,8 @@ def main() -> int:
             args.target,
             args.target_port,
             args.expect_status,
+            args.connect_host,
+            args.connect_port,
         )
     except Exception as exc:
         print(f"vless smoke failed: {exc}", file=sys.stderr)

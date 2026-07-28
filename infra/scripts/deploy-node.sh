@@ -4,7 +4,9 @@
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
 #   CONTROL_ROOT_DOMAIN / ROOT_DOMAIN / NODE_HMAC_SECRET / NODE_ID / NODE_ACCOUNT_ALIAS / NODE_REGION
 #   NODE_DEPLOY_SUFFIX  (可选，例如 -v2，用于无损替换异常 Worker 槽位)
-#   SERVICES_IP / SERVICES_USER / SERVICES_CODE  (落地机，可缺省 -> 纯 CF 出口)
+#   SERVICES_IP / SOCKS_USER / SOCKS_PASSWORD  (SOCKS5，可缺省 -> 纯 CF 出口)
+#   VPS_HOST / VPS_SSH_USER / VPS_SSH_PASSWORD / VPS_SSH_PORT
+#     (可选，仅用于部署后的第二视角冒烟)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 REPO_ROOT="$(pwd)"
@@ -41,7 +43,7 @@ if [ -n "${SERVICES_IP:-}" ]; then
   # 快速路径：先试已知/常见端口，命中即跳过全端口扫描
   for p in ${SERVICES_PORT:-} 40008 1080 1081 7890 8388 1088; do
     [ -z "$p" ] && continue
-    out=$(curl -s -x "socks5h://${SERVICES_IP}:$p" --proxy-user "${SERVICES_USER:-}:${SERVICES_CODE:-}" --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null || true)
+    out=$(curl -s -x "socks5h://${SERVICES_IP}:$p" --proxy-user "${SOCKS_USER:-}:${SOCKS_PASSWORD:-}" --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null || true)
     if echo "$out" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then PORT=$p; PTYPE=socks5-auth; echo "OK landing-port=$p type=socks5(auth,fast) exit=$out"; break; fi
   done
   OPEN=""
@@ -57,15 +59,15 @@ if [ -n "${SERVICES_IP:-}" ]; then
   for p in $OPEN; do
     [ -n "$PORT" ] && break
     n=$((n+1)); [ "$n" -gt 20 ] && break
-    out=$(curl -s -x "socks5h://${SERVICES_IP}:$p" --proxy-user "${SERVICES_USER:-}:${SERVICES_CODE:-}" --connect-timeout 6 --max-time 12 https://api.ipify.org 2>/dev/null || true)
+    out=$(curl -s -x "socks5h://${SERVICES_IP}:$p" --proxy-user "${SOCKS_USER:-}:${SOCKS_PASSWORD:-}" --connect-timeout 6 --max-time 12 https://api.ipify.org 2>/dev/null || true)
     if echo "$out" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then PORT=$p; PTYPE=socks5-auth; echo "OK landing-port=$p type=socks5(auth) exit=$out"; break; fi
     outn=$(curl -s -x "socks5h://${SERVICES_IP}:$p" --connect-timeout 6 --max-time 12 https://api.ipify.org 2>/dev/null || true)
     if echo "$outn" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then PORT=$p; PTYPE=socks5-noauth; echo "OK landing-port=$p type=socks5(no-auth) exit=$outn"; break; fi
-    outh=$(curl -s -x "http://${SERVICES_IP}:$p" --proxy-user "${SERVICES_USER:-}:${SERVICES_CODE:-}" --connect-timeout 6 --max-time 12 https://api.ipify.org 2>/dev/null || true)
+    outh=$(curl -s -x "http://${SERVICES_IP}:$p" --proxy-user "${SOCKS_USER:-}:${SOCKS_PASSWORD:-}" --connect-timeout 6 --max-time 12 https://api.ipify.org 2>/dev/null || true)
     if echo "$outh" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then echo "INFO port=$p 是 HTTP 代理(非 SOCKS5) exit=$outh"; fi
   done
   if [ -n "$PORT" ]; then
-    if [ "$PTYPE" = "socks5-auth" ] && [ -n "${SERVICES_USER:-}" ]; then LAND="${SERVICES_USER}:${SERVICES_CODE}@${SERVICES_IP}:${PORT}"; else LAND="${SERVICES_IP}:${PORT}"; fi
+    if [ "$PTYPE" = "socks5-auth" ] && [ -n "${SOCKS_USER:-}" ]; then LAND="${SOCKS_USER}:${SOCKS_PASSWORD}@${SERVICES_IP}:${PORT}"; else LAND="${SERVICES_IP}:${PORT}"; fi
   else
     echo "INFO landing-no-socks5 (纯 CF 出口，无解锁)"
   fi
@@ -254,18 +256,62 @@ printf '%s' "$POLICY_STATUS" | node -e '
 
 echo "STEP vless-smoke"
 SMOKE_OK=0
-for n in $(seq 1 18); do
+SMOKE_VANTAGE="github-runner"
+for n in $(seq 1 8); do
   if python3 "$REPO_ROOT/infra/scripts/smoke-vless.py" --url "wss://${HOST}/?ed=2560" --uuid "$TEST_UUID" --expect-status 0 >/tmp/vless.log 2>&1; then
     SMOKE_OK=1
     break
   fi
-  sleep 10
+  sleep 8
 done
+if [ "$SMOKE_OK" != "1" ]; then
+  echo "WARN vless-smoke vantage=github-runner failed; trying=landing-vps"
+  VPS_SSH_PORT="${VPS_SSH_PORT:-22}"
+  if [ -n "${VPS_HOST:-}" ] &&
+    [ -n "${VPS_SSH_USER:-}" ] &&
+    [ -n "${VPS_SSH_PASSWORD:-}" ] &&
+    command -v sshpass >/dev/null 2>&1; then
+    export SSHPASS="$VPS_SSH_PASSWORD"
+    SSH_BASE=(
+      sshpass -e ssh
+      -p "$VPS_SSH_PORT"
+      -o ConnectTimeout=12
+      -o StrictHostKeyChecking=accept-new
+      -o ServerAliveInterval=10
+      -o ServerAliveCountMax=2
+      "$VPS_SSH_USER@$VPS_HOST"
+    )
+    SCP_BASE=(
+      sshpass -e scp
+      -P "$VPS_SSH_PORT"
+      -o ConnectTimeout=12
+      -o StrictHostKeyChecking=accept-new
+    )
+    REMOTE_TAG="$(printf '%s' "${GITHUB_RUN_ID:-manual}-${NODE_ID}" | tr -cd 'A-Za-z0-9._-')"
+    REMOTE_SMOKE_PATH="/tmp/opus8-deploy-smoke-${REMOTE_TAG}.py"
+    if "${SSH_BASE[@]}" 'command -v python3 >/dev/null' >/dev/null 2>&1 &&
+      "${SCP_BASE[@]}" "$REPO_ROOT/infra/scripts/smoke-vless.py" \
+        "$VPS_SSH_USER@$VPS_HOST:$REMOTE_SMOKE_PATH" >/dev/null 2>&1; then
+      printf -v REMOTE_COMMAND '%q ' \
+        python3 "$REMOTE_SMOKE_PATH" \
+        --url "wss://${HOST}/?ed=2560" \
+        --uuid "$TEST_UUID" \
+        --expect-status 0 \
+        --timeout 20
+      if "${SSH_BASE[@]}" "$REMOTE_COMMAND" >/tmp/vless-remote.log 2>&1; then
+        SMOKE_OK=1
+        SMOKE_VANTAGE="landing-vps"
+      fi
+      "${SSH_BASE[@]}" "rm -f -- '$REMOTE_SMOKE_PATH'" >/dev/null 2>&1 || true
+    fi
+  fi
+fi
 if [ "$SMOKE_OK" = "1" ]; then
-  echo "OK vless-ws-auth-egress"
+  echo "OK vless-ws-auth-egress vantage=$SMOKE_VANTAGE"
 else
-  echo "ERROR vless-smoke"
+  echo "ERROR vless-smoke all-available-vantages-failed"
   tail -n 3 /tmp/vless.log
+  [ -f /tmp/vless-remote.log ] && tail -n 3 /tmp/vless-remote.log
   exit 17
 fi
 

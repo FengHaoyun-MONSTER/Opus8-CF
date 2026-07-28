@@ -17,12 +17,19 @@ WORK_DIR="$(mktemp -d)"
 HEALTH_ALERT_FILE="${HEALTH_ALERT_FILE:-${RUNNER_TEMP:-/tmp}/opus8-health-state.json}"
 USER_ID=""
 ADMIN_TOKEN=""
+REMOTE_READY=0
+REMOTE_SMOKE_PATH=""
+SSH_BASE=()
+SCP_BASE=()
 
 cleanup() {
   if [ -n "$USER_ID" ] && [ -n "$ADMIN_TOKEN" ]; then
     curl -fsS --max-time 20 -X DELETE \
       "$CONTROL_API/api/users/$USER_ID" \
       -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null 2>&1 || true
+  fi
+  if [ "$REMOTE_READY" = "1" ] && [ -n "$REMOTE_SMOKE_PATH" ]; then
+    "${SSH_BASE[@]}" "rm -f -- '$REMOTE_SMOKE_PATH'" >/dev/null 2>&1 || true
   fi
   case "$WORK_DIR" in
     /tmp/*) rm -rf -- "$WORK_DIR" ;;
@@ -38,6 +45,44 @@ LOGIN_RESPONSE="$(curl -fsS --max-time 20 -X POST \
 ADMIN_TOKEN="$(printf '%s' "$LOGIN_RESPONSE" | jq -er '.token')"
 echo "::add-mask::$ADMIN_TOKEN"
 echo "OK login"
+
+echo "STEP prepare-vantages"
+VPS_SSH_PORT="${VPS_SSH_PORT:-22}"
+if [ -n "${VPS_HOST:-}" ] &&
+  [ -n "${VPS_SSH_USER:-}" ] &&
+  [ -n "${VPS_SSH_PASSWORD:-}" ] &&
+  command -v sshpass >/dev/null 2>&1; then
+  export SSHPASS="$VPS_SSH_PASSWORD"
+  SSH_BASE=(
+    sshpass -e ssh
+    -p "$VPS_SSH_PORT"
+    -o ConnectTimeout=12
+    -o StrictHostKeyChecking=accept-new
+    -o ServerAliveInterval=10
+    -o ServerAliveCountMax=2
+    "$VPS_SSH_USER@$VPS_HOST"
+  )
+  SCP_BASE=(
+    sshpass -e scp
+    -P "$VPS_SSH_PORT"
+    -o ConnectTimeout=12
+    -o StrictHostKeyChecking=accept-new
+  )
+  REMOTE_TAG="$(printf '%s' "${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}" |
+    tr -cd 'A-Za-z0-9._-')"
+  REMOTE_SMOKE_PATH="/tmp/opus8-smoke-${REMOTE_TAG}.py"
+  if "${SSH_BASE[@]}" 'command -v python3 >/dev/null' >/dev/null 2>&1 &&
+    "${SCP_BASE[@]}" infra/scripts/smoke-vless.py \
+      "$VPS_SSH_USER@$VPS_HOST:$REMOTE_SMOKE_PATH" >/dev/null 2>&1; then
+    REMOTE_READY=1
+    echo "OK vantage=landing-vps"
+  else
+    echo "WARN vantage=landing-vps unavailable; github-only fail-safe"
+  fi
+else
+  echo "WARN vantage=landing-vps not-configured; github-only fail-safe"
+fi
+echo "OK vantage=github-runner"
 
 echo "STEP probe-landings"
 LANDINGS_RESPONSE="$(curl -fsS --max-time 20 "$CONTROL_API/api/landings" \
@@ -141,7 +186,7 @@ if [ "${#NODES[@]}" -eq 0 ]; then
 fi
 echo "OK enabled-nodes count=${#NODES[@]}"
 
-probe() {
+local_probe() {
   local node_id="$1" probe_name="$2" host="$3" target="$4"
   local attempt started ended code log_file
   PROBE_OK=false
@@ -175,19 +220,118 @@ probe() {
   echo "WARN probe node=$node_id route=$probe_name reason=$PROBE_ERROR"
 }
 
+remote_probe() {
+  local node_id="$1" probe_name="$2" host="$3" target="$4"
+  local attempt started ended code log_file remote_command
+  REMOTE_PROBE_OK=false
+  REMOTE_PROBE_LATENCY=null
+  REMOTE_PROBE_ERROR="vantage unavailable"
+  [ "$REMOTE_READY" = "1" ] || return
+  log_file="$WORK_DIR/remote-probe.log"
+
+  for attempt in 1 2; do
+    started="$(date +%s%3N)"
+    printf -v remote_command '%q ' \
+      python3 "$REMOTE_SMOKE_PATH" \
+      --url "wss://${host}/?ed=2560" \
+      --uuid "$PROBE_UUID" \
+      --target "$target" \
+      --target-port 80 \
+      --expect-status 0 \
+      --timeout 18
+    set +e
+    "${SSH_BASE[@]}" "$remote_command" >"$log_file" 2>&1
+    code=$?
+    set -e
+    ended="$(date +%s%3N)"
+    if [ "$code" -eq 0 ]; then
+      REMOTE_PROBE_OK=true
+      REMOTE_PROBE_LATENCY=$((ended - started))
+      REMOTE_PROBE_ERROR=""
+      echo "OK probe node=$node_id route=$probe_name vantage=landing-vps latencyMs=$REMOTE_PROBE_LATENCY"
+      return
+    fi
+    REMOTE_PROBE_ERROR="$(tail -n 1 "$log_file" | tr '\r\n\t' ' ' | cut -c1-300)"
+    [ "$attempt" -eq 1 ] && sleep 2
+  done
+  echo "WARN probe node=$node_id route=$probe_name vantage=landing-vps reason=$REMOTE_PROBE_ERROR"
+}
+
+aggregate_probe() {
+  local node_id="$1" probe_name="$2" host="$3" target="$4"
+  local github_ok github_latency github_error remote_ok remote_latency remote_error
+
+  local_probe "$node_id" "$probe_name" "$host" "$target"
+  github_ok="$PROBE_OK"
+  github_latency="$PROBE_LATENCY"
+  github_error="$PROBE_ERROR"
+  remote_probe "$node_id" "$probe_name" "$host" "$target"
+  remote_ok="$REMOTE_PROBE_OK"
+  remote_latency="$REMOTE_PROBE_LATENCY"
+  remote_error="$REMOTE_PROBE_ERROR"
+
+  AGGREGATE_OK="$github_ok"
+  AGGREGATE_LATENCY="$github_latency"
+  AGGREGATE_ERROR="$github_error"
+  if [ "$REMOTE_READY" = "1" ]; then
+    if [ "$github_ok" = true ] || [ "$remote_ok" = true ]; then
+      AGGREGATE_OK=true
+      AGGREGATE_ERROR=""
+      if [ "$github_ok" = true ] && [ "$remote_ok" = true ]; then
+        [ "$remote_latency" -lt "$github_latency" ] &&
+          AGGREGATE_LATENCY="$remote_latency"
+      elif [ "$remote_ok" = true ]; then
+        AGGREGATE_LATENCY="$remote_latency"
+        echo "WARN probe-partial node=$node_id route=$probe_name failed=github-runner"
+      else
+        echo "WARN probe-partial node=$node_id route=$probe_name failed=landing-vps"
+      fi
+    else
+      AGGREGATE_OK=false
+      AGGREGATE_LATENCY=null
+      AGGREGATE_ERROR="github-runner: ${github_error}; landing-vps: ${remote_error}"
+    fi
+  fi
+
+  AGGREGATE_VANTAGES="$(jq -nc \
+    --argjson githubOk "$github_ok" \
+    --argjson githubLatencyMs "$github_latency" \
+    --arg githubError "$github_error" \
+    --argjson remoteAvailable "$([ "$REMOTE_READY" = "1" ] && echo true || echo false)" \
+    --argjson remoteOk "$remote_ok" \
+    --argjson remoteLatencyMs "$remote_latency" \
+    --arg remoteError "$remote_error" \
+    '{
+      github:{
+        available:true,
+        ok:$githubOk,
+        latencyMs:$githubLatencyMs,
+        error:(if $githubError == "" then null else $githubError end)
+      },
+      landingVps:{
+        available:$remoteAvailable,
+        ok:(if $remoteAvailable then $remoteOk else null end),
+        latencyMs:(if $remoteAvailable then $remoteLatencyMs else null end),
+        error:(if $remoteAvailable and $remoteError != "" then $remoteError else null end)
+      }
+    }')"
+}
+
 RESULTS='[]'
 for entry in "${NODES[@]}"; do
   IFS=$'\t' read -r NODE_ID NODE_HOST <<<"$entry"
 
-  probe "$NODE_ID" direct "$NODE_HOST" example.com
-  DIRECT_OK="$PROBE_OK"
-  DIRECT_LATENCY="$PROBE_LATENCY"
-  DIRECT_ERROR="$PROBE_ERROR"
+  aggregate_probe "$NODE_ID" direct "$NODE_HOST" example.com
+  DIRECT_OK="$AGGREGATE_OK"
+  DIRECT_LATENCY="$AGGREGATE_LATENCY"
+  DIRECT_ERROR="$AGGREGATE_ERROR"
+  DIRECT_VANTAGES="$AGGREGATE_VANTAGES"
 
-  probe "$NODE_ID" landing "$NODE_HOST" openai.com
-  LANDING_OK="$PROBE_OK"
-  LANDING_LATENCY="$PROBE_LATENCY"
-  LANDING_ERROR="$PROBE_ERROR"
+  aggregate_probe "$NODE_ID" landing "$NODE_HOST" openai.com
+  LANDING_OK="$AGGREGATE_OK"
+  LANDING_LATENCY="$AGGREGATE_LATENCY"
+  LANDING_ERROR="$AGGREGATE_ERROR"
+  LANDING_VANTAGES="$AGGREGATE_VANTAGES"
 
   RESULTS="$(printf '%s' "$RESULTS" | jq -c \
     --arg nodeId "$NODE_ID" \
@@ -197,6 +341,8 @@ for entry in "${NODES[@]}"; do
     --argjson landingLatencyMs "$LANDING_LATENCY" \
     --arg directError "$DIRECT_ERROR" \
     --arg landingError "$LANDING_ERROR" \
+    --argjson directVantages "$DIRECT_VANTAGES" \
+    --argjson landingVantages "$LANDING_VANTAGES" \
     '. + [{
       nodeId:$nodeId,
       directOk:$directOk,
@@ -204,7 +350,11 @@ for entry in "${NODES[@]}"; do
       directLatencyMs:$directLatencyMs,
       landingLatencyMs:$landingLatencyMs,
       directError:(if $directError == "" then null else $directError end),
-      landingError:(if $landingError == "" then null else $landingError end)
+      landingError:(if $landingError == "" then null else $landingError end),
+      vantages:{
+        direct:$directVantages,
+        landing:$landingVantages
+      }
     }]')"
 done
 

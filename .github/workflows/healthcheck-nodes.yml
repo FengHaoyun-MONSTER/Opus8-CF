@@ -20,9 +20,22 @@ jobs:
     env:
       ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      VPS_HOST: ${{ secrets.SERVICES_IP }}
+      VPS_SSH_USER: ${{ secrets.SERVICES_USER }}
+      VPS_SSH_PASSWORD: ${{ secrets.SERVICES_CODE }}
+      VPS_SSH_PORT: ${{ secrets.SERVICES_SSH_PORT }}
       HEALTH_ALERT_FILE: /tmp/opus8-health-state.json
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare landing-vantage SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${VPS_HOST:-}"
+          echo "::add-mask::${VPS_SSH_USER:-}"
+          echo "::add-mask::${VPS_SSH_PASSWORD:-}"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
       - name: Probe every enabled node
         id: probe
         run: bash infra/scripts/healthcheck-nodes.sh

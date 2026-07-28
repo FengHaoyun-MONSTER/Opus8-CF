@@ -13,6 +13,7 @@ export interface NodeProbeResultInput {
   landingLatencyMs?: number;
   directError?: string;
   landingError?: string;
+  vantages?: unknown;
 }
 
 export interface NodeHealthReportInput {
@@ -29,6 +30,7 @@ interface NormalizedProbeResult {
   landingLatencyMs: number | null;
   directError: string | null;
   landingError: string | null;
+  vantages: Record<string, unknown> | null;
 }
 
 function boundedLatency(value: unknown): number | null {
@@ -44,6 +46,16 @@ function cleanError(value: unknown): string | null {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value !== "string") throw new Error("探测错误必须是字符串");
   return value.replace(/\s+/g, " ").trim().slice(0, 500) || null;
+}
+
+function cleanVantages(value: unknown): Record<string, unknown> | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("探测视角详情必须是对象");
+  }
+  const encoded = JSON.stringify(value);
+  if (encoded.length > 4_000) throw new Error("探测视角详情过大");
+  return JSON.parse(encoded) as Record<string, unknown>;
 }
 
 function normalizeReport(input: NodeHealthReportInput): {
@@ -91,6 +103,7 @@ function normalizeReport(input: NodeHealthReportInput): {
       landingLatencyMs: boundedLatency(item.landingLatencyMs),
       directError: cleanError(item.directError),
       landingError: cleanError(item.landingError),
+      vantages: cleanVantages(item.vantages),
     };
   });
   return { runId, checkedAt, results };
@@ -257,6 +270,7 @@ export async function applyNodeHealthReport(
     const details = JSON.stringify({
       directError: result.directError,
       landingError: result.landingError,
+      vantages: result.vantages,
     });
     statements.push(
       env.DB.prepare(
