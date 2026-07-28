@@ -37,15 +37,19 @@ jobs:
           - alias: acc1
             node_id: acc1-n1
             region: US
+            deploy_suffix: -v2
           - alias: acc1
             node_id: acc1-n2
             region: EU
+            deploy_suffix: ""
           - alias: acc2
             node_id: acc2-n1
             region: HK
+            deploy_suffix: ""
           - alias: acc2
             node_id: acc2-n2
             region: SG
+            deploy_suffix: ""
     env:
       CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
@@ -56,6 +60,7 @@ jobs:
       NODE_ID: ${{ matrix.node_id }}
       NODE_ACCOUNT_ALIAS: ${{ matrix.alias }}
       NODE_REGION: ${{ matrix.region }}
+      NODE_DEPLOY_SUFFIX: ${{ matrix.deploy_suffix }}
       SERVICES_IP: ${{ secrets.SERVICES_IP }}
       SERVICES_USER: ${{ secrets.SOCKS_USER }}
       SERVICES_CODE: ${{ secrets.SOCKS_PASSWORD }}

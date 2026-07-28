@@ -3,6 +3,7 @@
 # 需要环境变量：
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
 #   CONTROL_ROOT_DOMAIN / ROOT_DOMAIN / NODE_HMAC_SECRET / NODE_ID / NODE_ACCOUNT_ALIAS / NODE_REGION
+#   NODE_DEPLOY_SUFFIX  (可选，例如 -v2，用于无损替换异常 Worker 槽位)
 #   SERVICES_IP / SERVICES_USER / SERVICES_CODE  (落地机，可缺省 -> 纯 CF 出口)
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -14,12 +15,17 @@ cd packages/edge-node
 : "${ROOT_DOMAIN:?ROOT_DOMAIN is required for production custom domains}"
 : "${CONTROL_ROOT_DOMAIN:?CONTROL_ROOT_DOMAIN is required}"
 NODE_REGION="${NODE_REGION:-}"
+NODE_DEPLOY_SUFFIX="${NODE_DEPLOY_SUFFIX:-}"
+if ! printf '%s' "$NODE_DEPLOY_SUFFIX" | grep -qE '^(-[a-z0-9]+)?$'; then
+  echo "ERROR invalid-node-deploy-suffix"
+  exit 9
+fi
 ROOT_DOMAIN="${ROOT_DOMAIN#https://}"; ROOT_DOMAIN="${ROOT_DOMAIN#http://}"; ROOT_DOMAIN="${ROOT_DOMAIN%%/*}"
 CONTROL_ROOT_DOMAIN="${CONTROL_ROOT_DOMAIN#https://}"; CONTROL_ROOT_DOMAIN="${CONTROL_ROOT_DOMAIN#http://}"; CONTROL_ROOT_DOMAIN="${CONTROL_ROOT_DOMAIN%%/*}"
 CONTROL_PLANE_URL="https://api.${CONTROL_ROOT_DOMAIN}"
-CUSTOM_HOST="${NODE_ID}.${ROOT_DOMAIN}"
+CUSTOM_HOST="${NODE_ID}${NODE_DEPLOY_SUFFIX}.${ROOT_DOMAIN}"
 CUSTOM_URL="https://${CUSTOM_HOST}"
-WORKER_NAME="opus8cf-node-${NODE_ID}"
+WORKER_NAME="opus8cf-node-${NODE_ID}${NODE_DEPLOY_SUFFIX}"
 OPUS8_BUILD_ID="${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
 
 echo "STEP build"
@@ -128,7 +134,7 @@ fi
 
 echo "STEP wait-deployed-version"
 VERSION_READY=0
-for n in $(seq 1 36); do
+for n in $(seq 1 60); do
   CUSTOM_BUILD=$(curl -fsS --max-time 12 "${CUSTOM_URL}/__opus8/build" 2>/dev/null \
     | EXPECTED_NODE="$NODE_ID" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j.nodeId===process.env.EXPECTED_NODE?String(j.buildId||""):"")}catch(e){}})' || true)
   WORKERS_BUILD=""

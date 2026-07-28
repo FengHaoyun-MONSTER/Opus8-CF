@@ -167,7 +167,7 @@ jobs:
           ROOT_DOMAIN_ACC2="$(normalize_domain "$ROOT_DOMAIN_ACC2")"
           CONTROL_API="https://api.${CONTROL_ROOT_DOMAIN}"
           nodes=(
-            "acc1-n1|acc1-n1.${ROOT_DOMAIN_ACC1}"
+            "acc1-n1|acc1-n1-v2.${ROOT_DOMAIN_ACC1}"
             "acc1-n2|acc1-n2.${ROOT_DOMAIN_ACC1}"
             "acc2-n1|acc2-n1.${ROOT_DOMAIN_ACC2}"
             "acc2-n2|acc2-n2.${ROOT_DOMAIN_ACC2}"
@@ -335,8 +335,8 @@ jobs:
           for ws_entry in \
             "acc1-n2-workers|opus8cf-node-acc1-n2.techtoolhub-office.workers.dev" \
             "acc1-n2-custom|acc1-n2.${ROOT_DOMAIN_ACC1}" \
-            "acc1-n1-workers|opus8cf-node-acc1-n1.techtoolhub-office.workers.dev" \
-            "acc1-n1-custom|acc1-n1.${ROOT_DOMAIN_ACC1}"; do
+            "acc1-n1-v2-workers|opus8cf-node-acc1-n1-v2.techtoolhub-office.workers.dev" \
+            "acc1-n1-v2-custom|acc1-n1-v2.${ROOT_DOMAIN_ACC1}"; do
             IFS='|' read -r ws_label ws_host <<<"$ws_entry"
             route_ok=0
             for attempt in 1 2 3; do
@@ -399,8 +399,10 @@ jobs:
           echo "::add-mask::$CF_ACCOUNT_ID"
 
           api="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts"
-          for node in acc1-n1 acc1-n2; do
-            script="opus8cf-node-${node}"
+          for entry in \
+            "acc1-n1|opus8cf-node-acc1-n1-v2" \
+            "acc1-n2|opus8cf-node-acc1-n2"; do
+            IFS='|' read -r node script <<<"$entry"
             settings="$(curl -fsS --max-time 30 \
               -H "authorization: Bearer ${CF_API_TOKEN}" \
               "${api}/${script}/settings")"
@@ -453,7 +455,7 @@ jobs:
           echo "::add-mask::$CLOUDFLARE_API_TOKEN"
           echo "::add-mask::$CLOUDFLARE_ACCOUNT_ID"
           npx --yes wrangler@4 rollback "$EDGE_VERSION" \
-            --name opus8cf-node-acc1-n1 \
+            --name opus8cf-node-acc1-n1-v2 \
             --message "Restore validated Opus8 transport runtime"
 
       - name: Diagnose recent Zero Trust enrollment
