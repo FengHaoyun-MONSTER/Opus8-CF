@@ -171,9 +171,9 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf '%s' "$REPORT_RESPONSE" | jq -r '
       .nodes[] |
       "| \(.id) | " +
-      (if .health_direct_ok == 1 then "OK \(.health_direct_latency_ms // \"-\") ms" else "FAIL" end) +
+      (if .health_direct_ok == 1 then "OK \(.health_direct_latency_ms // "-") ms" else "FAIL" end) +
       " | " +
-      (if .health_landing_ok == 1 then "OK \(.health_landing_latency_ms // \"-\") ms" else "FAIL" end) +
+      (if .health_landing_ok == 1 then "OK \(.health_landing_latency_ms // "-") ms" else "FAIL" end) +
       " | \(.health) |"'
   } >>"$GITHUB_STEP_SUMMARY"
 fi
