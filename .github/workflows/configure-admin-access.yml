@@ -1,0 +1,26 @@
+name: configure-admin-access
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: configure-admin-access
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+      ACCESS_ADMIN_EMAIL: ${{ secrets.ACCESS_ADMIN_EMAIL }}
+      ACCESS_HOSTNAME: opus8cf-admin.pages.dev
+      CF_ZERO_TRUST_TEAM: ${{ secrets.CF_ZERO_TRUST_TEAM }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure and verify Cloudflare Access
+        run: bash infra/scripts/configure-admin-access.sh

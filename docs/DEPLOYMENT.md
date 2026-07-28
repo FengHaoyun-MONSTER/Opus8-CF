@@ -24,8 +24,9 @@
 | `JWT_SECRET` | 管理 JWT 签名 |
 | `NODE_HMAC_SECRET` | 边缘节点 ↔ 控制面 请求签名共享密钥 |
 | `LANDING_CONFIG_KEY` | D1 中落地机账号密码的 AES-GCM 静态加密密钥（至少 32 字符） |
+| `ACCESS_ADMIN_EMAIL` | Cloudflare Access 唯一允许登录的管理邮箱 |
 
-四项均必须以 GitHub Actions Secrets 保存，不要写入仓库。`LANDING_CONFIG_KEY` 不可随意轮换；直接更换会使已保存的
+以上各项均必须以 GitHub Actions Secrets 保存，不要写入仓库。`LANDING_CONFIG_KEY` 不可随意轮换；直接更换会使已保存的
 落地机凭据无法解密，应先迁移或重新录入。`NODE_HMAC_SECRET` 轮换后需让控制面和全部节点依次重新部署。
 
 ## 动态落地域名
@@ -73,5 +74,12 @@ Worker 的 `/api/operations/overview` 与用户活动接口；24 小时趋势和
 ## Token 权限要求
 
 `API_TOKEN` 至少需要：Account → Workers Scripts:Edit、Workers KV Storage:Edit、D1:Edit、
-Cloudflare Pages:Edit；Zone → DNS:Edit（用自定义域时）。
+Cloudflare Pages:Edit、Access: Apps and Policies Write；Zone → DNS:Edit（用自定义域时）。
 你标注的是 "develop services" 权限组——preflight 会逐项探测并在 Summary 报告哪项缺失，据此补齐即可。
+### Cloudflare Access 保护管理站
+
+生产管理站使用账号级 Cloudflare Access 应用保护
+`opus8cf-admin.pages.dev`。GitHub Secret `ACCESS_ADMIN_EMAIL` 保存唯一允许登录的管理员邮箱，
+主账号 `API_TOKEN` 还必须拥有账号级 `Access: Apps and Policies Write` 权限。执行
+`configure-admin-access` 工作流会幂等创建或更新应用及邮件白名单，并验证未认证请求已跳转到
+团队的 `cloudflareaccess.com` 登录页。管理站自身的管理员密码继续保留，形成两层认证。
