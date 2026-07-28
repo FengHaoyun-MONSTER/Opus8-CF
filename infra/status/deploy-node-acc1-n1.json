@@ -22,13 +22,13 @@
     "OK custom-domain-ready",
     "STEP verify",
     "OK node-tls-http=200",
-    "OK uuids-endpoint-count=4",
+    "OK uuids-endpoint-count=3",
     "OK landing-bundle-encrypted",
     "STEP canary-user",
     "OK canary-user-created",
-    "INFO edge-policy-invalidation acknowledged=0 target=0",
+    "INFO edge-policy-invalidation acknowledged=4 target=1",
     "STEP vless-smoke",
     "ERROR vless-smoke"
   ],
-  "finishedAt": "2026-07-28T05:35:36Z"
+  "finishedAt": "2026-07-28T05:45:38Z"
 }
