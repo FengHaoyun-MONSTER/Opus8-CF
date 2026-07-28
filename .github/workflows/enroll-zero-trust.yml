@@ -13,8 +13,13 @@ on:
           - diagnose
           - verify-routing
           - diagnose-edge
+          - rollback-acc1-n1
           - canary-ws
           - canary-grpc
+      edge_version:
+        description: Existing acc1-n1 Worker version ID used only for rollback
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -420,6 +425,24 @@ jobs:
                 ]
               } end'
           done
+
+      - name: Roll back account-1 node 1
+        if: inputs.operation == 'rollback-acc1-n1'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+          EDGE_VERSION: ${{ inputs.edge_version }}
+        run: |
+          set -euo pipefail
+          : "${CLOUDFLARE_API_TOKEN:?API_TOKEN is required}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?ACCOUNT_ID is required}"
+          : "${EDGE_VERSION:?edge_version is required}"
+          echo "::add-mask::$CLOUDFLARE_API_TOKEN"
+          echo "::add-mask::$CLOUDFLARE_ACCOUNT_ID"
+          npx --yes wrangler@4 rollback "$EDGE_VERSION" \
+            --name opus8cf-node-acc1-n1 \
+            --message "Restore validated Opus8 transport runtime"
 
       - name: Diagnose recent Zero Trust enrollment
         if: inputs.operation == 'diagnose'
