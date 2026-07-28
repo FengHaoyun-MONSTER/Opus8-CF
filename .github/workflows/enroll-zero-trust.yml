@@ -268,24 +268,46 @@ jobs:
           NODE_ID="acc1-n1"
           NODE_HOST="acc1-n1.${ROOT_DOMAIN_ACC1}"
 
-          timestamp="$(date +%s)000"
-          signature="$(printf '%s' "${timestamp}.${NODE_ID}." \
-            | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r \
-            | cut -d' ' -f1)"
-          uuid="$(curl -fsS --max-time 20 \
-            "$CONTROL_API/api/nodes/$NODE_ID/uuids" \
-            -H "x-opus8-ts: $timestamp" \
-            -H "x-opus8-node: $NODE_ID" \
-            -H "x-opus8-sign: $signature" \
-            | jq -er '.uuids[0]')"
-          echo "::add-mask::$uuid"
-
           login_body="$(jq -nc --arg password "$ADMIN_PASSWORD" '{password:$password}')"
           admin_token="$(curl -fsS --max-time 20 -X POST \
             "$CONTROL_API/api/admin/login" \
             -H 'content-type: application/json' \
             --data "$login_body" | jq -er '.token')"
           echo "::add-mask::$admin_token"
+
+          canary_user_id=""
+          cleanup_canary_user() {
+            if [ -n "$canary_user_id" ]; then
+              curl -fsS --max-time 20 -X DELETE \
+                "$CONTROL_API/api/users/$canary_user_id" \
+                -H "authorization: Bearer $admin_token" >/dev/null || true
+            fi
+          }
+          trap cleanup_canary_user EXIT
+
+          create_body="$(jq -nc \
+            --arg username "opus8-grpc-canary-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            '{
+              username:$username,
+              nodeGroup:["acc1-n1"],
+              unlock:false,
+              durationDays:1,
+              deviceLimit:4,
+              ipLimit24h:10,
+              trafficLimitBytes:0
+            }')"
+          canary_user="$(curl -fsS --max-time 20 -X POST \
+            "$CONTROL_API/api/users" \
+            -H "authorization: Bearer $admin_token" \
+            -H 'content-type: application/json' \
+            --data "$create_body")"
+          canary_user_id="$(printf '%s' "$canary_user" | jq -er '.user.id')"
+          uuid="$(printf '%s' "$canary_user" | jq -er '.user.uuid')"
+          echo "::add-mask::$canary_user_id"
+          echo "::add-mask::$uuid"
+          echo "INFO waiting-for-edge-policy-cache"
+          sleep 65
+
           before_user="$(curl -fsS --max-time 20 "$CONTROL_API/api/users" \
             -H "authorization: Bearer $admin_token" \
             | jq -cer --arg uuid "$uuid" '.users[] | select(.uuid == $uuid)')"
@@ -314,7 +336,7 @@ jobs:
           if [ "$connection_delta" -ge 1 ] && [ "$byte_delta" -gt 0 ]; then
             echo "OK grpc-usage-accounting connections=$connection_delta bytes=$byte_delta"
           else
-            echo "::error::gRPC connected but usage accounting did not increase"
+            echo "::error::gRPC connected but usage accounting did not increase; connections=$connection_delta bytes=$byte_delta"
             exit 1
           fi
 
