@@ -48,6 +48,7 @@ jobs:
             region: SG
     env:
       CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
       NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
       CLOUDFLARE_API_TOKEN: ${{ matrix.alias == 'acc1' && secrets.API_TOKEN || secrets.API_TOKEN_NUM1 }}
       CLOUDFLARE_ACCOUNT_ID: ${{ matrix.alias == 'acc1' && secrets.ACCOUNT_ID || secrets.ACCOUNT_ID_NUM1 }}

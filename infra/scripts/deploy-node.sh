@@ -10,6 +10,7 @@ REPO_ROOT="$(pwd)"
 cd packages/edge-node
 
 : "${NODE_ID:?}"; : "${NODE_ACCOUNT_ALIAS:?}"; : "${NODE_HMAC_SECRET:?}"
+: "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required for the managed canary user}"
 : "${ROOT_DOMAIN:?ROOT_DOMAIN is required for production custom domains}"
 : "${CONTROL_ROOT_DOMAIN:?CONTROL_ROOT_DOMAIN is required}"
 NODE_REGION="${NODE_REGION:-}"
@@ -151,10 +152,30 @@ UC=$(printf '%s' "$UDATA" | node -e 'let s="";process.stdin.on("data",d=>s+=d).o
 echo "OK uuids-endpoint-count=$UC"
 HAS_LANDING_BUNDLE=$(printf '%s' "$UDATA" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(typeof j.landingBundle==="string"&&j.landingBundle.startsWith("v1.")?"1":"0")}catch(e){process.stdout.write("0")}})')
 if [ "$HAS_LANDING_BUNDLE" = "1" ]; then echo "OK landing-bundle-encrypted"; else echo "ERROR landing-bundle-missing"; exit 16; fi
-TEST_UUID=$(printf '%s' "$UDATA" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String((j.uuids||[])[0]||""))}catch(e){}})')
-# 节点发布并行运行，使用本节点 UUID 做协议烟雾测试，避免多个 GitHub Runner
-# 同时占用真实用户的公网 IP 租约；中央策略在 verify-routing 单 Runner 中验证。
-TEST_UUID="$NODE_UUID"
+
+echo "STEP canary-user"
+LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e 'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
+ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST "$CONTROL_PLANE_URL/api/admin/login" \
+  -H 'content-type: application/json' -d "$LOGIN_BODY" \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.token)process.exit(1);process.stdout.write(j.token)})')
+echo "::add-mask::$ADMIN_TOKEN"
+CANARY_NAME="opus8-node-canary-${NODE_ID}-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
+CREATE_BODY=$(CANARY_NAME="$CANARY_NAME" NODE_ID="$NODE_ID" node -e 'process.stdout.write(JSON.stringify({username:process.env.CANARY_NAME,nodeGroup:[process.env.NODE_ID],unlock:false,durationDays:1,deviceLimit:4,ipLimit24h:10,trafficLimitBytes:0}))')
+CANARY_USER=$(curl -fsS --max-time 20 -X POST "$CONTROL_PLANE_URL/api/users" \
+  -H "authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d "$CREATE_BODY")
+CANARY_USER_ID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.id)process.exit(1);process.stdout.write(j.user.id)})')
+TEST_UUID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.uuid)process.exit(1);process.stdout.write(j.user.uuid)})')
+echo "::add-mask::$CANARY_USER_ID"
+echo "::add-mask::$TEST_UUID"
+cleanup_canary_user() {
+  curl -fsS --max-time 20 -X DELETE "$CONTROL_PLANE_URL/api/users/$CANARY_USER_ID" \
+    -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null 2>&1 || true
+}
+trap cleanup_canary_user EXIT
+echo "OK canary-user-created"
+echo "INFO wait-policy-cache=65s"
+sleep 65
 
 echo "STEP vless-smoke"
 SMOKE_OK=0
