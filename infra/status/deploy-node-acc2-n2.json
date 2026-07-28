@@ -28,11 +28,11 @@
     "OK canary-user-created",
     "INFO edge-policy-invalidation acknowledged=4 target=1",
     "STEP policy-status",
-    "INFO policy-status={\"invalidatedVersion\":1785242447446,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785242451287,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785242447446,\"liveUuidCount\":2,\"liveContainsUuid\":true,\"liveError\":\"\"}",
+    "INFO policy-status={\"invalidatedVersion\":1785244866841,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785244870603,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785244866841,\"liveUuidCount\":2,\"liveContainsUuid\":true,\"liveError\":\"\"}",
     "STEP vless-smoke",
-    "OK vless-ws-auth-egress",
+    "OK vless-ws-auth-egress vantage=github-runner",
     "OK unlock=on(AI域名走落地)",
     "DONE url=https://acc2-n2.openal.uk"
   ],
-  "finishedAt": "2026-07-28T12:41:29Z"
+  "finishedAt": "2026-07-28T13:21:11Z"
 }
