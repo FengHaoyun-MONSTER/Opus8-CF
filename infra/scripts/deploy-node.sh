@@ -83,7 +83,8 @@ cat > wrangler.toml <<EOF
 name = "${WORKER_NAME}"
 main = "dist/index.js"
 compatibility_date = "2025-01-01"
-compatibility_flags = ["nodejs_compat"]
+# acc1 节点与控制面同 Zone；强制按公开网络执行跨 Worker fetch，避免 1042。
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 workers_dev = true
 
 [vars]
