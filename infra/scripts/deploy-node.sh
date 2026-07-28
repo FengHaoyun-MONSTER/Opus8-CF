@@ -16,7 +16,8 @@ cd packages/edge-node
 : "${CONTROL_ROOT_DOMAIN:?CONTROL_ROOT_DOMAIN is required}"
 NODE_REGION="${NODE_REGION:-}"
 NODE_DEPLOY_SUFFIX="${NODE_DEPLOY_SUFFIX:-}"
-if ! printf '%s' "$NODE_DEPLOY_SUFFIX" | grep -qE '^(-[a-z0-9]+)?$'; then
+if [ -n "$NODE_DEPLOY_SUFFIX" ] \
+  && ! printf '%s' "$NODE_DEPLOY_SUFFIX" | grep -qE '^-[a-z0-9]+$'; then
   echo "ERROR invalid-node-deploy-suffix"
   exit 9
 fi
