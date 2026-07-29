@@ -281,14 +281,24 @@ fi
 echo "OK smoke-compliance-state provisioning=$COMPLIANCE_PROXY_ALLOWED"
 
 echo "STEP cors-regression"
-PREFLIGHT_CODE=$(curl -sS -o /tmp/cors-preflight.body -D /tmp/cors-preflight.headers \
-  -w '%{http_code}' --max-time 15 -X OPTIONS "$API_URL/api/users" \
-  -H "Origin: $ADMIN_UI_PRIMARY_ORIGIN" \
-  -H 'Access-Control-Request-Method: GET' \
-  -H 'Access-Control-Request-Headers: authorization' || true)
-if [ "$PREFLIGHT_CODE" != "204" ] \
-  || ! grep -Fqi "access-control-allow-origin: $ADMIN_UI_PRIMARY_ORIGIN" /tmp/cors-preflight.headers \
-  || grep -qi '^access-control-allow-credentials:' /tmp/cors-preflight.headers; then
+PREFLIGHT_OK=0
+PREFLIGHT_CODE=000
+for n in $(seq 1 18); do
+  PREFLIGHT_CODE=$(curl -sS -o /tmp/cors-preflight.body \
+    -D /tmp/cors-preflight.headers -w '%{http_code}' --max-time 15 \
+    -X OPTIONS "$API_URL/api/users" \
+    -H "Origin: $ADMIN_UI_PRIMARY_ORIGIN" \
+    -H 'Access-Control-Request-Method: GET' \
+    -H 'Access-Control-Request-Headers: authorization' || true)
+  if [ "$PREFLIGHT_CODE" = "204" ] \
+    && grep -Fqi "access-control-allow-origin: $ADMIN_UI_PRIMARY_ORIGIN" /tmp/cors-preflight.headers \
+    && ! grep -qi '^access-control-allow-credentials:' /tmp/cors-preflight.headers; then
+    PREFLIGHT_OK=1
+    break
+  fi
+  sleep 3
+done
+if [ "$PREFLIGHT_OK" != "1" ]; then
   echo "ERROR cors-allowed-preflight http=$PREFLIGHT_CODE"
   exit 16
 fi
