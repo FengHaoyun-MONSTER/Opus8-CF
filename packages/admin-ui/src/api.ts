@@ -55,6 +55,26 @@ export interface NodeRow {
   health_last_run_id?: string | null;
 }
 
+export interface OptimizedNodeIpPool {
+  hostname: string;
+  ips: string[];
+  validatedAt: number;
+  expiresAt: number;
+  vantages: string[];
+}
+
+export interface OptimizedIpPoolResponse {
+  ips: string[];
+  active: boolean;
+  activeNodeCount: number;
+  subscriptionEnabled: boolean;
+  pool: {
+    version: 3;
+    generatedAt: number;
+    nodes: Record<string, OptimizedNodeIpPool>;
+  } | null;
+}
+
 export interface CreateUserInput {
   username?: string;
   nodeGroup?: string[];
@@ -296,6 +316,7 @@ export const api = {
   resetUserLeases: (id: string) =>
     req<{ ok: boolean }>(`/api/users/${id}/leases/reset`, { method: "POST" }),
   listNodes: () => req<{ nodes: NodeRow[] }>("/api/nodes"),
+  optimizedIps: () => req<OptimizedIpPoolResponse>("/api/optimized-ips"),
   getUnlockHosts: () => req<UnlockHostsConfig>("/api/settings/unlock-hosts"),
   putUnlockHosts: (hosts: string[]) =>
     req<UnlockHostsConfig>("/api/settings/unlock-hosts", {
