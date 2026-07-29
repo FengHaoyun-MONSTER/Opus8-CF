@@ -1,5 +1,5 @@
 {
-  "result": "cancelled",
+  "result": "success",
   "markers": [
     "STEP prepare-vantages",
     "OK vantages=github-runner,landing-vps",
@@ -10,8 +10,29 @@
     "STEP create-isolated-probe-user",
     "OK probe-user-created",
     "STEP verify-domain-baseline",
-    "WARN domain-baseline node=acc1-n1 skipped=1 github=vless smoke failed: server closed before VLESS response  vps=unknown",
-    "WARN domain-baseline node=acc1-n2 skipped=1 github=vless smoke failed: server closed before VLESS response  vps=unknown"
+    "OK domain-baseline node=acc1-n1 vantages=2",
+    "OK domain-baseline node=acc1-n2 vantages=2",
+    "OK domain-baseline node=acc2-n1 vantages=2",
+    "OK domain-baseline node=acc2-n2 vantages=2",
+    "STEP discover-cfst-candidates",
+    "OK candidate-source=cfst",
+    "OK cfst-candidates count=8",
+    "STEP validate-node-candidates",
+    "OK node-candidates node=acc1-n1 count=10",
+    "OK candidate=172.67.205.59 node=acc1-n1 vantages=2",
+    "OK candidate=104.21.52.231 node=acc1-n1 vantages=2",
+    "OK node-candidates node=acc1-n2 count=10",
+    "OK candidate=172.64.80.1 node=acc1-n2 vantages=2",
+    "OK candidate=104.21.52.231 node=acc1-n2 vantages=2",
+    "OK node-candidates node=acc2-n1 count=10",
+    "OK candidate=172.67.172.247 node=acc2-n1 vantages=2",
+    "OK candidate=104.21.30.138 node=acc2-n1 vantages=2",
+    "OK node-candidates node=acc2-n2 count=10",
+    "OK candidate=104.21.30.138 node=acc2-n2 vantages=2",
+    "OK candidate=172.67.172.247 node=acc2-n2 vantages=2",
+    "STEP push-to-control",
+    "OK pushed nodes=4 ips=8 expiresHours=8",
+    "DONE publishedNodes=4 publishedIps=8"
   ],
-  "finishedAt": "2026-07-29T03:43:11Z"
+  "finishedAt": "2026-07-29T03:56:01Z"
 }
