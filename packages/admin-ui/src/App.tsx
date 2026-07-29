@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { clearAuth, isLoggedIn, loadAuth, apiBase } from "./api";
 import { Login } from "./views/Login";
 import { Dashboard } from "./views/Dashboard";
@@ -19,6 +19,12 @@ export function App() {
   loadAuth();
   const [authed, setAuthed] = useState(isLoggedIn());
   const [tab, setTab] = useState<Tab>(initialTab);
+
+  useEffect(() => {
+    const onHashChange = () => setTab(initialTab());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   const selectTab = (value: Tab) => {
     window.history.replaceState(null, "", `#${value}`);

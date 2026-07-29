@@ -1,9 +1,11 @@
 import { listNodes, listUsers, type AdminUserRecord, type Env } from "./db";
 import { evaluateAccessStatus } from "./access-status";
+import type { NodeRecord } from "@opus8-cf/shared";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 const NODE_HEALTH_STALE_MS = 30 * 60_000;
+const OPTIMIZED_IP_EXPIRY_WARNING_MS = 90 * 60_000;
 
 interface UsageBucket {
   ts: number;
@@ -69,6 +71,173 @@ function operationalUser(user: AdminUserRecord, now: number) {
     accessSeverity: access.severity,
     accessReason: access.reason,
   };
+}
+
+interface OptimizedIpOperations {
+  enabled: boolean;
+  eligibleNodes: number;
+  activeNodes: number;
+  fallbackNodes: number;
+  totalIps: number;
+  generatedAt: number | null;
+  earliestExpiresAt: number | null;
+  alerts: Array<{
+    kind: "optimized_ip";
+    severity: "warning" | "danger";
+    id: string;
+    title: string;
+    detail: string;
+  }>;
+}
+
+async function optimizedIpOperations(
+  env: Env,
+  nodes: NodeRecord[],
+  now: number,
+): Promise<OptimizedIpOperations> {
+  const eligible = nodes.filter(
+    (node) => Number(node.enabled) === 1 && node.health !== "banned",
+  );
+  const result: OptimizedIpOperations = {
+    enabled: env.USE_OPTIMIZED_IPS === "1",
+    eligibleNodes: eligible.length,
+    activeNodes: 0,
+    fallbackNodes: eligible.length,
+    totalIps: 0,
+    generatedAt: null,
+    earliestExpiresAt: null,
+    alerts: [],
+  };
+  if (!result.enabled) {
+    if (eligible.length > 0) {
+      result.alerts.push({
+        kind: "optimized_ip",
+        severity: "warning",
+        id: "subscription-disabled",
+        title: "优选 IP 未启用",
+        detail: `${eligible.length} 个可用节点当前全部使用域名连接`,
+      });
+    }
+    return result;
+  }
+
+  let value: {
+    version?: unknown;
+    generatedAt?: unknown;
+    nodes?: Record<string, unknown>;
+  } | null = null;
+  try {
+    const raw = await env.KV.get("opus8:opt-ips");
+    value = raw ? JSON.parse(raw) : null;
+  } catch {
+    value = null;
+  }
+  if (
+    !value ||
+    value.version !== 3 ||
+    !value.nodes ||
+    typeof value.nodes !== "object" ||
+    Array.isArray(value.nodes)
+  ) {
+    if (eligible.length > 0) {
+      result.alerts.push({
+        kind: "optimized_ip",
+        severity: "danger",
+        id: "pool-unavailable",
+        title: "优选 IP 池不可用",
+        detail: `${eligible.length} 个可用节点已安全回退域名，请运行重新优选任务`,
+      });
+    }
+    return result;
+  }
+
+  const generatedAt = Number(value.generatedAt);
+  result.generatedAt = Number.isSafeInteger(generatedAt) ? generatedAt : null;
+  const expiries: number[] = [];
+  for (const node of eligible) {
+    const entry = value.nodes[node.id] as
+      | {
+          hostname?: unknown;
+          ips?: unknown;
+          validatedAt?: unknown;
+          expiresAt?: unknown;
+          vantages?: unknown;
+        }
+      | undefined;
+    const ips = Array.isArray(entry?.ips)
+      ? [
+          ...new Set(
+            entry.ips.filter(
+              (ip): ip is string =>
+                typeof ip === "string" &&
+                ip.length > 0 &&
+                /^[0-9a-fA-F.:]+$/.test(ip),
+            ),
+          ),
+        ]
+      : [];
+    const vantages = Array.isArray(entry?.vantages)
+      ? entry.vantages.filter((item): item is string => typeof item === "string")
+      : [];
+    const expiresAt = Number(entry?.expiresAt);
+    let reason = "";
+    if (!entry) reason = "本轮没有通过双视角验证的候选 IP";
+    else if (entry.hostname !== node.hostname)
+      reason = "优选记录主机名与当前节点不一致";
+    else if (!Number.isSafeInteger(expiresAt) || expiresAt <= now)
+      reason = "优选记录已过期";
+    else if (
+      !vantages.includes("github-runner") ||
+      !vantages.includes("landing-vps")
+    )
+      reason = "优选记录缺少双视角验证";
+    else if (ips.length === 0) reason = "优选记录没有有效 IP";
+
+    if (reason) {
+      result.alerts.push({
+        kind: "optimized_ip",
+        severity: "warning",
+        id: node.id,
+        title: `${node.id} 使用域名回退`,
+        detail: reason,
+      });
+      continue;
+    }
+    result.activeNodes += 1;
+    result.totalIps += ips.length;
+    expiries.push(expiresAt);
+  }
+  result.fallbackNodes = result.eligibleNodes - result.activeNodes;
+  result.earliestExpiresAt =
+    expiries.length > 0 ? Math.min(...expiries) : null;
+  if (
+    result.earliestExpiresAt &&
+    result.earliestExpiresAt - now <= OPTIMIZED_IP_EXPIRY_WARNING_MS
+  ) {
+    result.alerts.push({
+      kind: "optimized_ip",
+      severity: "warning",
+      id: "pool-expiring",
+      title: "优选 IP 池即将过期",
+      detail: `最早一组记录将在 ${Math.max(
+        0,
+        Math.ceil((result.earliestExpiresAt - now) / 60_000),
+      )} 分钟后过期`,
+    });
+  }
+  if (result.activeNodes === 0 && result.eligibleNodes > 0) {
+    result.alerts = result.alerts.filter(
+      (alert) => alert.id !== "pool-expiring",
+    );
+    result.alerts.unshift({
+      kind: "optimized_ip",
+      severity: "danger",
+      id: "zero-coverage",
+      title: "优选 IP 覆盖为零",
+      detail: "所有可用节点均已安全回退域名，请检查最近一次优选任务",
+    });
+  }
+  return result;
 }
 
 export async function operationsOverview(env: Env) {
@@ -173,6 +342,7 @@ export async function operationsOverview(env: Env) {
       connections: usage?.connections || 0,
     };
   });
+  const optimizedIp = await optimizedIpOperations(env, nodes, now);
 
   const userAlerts = operationalUsers
     .filter((user) => user.accessSeverity !== "healthy")
@@ -247,6 +417,15 @@ export async function operationsOverview(env: Env) {
     0,
   );
 
+  const alerts = [
+    ...optimizedIp.alerts,
+    ...nodeAlerts,
+    ...landingAlerts,
+    ...userAlerts,
+  ]
+    .sort((a, b) => Number(b.severity === "danger") - Number(a.severity === "danger"))
+    .slice(0, 50);
+
   return {
     generatedAt: now,
     windowHours: 24,
@@ -282,11 +461,22 @@ export async function operationsOverview(env: Env) {
       totalLandings: finiteNumber(landingResult?.total),
       healthyLandings: finiteNumber(landingResult?.healthy),
       unhealthyLandings: finiteNumber(landingResult?.unhealthy),
+      dangerAlerts: alerts.filter((alert) => alert.severity === "danger").length,
+      warningAlerts: alerts.filter((alert) => alert.severity === "warning").length,
     },
     series,
     topUsers,
     nodeTraffic,
-    alerts: [...nodeAlerts, ...landingAlerts, ...userAlerts].slice(0, 12),
+    optimizedIp: {
+      enabled: optimizedIp.enabled,
+      eligibleNodes: optimizedIp.eligibleNodes,
+      activeNodes: optimizedIp.activeNodes,
+      fallbackNodes: optimizedIp.fallbackNodes,
+      totalIps: optimizedIp.totalIps,
+      generatedAt: optimizedIp.generatedAt,
+      earliestExpiresAt: optimizedIp.earliestExpiresAt,
+    },
+    alerts,
   };
 }
 

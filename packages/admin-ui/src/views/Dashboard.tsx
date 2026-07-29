@@ -9,6 +9,9 @@ interface Stat {
   tone: "a" | "b" | "c" | "d" | "e" | "f";
 }
 
+type AlertFilter = "all" | "danger" | "warning";
+type Alert = OperationsOverview["alerts"][number];
+
 function hourLabel(ts: number): string {
   return new Date(ts).toLocaleTimeString("zh-CN", {
     hour: "2-digit",
@@ -22,11 +25,25 @@ function statusText(severity: "healthy" | "warning" | "danger"): string {
   return "正常";
 }
 
+function alertKindText(kind: Alert["kind"]): string {
+  if (kind === "user") return "用户";
+  if (kind === "landing") return "落地机";
+  if (kind === "optimized_ip") return "优选 IP";
+  return "节点";
+}
+
+function alertTarget(kind: Alert["kind"]): string {
+  if (kind === "user") return "#users";
+  if (kind === "landing") return "#landings";
+  return "#nodes";
+}
+
 export function Dashboard() {
   const [overview, setOverview] = useState<OperationsOverview | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [alertFilter, setAlertFilter] = useState<AlertFilter>("all");
 
   const refresh = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -58,6 +75,14 @@ export function Dashboard() {
       ),
     [overview],
   );
+  const filteredAlerts = useMemo(
+    () =>
+      (overview?.alerts || []).filter(
+        (alert) =>
+          alertFilter === "all" || alert.severity === alertFilter,
+      ),
+    [overview, alertFilter],
+  );
 
   if (loading && !overview)
     return <div className="loading-state">正在读取运营数据…</div>;
@@ -80,19 +105,21 @@ export function Dashboard() {
         {
           label: "有效用户",
           value: `${summary.activeUsers} / ${summary.totalUsers}`,
-          hint: `${summary.attentionUsers} 个需关注`,
+          hint: `${summary.attentionUsers} 个需要关注`,
           tone: "c",
         },
         {
-          label: "受限用户",
-          value: String(summary.blockedUsers),
-          hint: "停用、过期或额度耗尽",
+          label: "严重告警",
+          value: String(summary.dangerAlerts),
+          hint: `${summary.warningAlerts} 个一般告警`,
           tone: "d",
         },
         {
           label: "边缘节点",
           value: `${summary.healthyNodes} / ${summary.totalNodes}`,
-          hint: "健康 / 总数",
+          hint: overview
+            ? `优选覆盖 ${overview.optimizedIp.activeNodes}/${overview.optimizedIp.eligibleNodes}`
+            : "健康 / 总数",
           tone: "e",
         },
         {
@@ -113,7 +140,7 @@ export function Dashboard() {
           <div className="eyebrow">OPERATIONS</div>
           <h2>运营总览</h2>
           <div className="muted">
-            连接、流量、防分享限制与出口健康状态，每 30 秒自动更新。
+            连接、流量、防分享限制、节点与出口健康状态，每 30 秒自动更新。
           </div>
         </div>
         <div className="refresh-block">
@@ -186,10 +213,10 @@ export function Dashboard() {
         </section>
 
         <section className="ops-panel alert-panel">
-          <div className="panel-heading">
+          <div className="panel-heading alert-heading">
             <div>
-              <h3>需要处理</h3>
-              <span>账号限制与节点异常</span>
+              <h3>异常告警中心</h3>
+              <span>严重告警优先，点击“处理”进入对应页面</span>
             </div>
             <span
               className={`count-badge ${overview?.alerts.length ? "has-alerts" : ""}`}
@@ -197,9 +224,26 @@ export function Dashboard() {
               {overview?.alerts.length || 0}
             </span>
           </div>
+          <div className="alert-filter-bar">
+            {(
+              [
+                ["all", "全部", overview?.alerts.length || 0],
+                ["danger", "严重", summary?.dangerAlerts || 0],
+                ["warning", "一般", summary?.warningAlerts || 0],
+              ] as const
+            ).map(([value, label, count]) => (
+              <button
+                key={value}
+                className={alertFilter === value ? "active" : ""}
+                onClick={() => setAlertFilter(value)}
+              >
+                {label} {count}
+              </button>
+            ))}
+          </div>
           <div className="alert-list">
-            {overview?.alerts.length ? (
-              overview.alerts.map((alert) => (
+            {filteredAlerts.length ? (
+              filteredAlerts.map((alert) => (
                 <div
                   className={`alert-item alert-${alert.severity}`}
                   key={`${alert.kind}-${alert.id}`}
@@ -209,21 +253,20 @@ export function Dashboard() {
                     <strong>{alert.title}</strong>
                     <span>{alert.detail}</span>
                   </div>
-                  <em>
-                    {alert.kind === "user"
-                      ? "用户"
-                      : alert.kind === "landing"
-                        ? "落地机"
-                        : "节点"}
-                  </em>
+                  <div className="alert-tail">
+                    <em>{alertKindText(alert.kind)}</em>
+                    <a href={alertTarget(alert.kind)}>处理</a>
+                  </div>
                 </div>
               ))
+            ) : overview?.alerts.length ? (
+              <div className="filtered-clear">当前筛选条件下没有告警</div>
             ) : (
               <div className="all-clear">
                 <span>✓</span>
                 <div>
                   <strong>当前无告警</strong>
-                  <small>用户限制和节点状态均正常</small>
+                  <small>用户、节点、优选 IP 和落地机状态均正常</small>
                 </div>
               </div>
             )}
@@ -236,7 +279,7 @@ export function Dashboard() {
           <div className="panel-heading">
             <div>
               <h3>用量最高的用户</h3>
-              <span>累计流量排序</span>
+              <span>按累计流量排序</span>
             </div>
           </div>
           <div className="table-scroll">

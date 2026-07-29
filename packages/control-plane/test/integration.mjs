@@ -219,7 +219,10 @@ try {
       Array.isArray(overview.series) &&
       overview.series.length === 24 &&
       Array.isArray(overview.topUsers) &&
-      Array.isArray(overview.alerts),
+      Array.isArray(overview.alerts) &&
+      overview.optimizedIp?.enabled === true &&
+      overview.optimizedIp?.eligibleNodes >= 1 &&
+      overview.alerts.some((alert) => alert.kind === "optimized_ip"),
     `operations overview must expose stable dashboard data: ${JSON.stringify(overview)}`,
   );
 
@@ -423,6 +426,21 @@ try {
       optimizedPool.pool?.nodes?.[nodeId]?.vantages?.length === 2,
     `validated optimized pool must be observable: ${JSON.stringify(optimizedPool)}`,
   );
+  const overviewWithOptimizedPool = await jsonResponse(
+    await fetch(`${base}/api/operations/overview`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    overviewWithOptimizedPool.optimizedIp?.activeNodes >= 1 &&
+      overviewWithOptimizedPool.optimizedIp?.totalIps >= 1 &&
+      !overviewWithOptimizedPool.alerts.some(
+        (alert) =>
+          alert.kind === "optimized_ip" &&
+          alert.id === nodeId,
+      ),
+    `operations overview must clear optimized-IP coverage alerts: ${JSON.stringify(overviewWithOptimizedPool)}`,
+  );
   const optimizedSubscription = Buffer.from(
     await (await fetch(created.subUrl)).text(),
     "base64",
@@ -479,6 +497,7 @@ try {
   console.log("OK landing-real-probe-alert");
   console.log("OK optimized-ip-two-vantage-admission");
   console.log("OK optimized-ip-node-specific-subscription");
+  console.log("OK optimized-ip-operations-alerts");
 } finally {
   if (landingId) {
     await fetch(`${base}/api/landings/${landingId}`, {

@@ -157,6 +157,8 @@ export interface OperationsOverview {
     totalLandings: number;
     healthyLandings: number;
     unhealthyLandings: number;
+    dangerAlerts: number;
+    warningAlerts: number;
   };
   series: Array<{
     ts: number;
@@ -181,8 +183,17 @@ export interface OperationsOverview {
     bytesDown: number;
     connections: number;
   }>;
+  optimizedIp: {
+    enabled: boolean;
+    eligibleNodes: number;
+    activeNodes: number;
+    fallbackNodes: number;
+    totalIps: number;
+    generatedAt: number | null;
+    earliestExpiresAt: number | null;
+  };
   alerts: Array<{
-    kind: "user" | "node" | "landing";
+    kind: "user" | "node" | "landing" | "optimized_ip";
     severity: "healthy" | "warning" | "danger";
     id: string;
     title: string;
