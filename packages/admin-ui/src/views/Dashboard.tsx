@@ -10,6 +10,7 @@ interface Stat {
 }
 
 type AlertFilter = "all" | "danger" | "warning";
+type AlertView = "current" | "history";
 type Alert = OperationsOverview["alerts"][number];
 
 function hourLabel(ts: number): string {
@@ -44,6 +45,7 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [alertFilter, setAlertFilter] = useState<AlertFilter>("all");
+  const [alertView, setAlertView] = useState<AlertView>("current");
 
   const refresh = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -224,51 +226,104 @@ export function Dashboard() {
               {overview?.alerts.length || 0}
             </span>
           </div>
-          <div className="alert-filter-bar">
-            {(
-              [
-                ["all", "全部", overview?.alerts.length || 0],
-                ["danger", "严重", summary?.dangerAlerts || 0],
-                ["warning", "一般", summary?.warningAlerts || 0],
-              ] as const
-            ).map(([value, label, count]) => (
-              <button
-                key={value}
-                className={alertFilter === value ? "active" : ""}
-                onClick={() => setAlertFilter(value)}
-              >
-                {label} {count}
-              </button>
-            ))}
+          <div className="alert-mode-bar">
+            <button
+              className={alertView === "current" ? "active" : ""}
+              onClick={() => setAlertView("current")}
+            >
+              当前告警
+            </button>
+            <button
+              className={alertView === "history" ? "active" : ""}
+              onClick={() => setAlertView("history")}
+            >
+              事件历史 {overview?.alertIncidents.length || 0}
+            </button>
+            <span>D1 状态事件 · KV 写入 0</span>
           </div>
-          <div className="alert-list">
-            {filteredAlerts.length ? (
-              filteredAlerts.map((alert) => (
-                <div
-                  className={`alert-item alert-${alert.severity}`}
-                  key={`${alert.kind}-${alert.id}`}
+          {alertView === "current" && (
+            <div className="alert-filter-bar">
+              {(
+                [
+                  ["all", "全部", overview?.alerts.length || 0],
+                  ["danger", "严重", summary?.dangerAlerts || 0],
+                  ["warning", "一般", summary?.warningAlerts || 0],
+                ] as const
+              ).map(([value, label, count]) => (
+                <button
+                  key={value}
+                  className={alertFilter === value ? "active" : ""}
+                  onClick={() => setAlertFilter(value)}
                 >
-                  <span className="alert-dot" />
-                  <div>
-                    <strong>{alert.title}</strong>
-                    <span>{alert.detail}</span>
+                  {label} {count}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className={`alert-list alert-list-${alertView}`}>
+            {alertView === "history" ? (
+              overview?.alertIncidents.length ? (
+                overview.alertIncidents.map((incident) => (
+                  <div
+                    className={`alert-item alert-${incident.severity} incident-${incident.status}`}
+                    key={incident.key}
+                  >
+                    <span className="alert-dot" />
+                    <div>
+                      <strong>{incident.title}</strong>
+                      <span>
+                        {incident.status === "open" ? "处理中" : "已恢复"} ·
+                        首次 {relTime(incident.firstSeen)} · 最后变化{" "}
+                        {relTime(incident.lastChanged)}
+                        {incident.occurrenceCount > 1
+                          ? ` · 复发/升级 ${incident.occurrenceCount - 1} 次`
+                          : ""}
+                      </span>
+                    </div>
+                    <div className="alert-tail">
+                      <em>{alertKindText(incident.kind)}</em>
+                      <span className={`incident-state ${incident.status}`}>
+                        {incident.status === "open" ? "开启" : "恢复"}
+                      </span>
+                    </div>
                   </div>
-                  <div className="alert-tail">
-                    <em>{alertKindText(alert.kind)}</em>
-                    <a href={alertTarget(alert.kind)}>处理</a>
-                  </div>
-                </div>
-              ))
-            ) : overview?.alerts.length ? (
-              <div className="filtered-clear">当前筛选条件下没有告警</div>
+                ))
+              ) : (
+                <div className="filtered-clear">尚无告警事件历史</div>
+              )
             ) : (
-              <div className="all-clear">
-                <span>✓</span>
-                <div>
-                  <strong>当前无告警</strong>
-                  <small>用户、节点、优选 IP 和落地机状态均正常</small>
-                </div>
-              </div>
+              <>
+                {filteredAlerts.length ? (
+                  filteredAlerts.map((alert) => (
+                    <div
+                      className={`alert-item alert-${alert.severity}`}
+                      key={`${alert.kind}-${alert.id}`}
+                    >
+                      <span className="alert-dot" />
+                      <div>
+                        <strong>{alert.title}</strong>
+                        <span>{alert.detail}</span>
+                      </div>
+                      <div className="alert-tail">
+                        <em>{alertKindText(alert.kind)}</em>
+                        <a href={alertTarget(alert.kind)}>处理</a>
+                      </div>
+                    </div>
+                  ))
+                ) : overview?.alerts.length ? (
+                  <div className="filtered-clear">
+                    当前筛选条件下没有告警
+                  </div>
+                ) : (
+                  <div className="all-clear">
+                    <span>✓</span>
+                    <div>
+                      <strong>当前无告警</strong>
+                      <small>用户、节点、优选 IP 和落地机状态均正常</small>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </section>

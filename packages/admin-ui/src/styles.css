@@ -557,6 +557,34 @@ button {
   max-height: 194px;
   overflow-y: auto;
 }
+.alert-list-current {
+  max-height: 154px;
+}
+.alert-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.alert-mode-bar button {
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.alert-mode-bar button.active {
+  color: var(--text);
+  background: var(--panel-2);
+}
+.alert-mode-bar > span {
+  margin-left: auto;
+  color: var(--grey);
+  font-size: 10px;
+}
 .alert-filter-bar {
   display: flex;
   gap: 5px;
@@ -636,6 +664,26 @@ button {
 .alert-danger .alert-dot {
   background: var(--red);
   box-shadow: 0 0 8px rgba(248, 81, 73, 0.4);
+}
+.incident-resolved {
+  opacity: 0.68;
+}
+.incident-resolved .alert-dot {
+  background: var(--green);
+  box-shadow: none;
+}
+.incident-state {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px !important;
+}
+.incident-state.open {
+  color: var(--amber) !important;
+  background: rgba(210, 153, 34, 0.12);
+}
+.incident-state.resolved {
+  color: var(--green) !important;
+  background: rgba(63, 185, 80, 0.12);
 }
 .all-clear {
   min-height: 170px;

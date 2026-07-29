@@ -1,6 +1,10 @@
 import { listNodes, listUsers, type AdminUserRecord, type Env } from "./db";
 import { evaluateAccessStatus } from "./access-status";
 import type { NodeRecord } from "@opus8-cf/shared";
+import {
+  reconcileAlertIncidents,
+  type OperationAlert,
+} from "./alert-incidents";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -417,14 +421,26 @@ export async function operationsOverview(env: Env) {
     0,
   );
 
-  const alerts = [
+  const allAlerts: OperationAlert[] = [
     ...optimizedIp.alerts,
     ...nodeAlerts,
     ...landingAlerts,
     ...userAlerts,
   ]
-    .sort((a, b) => Number(b.severity === "danger") - Number(a.severity === "danger"))
-    .slice(0, 50);
+    .sort((a, b) => Number(b.severity === "danger") - Number(a.severity === "danger"));
+  const alerts = allAlerts.slice(0, 50);
+  const internalUserIds = new Set(
+    users
+      .filter((user) => user.username?.startsWith("__"))
+      .map((user) => user.id),
+  );
+  const incidentState = await reconcileAlertIncidents(
+    env,
+    allAlerts.filter(
+      (alert) => alert.kind !== "user" || !internalUserIds.has(alert.id),
+    ),
+    now,
+  );
 
   return {
     generatedAt: now,
@@ -461,8 +477,8 @@ export async function operationsOverview(env: Env) {
       totalLandings: finiteNumber(landingResult?.total),
       healthyLandings: finiteNumber(landingResult?.healthy),
       unhealthyLandings: finiteNumber(landingResult?.unhealthy),
-      dangerAlerts: alerts.filter((alert) => alert.severity === "danger").length,
-      warningAlerts: alerts.filter((alert) => alert.severity === "warning").length,
+      dangerAlerts: allAlerts.filter((alert) => alert.severity === "danger").length,
+      warningAlerts: allAlerts.filter((alert) => alert.severity === "warning").length,
     },
     series,
     topUsers,
@@ -476,6 +492,12 @@ export async function operationsOverview(env: Env) {
       generatedAt: optimizedIp.generatedAt,
       earliestExpiresAt: optimizedIp.earliestExpiresAt,
     },
+    alertStorage: {
+      backend: "d1" as const,
+      writes: incidentState.writes,
+      kvWrites: 0,
+    },
+    alertIncidents: incidentState.incidents,
     alerts,
   };
 }

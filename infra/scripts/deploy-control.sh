@@ -223,10 +223,16 @@ else
 fi
 
 OVERVIEW=$(curl -fsS --max-time 20 "$API_URL/api/operations/overview" -H "authorization: Bearer $TOK")
-if printf '%s' "$OVERVIEW" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);process.exit(x.summary&&x.summary.totalUsers>=1&&Array.isArray(x.series)&&x.series.length===24&&Array.isArray(x.topUsers)&&Array.isArray(x.alerts)?0:1)})'; then
+if printf '%s' "$OVERVIEW" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);process.exit(x.summary&&x.summary.totalUsers>=1&&Array.isArray(x.series)&&x.series.length===24&&Array.isArray(x.topUsers)&&Array.isArray(x.alerts)&&Array.isArray(x.alertIncidents)&&x.alertStorage?.backend==="d1"&&x.alertStorage?.kvWrites===0?0:1)})'; then
   echo "OK smoke-operations-overview"
 else
   echo "ERROR smoke-operations-overview"; exit 24
+fi
+ALERT_HISTORY=$(curl -fsS --max-time 20 "$API_URL/api/operations/alerts?status=all&limit=20" -H "authorization: Bearer $TOK")
+if printf '%s' "$ALERT_HISTORY" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);process.exit(x.backend==="d1"&&x.kvWrites===0&&Array.isArray(x.incidents)?0:1)})'; then
+  echo "OK smoke-alert-history-d1-kv-writes=0"
+else
+  echo "ERROR smoke-alert-history"; exit 24
 fi
 
 NODE_HEALTH=""

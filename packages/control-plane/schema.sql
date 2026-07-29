@@ -187,6 +187,24 @@ CREATE TABLE IF NOT EXISTS runtime_state (
 INSERT OR IGNORE INTO runtime_state (key, value, updated_at)
 VALUES ('edge_policy_version', 1, 0);
 
+-- P6.7 告警事件：每个 kind/source_id 只保留一行，仅在开启、恢复、复发或级别变化时写入。
+CREATE TABLE IF NOT EXISTS alert_incidents (
+  incident_key     TEXT PRIMARY KEY,
+  kind             TEXT NOT NULL,
+  source_id        TEXT NOT NULL,
+  severity         TEXT NOT NULL,
+  title            TEXT NOT NULL,
+  detail           TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'open',
+  first_seen       INTEGER NOT NULL,
+  last_changed     INTEGER NOT NULL,
+  resolved_at      INTEGER,
+  occurrence_count INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_incidents_status_changed
+  ON alert_incidents(status, last_changed DESC);
+
 -- 计费预留（P7，一期不写入）
 CREATE TABLE IF NOT EXISTS orders (
   id          TEXT PRIMARY KEY,

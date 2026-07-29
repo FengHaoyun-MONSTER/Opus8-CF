@@ -222,8 +222,35 @@ try {
       Array.isArray(overview.alerts) &&
       overview.optimizedIp?.enabled === true &&
       overview.optimizedIp?.eligibleNodes >= 1 &&
-      overview.alerts.some((alert) => alert.kind === "optimized_ip"),
+      overview.alerts.some((alert) => alert.kind === "optimized_ip") &&
+      overview.alertStorage?.backend === "d1" &&
+      overview.alertStorage?.kvWrites === 0 &&
+      overview.alertStorage?.writes >= 1 &&
+      Array.isArray(overview.alertIncidents),
     `operations overview must expose stable dashboard data: ${JSON.stringify(overview)}`,
+  );
+  const stableOverview = await jsonResponse(
+    await fetch(`${base}/api/operations/overview`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    stableOverview.alertStorage?.writes === 0,
+    `unchanged alerts must not write D1 rows: ${JSON.stringify(stableOverview.alertStorage)}`,
+  );
+  const initialIncidentHistory = await jsonResponse(
+    await fetch(`${base}/api/operations/alerts?status=all&limit=50`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    initialIncidentHistory.backend === "d1" &&
+      initialIncidentHistory.kvWrites === 0 &&
+      initialIncidentHistory.incidents.some(
+        (incident) =>
+          incident.kind === "node" && incident.sourceId === nodeId,
+      ),
+    `alert history must expose deduplicated D1 incidents: ${JSON.stringify(initialIncidentHistory)}`,
   );
 
   const createdLanding = await jsonResponse(
@@ -452,6 +479,26 @@ try {
   );
 
   await reportNodeHealth(`${runPrefix}-final-healthy`, true, true);
+  await jsonResponse(
+    await fetch(`${base}/api/operations/overview`, {
+      headers: adminHeaders,
+    }),
+  );
+  const resolvedIncidents = await jsonResponse(
+    await fetch(`${base}/api/operations/alerts?status=resolved&limit=200`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    resolvedIncidents.incidents.some(
+      (incident) =>
+        incident.kind === "node" &&
+        incident.sourceId === nodeId &&
+        incident.status === "resolved" &&
+        incident.resolvedAt,
+    ),
+    `recovered node alert must be resolved once: ${JSON.stringify(resolvedIncidents)}`,
+  );
 
   const subscription = await fetch(created.subUrl);
   const usageHeader = subscription.headers.get("subscription-userinfo") || "";
@@ -498,6 +545,8 @@ try {
   console.log("OK optimized-ip-two-vantage-admission");
   console.log("OK optimized-ip-node-specific-subscription");
   console.log("OK optimized-ip-operations-alerts");
+  console.log("OK alert-incidents-d1-deduplication");
+  console.log("OK alert-incidents-resolution-history");
 } finally {
   if (landingId) {
     await fetch(`${base}/api/landings/${landingId}`, {

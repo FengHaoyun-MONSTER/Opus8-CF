@@ -139,6 +139,20 @@ export interface OperationsUser {
   accessReason: string;
 }
 
+export interface AlertIncident {
+  key: string;
+  kind: "user" | "node" | "landing" | "optimized_ip";
+  sourceId: string;
+  severity: "healthy" | "warning" | "danger";
+  title: string;
+  detail: string;
+  status: "open" | "resolved";
+  firstSeen: number;
+  lastChanged: number;
+  resolvedAt: number | null;
+  occurrenceCount: number;
+}
+
 export interface OperationsOverview {
   generatedAt: number;
   windowHours: number;
@@ -192,6 +206,12 @@ export interface OperationsOverview {
     generatedAt: number | null;
     earliestExpiresAt: number | null;
   };
+  alertStorage: {
+    backend: "d1";
+    writes: number;
+    kvWrites: 0;
+  };
+  alertIncidents: AlertIncident[];
   alerts: Array<{
     kind: "user" | "node" | "landing" | "optimized_ip";
     severity: "healthy" | "warning" | "danger";
@@ -299,6 +319,13 @@ export async function login(base: string, password: string): Promise<string> {
 
 export const api = {
   operationsOverview: () => req<OperationsOverview>("/api/operations/overview"),
+  alertIncidents: (
+    status: "all" | "open" | "resolved" = "all",
+    limit = 50,
+  ) =>
+    req<{ backend: "d1"; kvWrites: 0; incidents: AlertIncident[] }>(
+      `/api/operations/alerts?status=${status}&limit=${limit}`,
+    ),
   listUsers: () => req<{ users: User[] }>("/api/users"),
   userActivity: (id: string) => req<UserActivity>(`/api/users/${id}/activity`),
   createUser: (input: CreateUserInput) =>

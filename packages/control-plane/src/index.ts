@@ -65,6 +65,7 @@ import {
   nodeHealthOverview,
   type NodeHealthReportInput,
 } from "./node-health";
+import { listAlertIncidents } from "./alert-incidents";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 const CORS = {
@@ -153,6 +154,25 @@ export default {
       if (p === "/api/operations/overview" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         return json(await operationsOverview(env));
+      }
+      if (p === "/api/operations/alerts" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("Unauthorized", 401);
+        const requestedStatus = url.searchParams.get("status");
+        const status =
+          requestedStatus === "open" || requestedStatus === "resolved"
+            ? requestedStatus
+            : "all";
+        const limit = boundedInteger(
+          url.searchParams.get("limit"),
+          1,
+          200,
+          50,
+        );
+        return json({
+          backend: "d1",
+          kvWrites: 0,
+          incidents: await listAlertIncidents(env, status, limit),
+        });
       }
       if (p === "/api/operations/node-health" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
