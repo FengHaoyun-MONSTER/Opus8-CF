@@ -107,8 +107,10 @@ CREATE_RESPONSE="$(curl -fsS --max-time 30 -X POST \
     '{username:$username,durationDays:1,unlock:true,deviceLimit:20,ipLimit24h:100}')")"
 USER_ID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.id')"
 PROBE_UUID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.uuid')"
+PROBE_SUB_URL="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.subUrl')"
 echo "::add-mask::$USER_ID"
 echo "::add-mask::$PROBE_UUID"
+echo "::add-mask::$PROBE_SUB_URL"
 echo "OK probe-user-created"
 sleep 8
 
@@ -363,4 +365,38 @@ printf '%s' "$RESPONSE" | jq -e \
   --argjson nodeCount "$SAFE_NODE_COUNT" \
   '.ok == true and .nodeCount == $nodeCount' >/dev/null
 echo "OK pushed nodes=$SAFE_NODE_COUNT ips=$SAFE_IP_COUNT expiresHours=8"
+
+echo "STEP verify-subscription"
+curl -fsS --max-time 30 "$PROBE_SUB_URL" |
+  base64 -d >"$WORK_DIR/subscription.txt"
+printf '%s' "$SAFE_NODE_IPS" >"$WORK_DIR/expected-node-ips.json"
+node - "$WORK_DIR/subscription.txt" "$WORK_DIR/expected-node-ips.json" <<'NODE'
+const fs = require("node:fs");
+const lines = fs
+  .readFileSync(process.argv[2], "utf8")
+  .split(/\r?\n/)
+  .filter(Boolean);
+const expected = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+for (const [nodeId, node] of Object.entries(expected)) {
+  for (const ip of node.ips) {
+    const matched = lines.some((line) => {
+      try {
+        const url = new URL(line);
+        return (
+          url.hostname === ip &&
+          url.searchParams.get("sni") === node.hostname &&
+          url.searchParams.get("host") === node.hostname
+        );
+      } catch {
+        return false;
+      }
+    });
+    if (!matched) {
+      console.error(`subscription mapping missing for node=${nodeId} ip=${ip}`);
+      process.exit(1);
+    }
+  }
+}
+NODE
+echo "OK subscription-verified nodes=$SAFE_NODE_COUNT ips=$SAFE_IP_COUNT"
 echo "DONE publishedNodes=$SAFE_NODE_COUNT publishedIps=$SAFE_IP_COUNT"
