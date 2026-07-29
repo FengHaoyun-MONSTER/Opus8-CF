@@ -38,6 +38,7 @@ export interface NodeRow {
   hostname: string;
   region: string | null;
   preferred_ip: string | null;
+  transport_path: string | null;
   health: string;
   enabled: number;
   last_seen: number | null;
@@ -221,6 +222,15 @@ export interface OperationsOverview {
   }>;
 }
 
+export interface ComplianceStatus {
+  proxyProvisioningAllowed: boolean;
+  enforcement: "fail-closed";
+  policyId: string;
+  reason:
+    | "documented_authorization_verified"
+    | "documented_authorization_required";
+}
+
 export interface UserActivity {
   generatedAt: number;
   user: OperationsUser;
@@ -319,6 +329,8 @@ export async function login(base: string, password: string): Promise<string> {
 
 export const api = {
   operationsOverview: () => req<OperationsOverview>("/api/operations/overview"),
+  complianceStatus: () =>
+    req<ComplianceStatus>("/api/operations/compliance"),
   alertIncidents: (
     status: "all" | "open" | "resolved" = "all",
     limit = 50,

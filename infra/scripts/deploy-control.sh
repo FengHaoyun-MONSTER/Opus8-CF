@@ -2,6 +2,29 @@
 # 控制面部署脚本（在 GitHub Actions 里跑）。只打印自己的 marker 行，绝不打印任何密钥值。
 set -euo pipefail
 cd "$(dirname "$0")/../.."          # repo root
+REPO_ROOT="$(pwd)"
+echo "STEP compliance-policy"
+COMPLIANCE_ENV="$(node "$REPO_ROOT/infra/scripts/compliance-gate.mjs" \
+  --mode control-maintenance --format env)"
+COMPLIANCE_PROXY_ALLOWED="$(printf '%s\n' "$COMPLIANCE_ENV" \
+  | sed -n 's/^COMPLIANCE_PROXY_ALLOWED=//p')"
+COMPLIANCE_POLICY_ID="$(printf '%s\n' "$COMPLIANCE_ENV" \
+  | sed -n 's/^COMPLIANCE_POLICY_ID=//p')"
+HMAC_V1_ACCEPT_UNTIL="$(printf '%s\n' "$COMPLIANCE_ENV" \
+  | sed -n 's/^HMAC_V1_ACCEPT_UNTIL=//p')"
+HMAC_V1_NODE_IDS="$(printf '%s\n' "$COMPLIANCE_ENV" \
+  | sed -n 's/^HMAC_V1_NODE_IDS=//p')"
+if ! printf '%s' "$COMPLIANCE_PROXY_ALLOWED" | grep -Eq '^[01]$' \
+  || ! printf '%s' "$COMPLIANCE_POLICY_ID" | grep -Eq '^[a-z0-9-]+$' \
+  || ! printf '%s' "$HMAC_V1_ACCEPT_UNTIL" | grep -Eq '^[0-9]{13}$' \
+  || ! printf '%s' "$HMAC_V1_NODE_IDS" \
+    | grep -Eq '^[A-Za-z0-9._:-]+(,[A-Za-z0-9._:-]+)*$'; then
+  echo "ERROR invalid-compliance-gate-output"
+  exit 9
+fi
+export COMPLIANCE_PROXY_ALLOWED COMPLIANCE_POLICY_ID
+export HMAC_V1_ACCEPT_UNTIL HMAC_V1_NODE_IDS
+echo "OK compliance-policy provisioning=$COMPLIANCE_PROXY_ALLOWED policy=$COMPLIANCE_POLICY_ID"
 cd packages/control-plane
 
 : "${ROOT_DOMAIN:?ROOT_DOMAIN is required for production custom domains}"
@@ -13,8 +36,28 @@ API_HOST="api.${ROOT_DOMAIN}"
 SUB_HOST="sub.${ROOT_DOMAIN}"
 API_URL="https://${API_HOST}"
 SUB_URL="https://${SUB_HOST}"
+ADMIN_UI_ORIGINS="${ADMIN_UI_ORIGINS:-https://opus8cf-admin-openal.pages.dev}"
+if ! ADMIN_UI_PRIMARY_ORIGIN=$(
+  ADMIN_UI_ORIGINS="$ADMIN_UI_ORIGINS" node -e '
+    const values=String(process.env.ADMIN_UI_ORIGINS||"").split(",").map(x=>x.trim()).filter(Boolean);
+    if(!values.length) process.exit(1);
+    for(const value of values){
+      let url;
+      try{url=new URL(value)}catch{process.exit(1)}
+      if(!["https:","http:"].includes(url.protocol)||url.username||url.password||
+        (url.pathname!=="/"&&url.pathname!=="")||url.search||url.hash) process.exit(1);
+    }
+    process.stdout.write(new URL(values[0]).origin);
+  '
+); then
+  echo "ERROR invalid-admin-ui-origins"
+  exit 9
+fi
 DEFAULT_UNLOCK_HOSTS=$(grep -E '^[A-Za-z0-9.-]+$' ../../infra/ai-unlock.txt | tr '[:upper:]' '[:lower:]' | paste -sd, -)
 OPUS8_BUILD_ID="${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
+SUB_SOURCE_RATE_LIMIT=120
+SUB_TOKEN_RATE_LIMIT=20
+SUB_RATE_LIMIT_PERIOD=60
 
 echo "STEP ensure-d1-kv"
 wrangler d1 create opus8cf-db >/dev/null 2>&1 || true
@@ -40,6 +83,28 @@ workers_dev = true
 DEFAULT_UNLOCK_HOSTS = "$DEFAULT_UNLOCK_HOSTS"
 OPUS8_BUILD_ID = "$OPUS8_BUILD_ID"
 USE_OPTIMIZED_IPS = "1"
+ADMIN_UI_ORIGINS = "$ADMIN_UI_ORIGINS"
+HMAC_V1_ACCEPT_UNTIL = "$HMAC_V1_ACCEPT_UNTIL"
+HMAC_V1_NODE_IDS = "$HMAC_V1_NODE_IDS"
+SUB_RATE_LIMIT_REQUIRED = "1"
+COMPLIANCE_PROXY_ALLOWED = "$COMPLIANCE_PROXY_ALLOWED"
+COMPLIANCE_POLICY_ID = "$COMPLIANCE_POLICY_ID"
+
+[[ratelimits]]
+name = "SUB_SOURCE_RATE_LIMITER"
+namespace_id = "683401"
+
+  [ratelimits.simple]
+  limit = $SUB_SOURCE_RATE_LIMIT
+  period = $SUB_RATE_LIMIT_PERIOD
+
+[[ratelimits]]
+name = "SUB_TOKEN_RATE_LIMITER"
+namespace_id = "683402"
+
+  [ratelimits.simple]
+  limit = $SUB_TOKEN_RATE_LIMIT
+  period = $SUB_RATE_LIMIT_PERIOD
 
 [[d1_databases]]
 binding = "DB"
@@ -63,13 +128,81 @@ echo "STEP apply-schema"
 if ! wrangler d1 execute opus8cf-db --remote --file=schema.sql >/tmp/schema.log 2>&1; then
   echo "ERROR schema-failed"; tail -n 3 /tmp/schema.log | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g'; exit 11
 fi
+if ! NODE_COLUMNS=$(wrangler d1 execute opus8cf-db --remote \
+  --command 'PRAGMA table_info(nodes);' --json 2>/tmp/schema-columns.log); then
+  echo "ERROR schema-column-inspection"
+  tail -n 3 /tmp/schema-columns.log
+  exit 11
+fi
+HAS_TRANSPORT_PATH=$(printf '%s' "$NODE_COLUMNS" | node -e '
+  let s="";
+  process.stdin.on("data",d=>s+=d).on("end",()=>{
+    try {
+      const value=JSON.parse(s);
+      const rows=Array.isArray(value)?value.flatMap(x=>x.results||[]):[];
+      process.stdout.write(rows.some(x=>x.name==="transport_path")?"1":"0");
+    } catch { process.stdout.write("0"); }
+  });
+')
+if [ "$HAS_TRANSPORT_PATH" != "1" ]; then
+  if ! wrangler d1 execute opus8cf-db --remote \
+    --command "ALTER TABLE nodes ADD COLUMN transport_path TEXT NOT NULL DEFAULT '/';" \
+    >/tmp/schema-transport.log 2>&1; then
+    echo "ERROR schema-transport-path-migration"
+    tail -n 3 /tmp/schema-transport.log
+    exit 11
+  fi
+  echo "OK schema-migrated transport_path"
+fi
 echo "OK schema-applied"
+
+echo "STEP cors-test"
+if ! node test/cors-test.mjs >/tmp/cors-test.log 2>&1; then
+  echo "ERROR cors-test"; tail -n 8 /tmp/cors-test.log; exit 12
+fi
+echo "OK cors-test"
+if ! node test/signature-test.mjs >/tmp/signature-test.log 2>&1; then
+  echo "ERROR signature-test"; tail -n 8 /tmp/signature-test.log; exit 12
+fi
+echo "OK signature-test"
+if ! node test/subscription-rate-limit-test.mjs >/tmp/sub-rate-test.log 2>&1; then
+  echo "ERROR subscription-rate-limit-test"; tail -n 8 /tmp/sub-rate-test.log; exit 12
+fi
+echo "OK subscription-rate-limit-test"
+if ! node test/compliance-test.mjs >/tmp/compliance-test.log 2>&1; then
+  echo "ERROR compliance-test"; tail -n 8 /tmp/compliance-test.log; exit 12
+fi
+echo "OK compliance-test"
+if ! node test/resource-audit-test.mjs >/tmp/resource-audit-test.log 2>&1; then
+  echo "ERROR resource-audit-test"; tail -n 8 /tmp/resource-audit-test.log; exit 12
+fi
+echo "OK resource-audit-test"
+if ! node test/transport-path-test.mjs >/tmp/transport-path-test.log 2>&1; then
+  echo "ERROR transport-path-test"; tail -n 8 /tmp/transport-path-test.log; exit 12
+fi
+echo "OK transport-path-test"
+if ! node test/schema-transport-migration-test.mjs >/tmp/schema-migration-test.log 2>&1; then
+  echo "ERROR schema-migration-test"; tail -n 8 /tmp/schema-migration-test.log; exit 12
+fi
+echo "OK schema-migration-test"
+if ! node test/client-compatibility-test.mjs >/tmp/client-compatibility-test.log 2>&1; then
+  echo "ERROR client-compatibility-test"; tail -n 8 /tmp/client-compatibility-test.log; exit 12
+fi
+echo "OK client-compatibility-test"
+if ! node test/supply-chain-test.mjs >/tmp/supply-chain-test.log 2>&1; then
+  echo "ERROR supply-chain-test"; tail -n 8 /tmp/supply-chain-test.log; exit 12
+fi
+echo "OK supply-chain-test"
 
 echo "STEP bundle"
 if ! esbuild src/index.ts --bundle --format=esm --external:cloudflare:sockets --outfile=dist/index.js --alias:@opus8-cf/shared=../shared/src/index.ts >/tmp/bundle.log 2>&1; then
   echo "ERROR bundle-failed"; tail -n 5 /tmp/bundle.log; exit 12
 fi
 echo "OK bundled"
+if ! node test/compliance-runtime-local.mjs >/tmp/compliance-runtime-test.log 2>&1; then
+  echo "ERROR compliance-runtime-test"; tail -n 12 /tmp/compliance-runtime-test.log; exit 12
+fi
+echo "OK compliance-runtime-test"
 
 echo "STEP deploy"
 if ! wrangler deploy >/tmp/wd.log 2>&1; then
@@ -77,6 +210,10 @@ if ! wrangler deploy >/tmp/wd.log 2>&1; then
 fi
 WORKERS_URL=$(grep -oE 'https://[a-z0-9._-]+workers\.dev' /tmp/wd.log | head -n1 || true)
 echo "OK deployed workers=${WORKERS_URL:-unreported} custom=$API_URL"
+
+echo "STEP subscription-waf"
+SUB_WAF_MODE="${SUB_WAF_MODE:-optional}" \
+  bash ../../infra/scripts/configure-subscription-waf.sh
 
 echo "STEP secrets"
 printf '%s' "${ADMIN_PASSWORD:-}"   | wrangler secret put ADMIN_PASSWORD   >/dev/null 2>&1 && echo "OK secret ADMIN_PASSWORD"
@@ -132,10 +269,76 @@ for n in $(seq 1 18); do
 done
 if [ -n "$TOK" ]; then echo "OK smoke-login"; else echo "ERROR smoke-login"; exit 16; fi
 
+REMOTE_COMPLIANCE=$(curl -fsS --max-time 15 \
+  "$API_URL/api/operations/compliance" \
+  -H "authorization: Bearer $TOK")
+if ! printf '%s' "$REMOTE_COMPLIANCE" \
+  | EXPECTED_ALLOWED="$COMPLIANCE_PROXY_ALLOWED" EXPECTED_POLICY="$COMPLIANCE_POLICY_ID" \
+    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);const expected=process.env.EXPECTED_ALLOWED==="1";process.exit(x.proxyProvisioningAllowed===expected&&x.enforcement==="fail-closed"&&x.policyId===process.env.EXPECTED_POLICY?0:1)})'; then
+  echo "ERROR smoke-compliance-state"
+  exit 16
+fi
+echo "OK smoke-compliance-state provisioning=$COMPLIANCE_PROXY_ALLOWED"
+
+echo "STEP cors-regression"
+PREFLIGHT_CODE=$(curl -sS -o /tmp/cors-preflight.body -D /tmp/cors-preflight.headers \
+  -w '%{http_code}' --max-time 15 -X OPTIONS "$API_URL/api/users" \
+  -H "Origin: $ADMIN_UI_PRIMARY_ORIGIN" \
+  -H 'Access-Control-Request-Method: GET' \
+  -H 'Access-Control-Request-Headers: authorization' || true)
+if [ "$PREFLIGHT_CODE" != "204" ] \
+  || ! grep -Fqi "access-control-allow-origin: $ADMIN_UI_PRIMARY_ORIGIN" /tmp/cors-preflight.headers \
+  || grep -qi '^access-control-allow-credentials:' /tmp/cors-preflight.headers; then
+  echo "ERROR cors-allowed-preflight http=$PREFLIGHT_CODE"
+  exit 16
+fi
+
+DENIED_CODE=$(curl -sS -o /tmp/cors-denied.body -D /tmp/cors-denied.headers \
+  -w '%{http_code}' --max-time 15 -X OPTIONS "$API_URL/api/users" \
+  -H 'Origin: https://cors-denied.invalid' \
+  -H 'Access-Control-Request-Method: GET' || true)
+if [ "$DENIED_CODE" != "403" ] \
+  || grep -qi '^access-control-allow-origin:' /tmp/cors-denied.headers; then
+  echo "ERROR cors-denied-origin http=$DENIED_CODE"
+  exit 16
+fi
+
+NODE_CORS_CODE=$(curl -sS -o /tmp/cors-node.body -D /tmp/cors-node.headers \
+  -w '%{http_code}' --max-time 15 -X OPTIONS "$API_URL/api/nodes/register" \
+  -H "Origin: $ADMIN_UI_PRIMARY_ORIGIN" \
+  -H 'Access-Control-Request-Method: POST' || true)
+if [ "$NODE_CORS_CODE" != "404" ] \
+  || grep -qi '^access-control-allow-origin:' /tmp/cors-node.headers; then
+  echo "ERROR cors-node-api-exposed http=$NODE_CORS_CODE"
+  exit 16
+fi
+
+ADMIN_CORS_CODE=$(curl -sS -o /tmp/cors-admin.body -D /tmp/cors-admin.headers \
+  -w '%{http_code}' --max-time 15 "$API_URL/api/admin/me" \
+  -H "Origin: $ADMIN_UI_PRIMARY_ORIGIN" \
+  -H "authorization: Bearer $TOK" || true)
+if [ "$ADMIN_CORS_CODE" != "200" ] \
+  || ! grep -Fqi "access-control-allow-origin: $ADMIN_UI_PRIMARY_ORIGIN" /tmp/cors-admin.headers; then
+  echo "ERROR cors-admin-response http=$ADMIN_CORS_CODE"
+  exit 16
+fi
+
+HEALTH_CORS_CODE=$(curl -sS -o /tmp/cors-health.body -D /tmp/cors-health.headers \
+  -w '%{http_code}' --max-time 15 "$API_URL/health" \
+  -H "Origin: $ADMIN_UI_PRIMARY_ORIGIN" || true)
+if [ "$HEALTH_CORS_CODE" != "200" ] \
+  || grep -qi '^access-control-allow-origin:' /tmp/cors-health.headers; then
+  echo "ERROR cors-non-admin-api-exposed http=$HEALTH_CORS_CODE"
+  exit 16
+fi
+echo "OK cors-admin-only"
+
 echo "STEP ensure-default-landing"
 LANDINGS=$(curl -fsS --max-time 15 "$API_URL/api/landings" -H "authorization: Bearer $TOK")
 LCOUNT=$(printf '%s' "$LANDINGS" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String((JSON.parse(s).landings||[]).length))}catch(e){process.stdout.write("0")}})')
-if [ "$LCOUNT" -eq 0 ]; then
+if [ "$LCOUNT" -eq 0 ] && [ "$COMPLIANCE_PROXY_ALLOWED" != "1" ]; then
+  echo "OK default-landing-provisioning-skipped compliance=blocked"
+elif [ "$LCOUNT" -eq 0 ]; then
   if [ -z "${SERVICES_IP:-}" ] || [ -z "${SERVICES_USER:-}" ] || [ -z "${SERVICES_CODE:-}" ]; then
     echo "ERROR default-landing-secrets-missing"
     exit 17
@@ -180,6 +383,21 @@ fi
 ROUTES=$(curl -fsS --max-time 15 "$API_URL/api/settings/unlock-hosts" -H "authorization: Bearer $TOK")
 RCOUNT=$(printf '%s' "$ROUTES" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(String((JSON.parse(s).hosts||[]).length))}catch(e){process.stdout.write("0")}})')
 if [ "$RCOUNT" -gt 0 ]; then echo "OK smoke-unlock-hosts count=$RCOUNT"; else echo "ERROR smoke-unlock-hosts-empty"; exit 20; fi
+if [ "$COMPLIANCE_PROXY_ALLOWED" != "1" ]; then
+  BLOCKED_CODE=$(curl -sS -o /tmp/compliance-user-create.json \
+    -w '%{http_code}' --max-time 15 -X POST "$API_URL/api/users" \
+    -H "authorization: Bearer $TOK" \
+    -H 'content-type: application/json' \
+    -d '{"username":"__compliance_block_probe__","durationDays":1}' || true)
+  if [ "$BLOCKED_CODE" != "403" ] \
+    || ! grep -q 'documented Cloudflare authorization' /tmp/compliance-user-create.json; then
+    echo "ERROR smoke-compliance-provisioning-block http=$BLOCKED_CODE"
+    exit 21
+  fi
+  echo "OK smoke-compliance-provisioning-block"
+  echo "DONE url=$API_URL"
+  exit 0
+fi
 ORPH=$(curl -fsS --max-time 15 "$API_URL/api/users" -H "authorization: Bearer $TOK" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const u=JSON.parse(s).users||[];process.stdout.write(u.filter(x=>x.username==="__smoke__").map(x=>x.id).join(" "))}catch(e){}})')
 for id in $ORPH; do curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$id" -H "authorization: Bearer $TOK" >/dev/null; done
 [ -n "$ORPH" ] && echo "OK smoke-cleaned-orphans" || true
@@ -192,14 +410,52 @@ if [ -n "$SUID" ] && [ -n "$SUUID" ]; then echo "OK smoke-create-user(D1-write)"
 signed_node_post() {
   local path="$1" body="$2" output="$3" ts sig
   ts=$(date +%s)000
-  sig=$(printf '%s' "${ts}.smoke-node.${body}" | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+  sig=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+    "$ts" "smoke-node" "POST" "$path" "$body" \
+    | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
   curl -fsS --max-time 20 -X POST "$API_URL$path" \
     -H "x-opus8-ts: $ts" \
     -H "x-opus8-node: smoke-node" \
-    -H "x-opus8-sign: $sig" \
+    -H "x-opus8-sign-v2: $sig" \
     -H 'content-type: application/json' \
     --data "$body" > "$output"
 }
+
+echo "STEP hmac-v2-regression"
+HMAC_BODY='{"nodeId":"smoke-node","health":"healthy"}'
+HMAC_TS=$(date +%s)000
+HMAC_SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+  "$HMAC_TS" "smoke-node" "POST" "/api/nodes/heartbeat" "$HMAC_BODY" \
+  | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+HMAC_VALID_CODE=$(curl -sS -o /tmp/hmac-valid.json -w '%{http_code}' \
+  --max-time 20 -X POST "$API_URL/api/nodes/heartbeat" \
+  -H "x-opus8-ts: $HMAC_TS" \
+  -H "x-opus8-node: smoke-node" \
+  -H "x-opus8-sign-v2: $HMAC_SIG" \
+  -H 'content-type: application/json' --data "$HMAC_BODY" || true)
+HMAC_REPLAY_CODE=$(curl -sS -o /tmp/hmac-replay.json -w '%{http_code}' \
+  --max-time 20 -X POST "$API_URL/api/nodes/usage" \
+  -H "x-opus8-ts: $HMAC_TS" \
+  -H "x-opus8-node: smoke-node" \
+  -H "x-opus8-sign-v2: $HMAC_SIG" \
+  -H 'content-type: application/json' --data "$HMAC_BODY" || true)
+HMAC_ID_BODY='{"nodeId":"forged-smoke-node","health":"healthy"}'
+HMAC_ID_SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+  "$HMAC_TS" "smoke-node" "POST" "/api/nodes/heartbeat" "$HMAC_ID_BODY" \
+  | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+HMAC_ID_CODE=$(curl -sS -o /tmp/hmac-identity.json -w '%{http_code}' \
+  --max-time 20 -X POST "$API_URL/api/nodes/heartbeat" \
+  -H "x-opus8-ts: $HMAC_TS" \
+  -H "x-opus8-node: smoke-node" \
+  -H "x-opus8-sign-v2: $HMAC_ID_SIG" \
+  -H 'content-type: application/json' --data "$HMAC_ID_BODY" || true)
+if [ "$HMAC_VALID_CODE" != "200" ] \
+  || [ "$HMAC_REPLAY_CODE" != "401" ] \
+  || [ "$HMAC_ID_CODE" != "401" ]; then
+  echo "ERROR hmac-v2-binding valid=$HMAC_VALID_CODE cross_path=$HMAC_REPLAY_CODE identity=$HMAC_ID_CODE"
+  exit 22
+fi
+echo "OK hmac-v2-method-path-body-identity-bound"
 
 for suffix in a b c; do
   ADMISSION_BODY=$(SUUID="$SUUID" SUFFIX="$suffix" node -e 'process.stdout.write(JSON.stringify({nodeId:"smoke-node",uuid:process.env.SUUID,leaseId:"smoke-lease-"+process.env.SUFFIX,ipHash:"smoke-ip-"+process.env.SUFFIX}))')
@@ -257,6 +513,12 @@ fi
 
 SUBBODY=$(curl -fsS -D /tmp/sub.headers --max-time 20 "$SUB")
 if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; exit 22; fi
+if grep -qi '^cache-control:.*private.*no-store' /tmp/sub.headers \
+  && grep -qi '^x-opus8-subscription-protection:[[:space:]]*rate-limit-v1' /tmp/sub.headers; then
+  echo "OK smoke-subscription-rate-limit-binding"
+else
+  echo "ERROR smoke-subscription-protection-headers"; exit 24
+fi
 if grep -qiE '^subscription-userinfo:.*upload=111;.*download=222;' /tmp/sub.headers; then
   echo "OK smoke-subscription-usage"
 else

@@ -6,6 +6,27 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 USE_OPTIMIZED_IPS = "1"
+SUB_RATE_LIMIT_REQUIRED = "1"
+COMPLIANCE_PROXY_ALLOWED = "0"
+COMPLIANCE_POLICY_ID = "cloudflare-data-plane-v1"
+HMAC_V1_ACCEPT_UNTIL = "0"
+HMAC_V1_NODE_IDS = ""
+
+[[ratelimits]]
+name = "SUB_SOURCE_RATE_LIMITER"
+namespace_id = "683401"
+
+  [ratelimits.simple]
+  limit = 120
+  period = 60
+
+[[ratelimits]]
+name = "SUB_TOKEN_RATE_LIMITER"
+namespace_id = "683402"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
 
 # routes 由 CI 按 ROOT_DOMAIN 注入，如 api.<ROOT_DOMAIN>/*
 

@@ -7,6 +7,148 @@ const here = dirname(fileURLToPath(import.meta.url));
 const prelude = readFileSync(join(here, "opus8-prelude.js"), "utf8");
 const tests = `(async () => {
 const request = {};
+function gatewayRequest(path, { method = "GET", upgrade = "" } = {}) {
+  return {
+    url: "https://node.example" + path,
+    method,
+    headers: {
+      get(name) {
+        return String(name).toLowerCase() === "upgrade" ? upgrade : null;
+      },
+    },
+  };
+}
+
+const rootResponse = OPUS8_handleEdgeGateway(gatewayRequest("/"), {});
+if (
+  rootResponse.status !== 200 ||
+  !rootResponse.headers.get("content-security-policy") ||
+  !rootResponse.headers.get("x-content-type-options") ||
+  !(await rootResponse.text()).includes("Service available")
+) {
+  throw new Error("ordinary root requests must receive the local hardened status page");
+}
+const headResponse = OPUS8_handleEdgeGateway(gatewayRequest("/", { method: "HEAD" }), {});
+if (headResponse.status !== 200 || (await headResponse.text()) !== "") {
+  throw new Error("HEAD status requests must not include a response body");
+}
+for (const path of [
+  "/login",
+  "/admin",
+  "/admin/config.json",
+  "/admin/sub-links",
+  "/sub",
+  "/version",
+  "/locations",
+]) {
+  for (const method of ["GET", "POST"]) {
+    const response = OPUS8_handleEdgeGateway(gatewayRequest(path, { method }), {});
+    if (
+      response.status !== 404 ||
+      response.headers.get("cache-control") !== "no-store" ||
+      response.headers.has("set-cookie")
+    ) {
+      throw new Error("legacy route must fail closed: " + method + " " + path);
+    }
+  }
+}
+if (OPUS8_handleEdgeGateway(gatewayRequest("/", { upgrade: "WebSocket" }), {}) !== null) {
+  throw new Error("the default WebSocket transport path must reach the transport core");
+}
+if (OPUS8_handleEdgeGateway(gatewayRequest("/", { method: "POST" }), {}) !== null) {
+  throw new Error("the default stream transport path must reach the transport core");
+}
+if (
+  OPUS8_handleEdgeGateway(gatewayRequest("/admin", { upgrade: "websocket" }), {}).status !== 404
+) {
+  throw new Error("WebSocket upgrade must not bypass exact transport-path matching");
+}
+const customTransport = { OPUS8_TRANSPORT_PATH: "/v1/stream" };
+if (
+  OPUS8_handleEdgeGateway(
+    gatewayRequest("/v1/stream?ed=2560", { upgrade: "websocket" }),
+    customTransport,
+  ) !== null ||
+  OPUS8_handleEdgeGateway(
+    gatewayRequest("/v1/stream", { method: "POST" }),
+    customTransport,
+  ) !== null ||
+  OPUS8_handleEdgeGateway(
+    gatewayRequest("/", { upgrade: "websocket" }),
+    customTransport,
+  ).status !== 404
+) {
+  throw new Error("custom transport path must be matched exactly");
+}
+const migrationTransport = {
+  OPUS8_TRANSPORT_PATH: "/ws/new-path",
+  OPUS8_TRANSPORT_LEGACY_PATH: "/",
+  OPUS8_TRANSPORT_LEGACY_UNTIL: String(Date.now() + 60_000),
+};
+if (
+  OPUS8_handleEdgeGateway(
+    gatewayRequest("/ws/new-path?ed=2560", { upgrade: "websocket" }),
+    migrationTransport,
+  ) !== null ||
+  OPUS8_handleEdgeGateway(
+    gatewayRequest("/?ed=2560", { upgrade: "websocket" }),
+    migrationTransport,
+  ) !== null
+) {
+  throw new Error("canary grace must accept both the primary and legacy path");
+}
+if (
+  OPUS8_handleEdgeGateway(
+    gatewayRequest("/ws/previous-path?ed=2560", { upgrade: "websocket" }),
+    {
+      ...migrationTransport,
+      OPUS8_TRANSPORT_LEGACY_PATH: "/ws/previous-path",
+    },
+  ) !== null
+) {
+  throw new Error("path rotation must preserve the actual previous custom path");
+}
+if (
+  OPUS8_handleEdgeGateway(
+    gatewayRequest("/", { upgrade: "websocket" }),
+    {
+      ...migrationTransport,
+      OPUS8_TRANSPORT_LEGACY_UNTIL: String(Date.now() - 1),
+    },
+  ).status !== 404
+) {
+  throw new Error("expired legacy transport path must fail closed");
+}
+if (
+  OPUS8_handleEdgeGateway(
+    gatewayRequest("/__opus8/policy/status", { upgrade: "websocket" }),
+    { OPUS8_TRANSPORT_PATH: "/__opus8/policy/status" },
+  ).status !== 404
+) {
+  throw new Error("reserved control paths must never become a data channel");
+}
+for (const invalidPath of [
+  "/admin",
+  "/sub/user",
+  "/ws//double",
+  "/ws/../admin",
+  "/ws/path?ed=2560",
+]) {
+  if (
+    OPUS8_handleEdgeGateway(
+      gatewayRequest(invalidPath, { upgrade: "websocket" }),
+      { OPUS8_TRANSPORT_PATH: invalidPath },
+    ).status !== 404
+  ) {
+    throw new Error("invalid transport configuration must fail closed: " + invalidPath);
+  }
+}
+if (
+  OPUS8_handleEdgeGateway(gatewayRequest("/__opus8/not-a-route"), {}).status !== 404
+) {
+  throw new Error("unknown control paths must fail closed");
+}
+
 const unlocked = await OPUS8_normalizeState({
   uuids: ["user-a"],
   unlockUuids: ["user-a"],
@@ -141,7 +283,13 @@ const invalidateBody = JSON.stringify({ version: 12 });
 const invalidateTimestamp = String(Date.now());
 const invalidateSignature = await OPUS8_hmac(
   controlEnv.NODE_HMAC_SECRET,
-  invalidateTimestamp + "." + controlEnv.NODE_ID + "." + invalidateBody,
+  OPUS8_signatureMessageV2(
+    invalidateTimestamp,
+    controlEnv.NODE_ID,
+    "POST",
+    "/__opus8/policy/invalidate",
+    invalidateBody,
+  ),
 );
 const invalidateResponse = await OPUS8_handleControlRequest(new Request(
   "https://node.example/__opus8/policy/invalidate",
@@ -150,7 +298,7 @@ const invalidateResponse = await OPUS8_handleControlRequest(new Request(
     headers: {
       "x-opus8-ts": invalidateTimestamp,
       "x-opus8-node": controlEnv.NODE_ID,
-      "x-opus8-sign": invalidateSignature,
+      "x-opus8-sign-v2": invalidateSignature,
     },
     body: invalidateBody,
   },
@@ -167,7 +315,13 @@ const replayBody = JSON.stringify({ version: 10 });
 const replayTimestamp = String(Date.now());
 const replaySignature = await OPUS8_hmac(
   controlEnv.NODE_HMAC_SECRET,
-  replayTimestamp + "." + controlEnv.NODE_ID + "." + replayBody,
+  OPUS8_signatureMessageV2(
+    replayTimestamp,
+    controlEnv.NODE_ID,
+    "POST",
+    "/__opus8/policy/invalidate",
+    replayBody,
+  ),
 );
 const replayResponse = await OPUS8_handleControlRequest(new Request(
   "https://node.example/__opus8/policy/invalidate",
@@ -176,7 +330,7 @@ const replayResponse = await OPUS8_handleControlRequest(new Request(
     headers: {
       "x-opus8-ts": replayTimestamp,
       "x-opus8-node": controlEnv.NODE_ID,
-      "x-opus8-sign": replaySignature,
+      "x-opus8-sign-v2": replaySignature,
     },
     body: replayBody,
   },
@@ -194,7 +348,13 @@ await kv.put(OPUS8_policyCacheKey(controlEnv), JSON.stringify({
 const statusTimestamp = String(Date.now());
 const statusSignature = await OPUS8_hmac(
   controlEnv.NODE_HMAC_SECRET,
-  statusTimestamp + "." + controlEnv.NODE_ID + ".",
+  OPUS8_signatureMessageV2(
+    statusTimestamp,
+    controlEnv.NODE_ID,
+    "GET",
+    "/__opus8/policy/status?uuid=status-user",
+    "",
+  ),
 );
 const statusResponse = await OPUS8_handleControlRequest(new Request(
   "https://node.example/__opus8/policy/status?uuid=status-user",
@@ -202,7 +362,7 @@ const statusResponse = await OPUS8_handleControlRequest(new Request(
     headers: {
       "x-opus8-ts": statusTimestamp,
       "x-opus8-node": controlEnv.NODE_ID,
-      "x-opus8-sign": statusSignature,
+      "x-opus8-sign-v2": statusSignature,
     },
   },
 ), controlEnv);
@@ -214,6 +374,36 @@ if (
   status.liveContainsUuid !== true
 ) {
   throw new Error("signed policy status must report cache and live control state");
+}
+const tamperedStatusResponse = await OPUS8_handleControlRequest(new Request(
+  "https://node.example/__opus8/policy/status?uuid=another-user",
+  {
+    headers: {
+      "x-opus8-ts": statusTimestamp,
+      "x-opus8-node": controlEnv.NODE_ID,
+      "x-opus8-sign-v2": statusSignature,
+    },
+  },
+), controlEnv);
+if (tamperedStatusResponse.status !== 401) {
+  throw new Error("policy status query tampering must invalidate its v2 signature");
+}
+const legacyStatusSignature = await OPUS8_hmac(
+  controlEnv.NODE_HMAC_SECRET,
+  statusTimestamp + "." + controlEnv.NODE_ID + ".",
+);
+const legacyStatusResponse = await OPUS8_handleControlRequest(new Request(
+  "https://node.example/__opus8/policy/status?uuid=status-user",
+  {
+    headers: {
+      "x-opus8-ts": statusTimestamp,
+      "x-opus8-node": controlEnv.NODE_ID,
+      "x-opus8-sign": legacyStatusSignature,
+    },
+  },
+), controlEnv);
+if (legacyStatusResponse.status !== 401) {
+  throw new Error("new edge control endpoints must reject legacy signatures");
 }
 })();`;
 

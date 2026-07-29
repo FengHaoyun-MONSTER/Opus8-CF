@@ -30,11 +30,11 @@ jobs:
       ACCESS_HOSTNAME: opus8cf-admin-openal.pages.dev
       CF_ZERO_TRUST_TEAM: ${{ secrets.CF_ZERO_TRUST_TEAM }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
-      - run: npm i -g wrangler@3
+      - run: npm i -g wrangler@4.115.0
       - name: Build & deploy admin-ui
         id: deploy
         run: |

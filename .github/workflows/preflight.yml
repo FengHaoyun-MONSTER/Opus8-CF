@@ -23,6 +23,7 @@ jobs:
         env:
           CF_TOKEN: ${{ matrix.alias == 'acc1' && secrets.API_TOKEN || secrets.API_TOKEN_NUM1 }}
           CF_ACCOUNT: ${{ matrix.alias == 'acc1' && secrets.ACCOUNT_ID || secrets.ACCOUNT_ID_NUM1 }}
+          CF_ROOT: ${{ matrix.alias == 'acc1' && secrets.ROOT_DOMAIN || secrets.ROOT_DOMAIN_NUM1 }}
         run: |
           set -euo pipefail
           api="https://api.cloudflare.com/client/v4"
@@ -42,14 +43,35 @@ jobs:
           probe "d1/database" "D1"
           probe "pages/projects" "Pages"
 
+          root="${CF_ROOT#https://}"
+          root="${root#http://}"
+          root="${root%%/*}"
+          zone_id=$(curl -sS --get "$api/zones" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            --data-urlencode "name=$root" \
+            --data-urlencode "status=active" \
+            | jq -r '.result[0].id // empty')
+          if [ -n "$zone_id" ]; then
+            waf_code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              "$api/zones/$zone_id/rulesets/phases/http_ratelimit/entrypoint")
+            if [ "$waf_code" = "200" ] || [ "$waf_code" = "404" ]; then
+              echo "- Zone WAF/Rulesets: ✅ 可访问" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- Zone WAF/Rulesets: ⚠️ HTTP $waf_code（可选粗粒度订阅限流需要 Zone WAF Edit）" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "- Zone WAF/Rulesets: ⚠️ 无法解析 active zone" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   provision:
     needs: verify-tokens
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with: { node-version: 20 }
-      - run: npm i -g wrangler@3
+      - run: npm i -g wrangler@4.115.0
       - name: Create D1 + KV on primary (acc1) — idempotent
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}

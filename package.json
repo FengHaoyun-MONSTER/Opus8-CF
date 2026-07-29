@@ -7,12 +7,13 @@
   "scripts": {
     "build:edge": "pnpm --filter @opus8-cf/edge-node build",
     "build:control": "pnpm --filter @opus8-cf/control-plane build",
-    "typecheck": "pnpm -r --if-present typecheck"
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test:compliance": "pnpm --filter @opus8-cf/control-plane test:compliance"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260702.1",
+    "@cloudflare/workers-types": "^5.20260729.1",
     "typescript": "^5.6.0",
-    "wrangler": "^3.80.0",
-    "esbuild": "^0.24.0"
+    "wrangler": "^4.115.0",
+    "esbuild": "^0.25.12"
   }
 }

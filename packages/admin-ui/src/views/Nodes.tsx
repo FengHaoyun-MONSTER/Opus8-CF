@@ -292,6 +292,9 @@ export function Nodes() {
                   </td>
                   <td>
                     <div className="mono">{node.hostname || "—"}</div>
+                    <div className="mono muted">
+                      WS {node.transport_path || "/"}
+                    </div>
                     <div className="muted">
                       {node.region || "未标注"}
                       {node.preferred_ip ? ` · 心跳 IP ${node.preferred_ip}` : ""}

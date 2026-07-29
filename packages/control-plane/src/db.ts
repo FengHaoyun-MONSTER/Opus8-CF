@@ -21,6 +21,14 @@ export interface Env {
   SUB_BASE?: string;
   USE_OPTIMIZED_IPS?: string;
   OPUS8_BUILD_ID?: string;
+  ADMIN_UI_ORIGINS?: string;
+  HMAC_V1_ACCEPT_UNTIL?: string;
+  HMAC_V1_NODE_IDS?: string;
+  SUB_RATE_LIMIT_REQUIRED?: string;
+  COMPLIANCE_PROXY_ALLOWED?: string;
+  COMPLIANCE_POLICY_ID?: string;
+  SUB_SOURCE_RATE_LIMITER?: RateLimit;
+  SUB_TOKEN_RATE_LIMITER?: RateLimit;
 }
 
 export interface AdminUserRecord extends UserRecord {
@@ -46,19 +54,37 @@ export interface UserLimitInput {
 export async function getUserLimits(
   env: Env,
   id: string,
-): Promise<{ deviceLimit: number; ipLimit24h: number } | null> {
+): Promise<{
+  deviceLimit: number;
+  ipLimit24h: number;
+  trafficLimitBytes: number;
+  enabled: number;
+  unlock: number;
+} | null> {
   const row = await env.DB.prepare(
     `SELECT COALESCE(l.device_limit,2) AS device_limit,
-            COALESCE(l.ip_limit_24h,5) AS ip_limit_24h
+            COALESCE(l.ip_limit_24h,5) AS ip_limit_24h,
+            COALESCE(l.traffic_limit_bytes,0) AS traffic_limit_bytes,
+            u.enabled AS enabled,
+            u.unlock AS unlock
      FROM users u LEFT JOIN user_limits l ON l.user_id=u.id
      WHERE u.id=?1`,
   )
     .bind(id)
-    .first<{ device_limit: number; ip_limit_24h: number }>();
+    .first<{
+      device_limit: number;
+      ip_limit_24h: number;
+      traffic_limit_bytes: number;
+      enabled: number;
+      unlock: number;
+    }>();
   return row
     ? {
         deviceLimit: Number(row.device_limit),
         ipLimit24h: Number(row.ip_limit_24h),
+        trafficLimitBytes: Number(row.traffic_limit_bytes),
+        enabled: Number(row.enabled),
+        unlock: Number(row.unlock),
       }
     : null;
 }
@@ -86,13 +112,28 @@ export async function listNodes(env: Env): Promise<NodeRecord[]> {
 
 export async function upsertNode(env: Env, n: NodeRecord): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO nodes (id, account_alias, hostname, region, capabilities, preferred_ip, health, enabled, last_seen, created_at)
-     VALUES (?1,?2,?3,?4,?5,?6,?7,1,?8,?9)
+    `INSERT INTO nodes (id, account_alias, hostname, region, capabilities, preferred_ip, transport_path, health, enabled, last_seen, created_at)
+     VALUES (?1,?2,?3,?4,?5,?6,COALESCE(?7,'/'),?8,1,?9,?10)
      ON CONFLICT(id) DO UPDATE SET
-       account_alias=excluded.account_alias, hostname=excluded.hostname, region=excluded.region,
-       capabilities=excluded.capabilities, preferred_ip=excluded.preferred_ip,
-       health=CASE WHEN nodes.health='unknown' THEN excluded.health ELSE nodes.health END,
-       last_seen=excluded.last_seen`,
+       account_alias=CASE WHEN excluded.last_seen>=COALESCE(nodes.last_seen,0)
+         THEN excluded.account_alias ELSE nodes.account_alias END,
+       hostname=CASE WHEN excluded.last_seen>=COALESCE(nodes.last_seen,0)
+         THEN excluded.hostname ELSE nodes.hostname END,
+       region=CASE WHEN excluded.last_seen>=COALESCE(nodes.last_seen,0)
+         THEN excluded.region ELSE nodes.region END,
+       capabilities=CASE WHEN excluded.last_seen>=COALESCE(nodes.last_seen,0)
+         THEN excluded.capabilities ELSE nodes.capabilities END,
+       preferred_ip=CASE WHEN excluded.last_seen>=COALESCE(nodes.last_seen,0)
+         THEN excluded.preferred_ip ELSE nodes.preferred_ip END,
+       transport_path=CASE
+         WHEN ?7 IS NOT NULL
+          AND excluded.last_seen>=COALESCE(nodes.last_seen,0)
+         THEN excluded.transport_path ELSE nodes.transport_path END,
+       health=CASE
+         WHEN nodes.health='unknown'
+          AND excluded.last_seen>=COALESCE(nodes.last_seen,0)
+         THEN excluded.health ELSE nodes.health END,
+       last_seen=MAX(COALESCE(nodes.last_seen,0),excluded.last_seen)`,
   )
     .bind(
       n.id,
@@ -101,6 +142,7 @@ export async function upsertNode(env: Env, n: NodeRecord): Promise<void> {
       n.region,
       n.capabilities,
       n.preferred_ip,
+      n.transport_path,
       n.health,
       n.last_seen,
       n.created_at,
@@ -116,7 +158,11 @@ export async function touchNode(
   ts: number,
 ): Promise<void> {
   await env.DB.prepare(
-    "UPDATE nodes SET last_seen=?2, preferred_ip=COALESCE(?3, preferred_ip) WHERE id=?1",
+    `UPDATE nodes SET
+       preferred_ip=CASE WHEN ?2>=COALESCE(last_seen,0)
+         THEN COALESCE(?3,preferred_ip) ELSE preferred_ip END,
+       last_seen=MAX(COALESCE(last_seen,0),?2)
+     WHERE id=?1`,
   )
     .bind(id, ts, preferredIp)
     .run();

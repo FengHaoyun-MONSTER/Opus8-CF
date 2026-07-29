@@ -7,7 +7,13 @@ on:
     paths:
       - '.github/workflows/deploy-control.yml'
       - 'infra/scripts/deploy-control.sh'
+      - 'infra/scripts/compliance-gate.mjs'
+      - 'infra/compliance-policy.json'
+      - 'infra/scripts/configure-subscription-waf.sh'
       - 'infra/ai-unlock.txt'
+      - 'infra/transport-mode.txt'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
       - 'packages/control-plane/**'
       - 'packages/shared/**'
 
@@ -29,19 +35,26 @@ jobs:
       NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
       LANDING_CONFIG_KEY: ${{ secrets.LANDING_CONFIG_KEY }}
       ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
+      ADMIN_UI_ORIGINS: https://opus8cf-admin-openal.pages.dev
       SERVICES_IP: ${{ secrets.SERVICES_IP }}
       SERVICES_USER: ${{ secrets.SOCKS_USER }}
       SERVICES_CODE: ${{ secrets.SOCKS_PASSWORD }}
+      CLOUDFLARE_PROXY_PERMISSION_REF: ${{ secrets.CLOUDFLARE_PROXY_PERMISSION_REF }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
       - name: Deploy control-plane
         id: deploy
         run: |
-          set -o pipefail
-          { npm i -g wrangler@3 esbuild && bash infra/scripts/deploy-control.sh ; } 2>&1 | tee /tmp/dc.log
+          set -euo pipefail
+          {
+            corepack enable
+            pnpm install --frozen-lockfile
+            npm i -g wrangler@4.115.0 esbuild
+            bash infra/scripts/deploy-control.sh
+          } 2>&1 | tee /tmp/dc.log
 
       - name: Publish status back to repo
         if: always()

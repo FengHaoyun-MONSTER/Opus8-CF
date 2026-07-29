@@ -1,6 +1,13 @@
-import type { NodeRecord, UserRecord, SubFormat } from "@opus8-cf/shared";
+import {
+  nodeTransportPath,
+  TRANSPORT_EARLY_DATA,
+  TRANSPORT_EARLY_DATA_HEADER,
+  xrayWebSocketPath,
+  type NodeRecord,
+  type UserRecord,
+  type SubFormat,
+} from "@opus8-cf/shared";
 
-const DEFAULT_PATH = "/?ed=2560";
 const MAX_IPS_PER_NODE = 3;
 
 function nodeName(n: NodeRecord): string {
@@ -9,7 +16,12 @@ function nodeName(n: NodeRecord): string {
 
 /** 选出分配给该用户的节点（node_group 为空=全部启用且健康）。 */
 export function nodesForUser(user: UserRecord, all: NodeRecord[]): NodeRecord[] {
-  const healthy = all.filter((n) => n.enabled === 1 && n.health !== "banned");
+  const healthy = all.filter(
+    (n) =>
+      n.enabled === 1 &&
+      n.health !== "banned" &&
+      nodeTransportPath(n.transport_path) !== null,
+  );
   let group: string[] = [];
   try {
     group = user.node_group ? (JSON.parse(user.node_group) as string[]) : [];
@@ -47,6 +59,8 @@ function expand(
 
 function vlessLink(uuid: string, e: Entry): string {
   const host = e.node.hostname;
+  const path = nodeTransportPath(e.node.transport_path);
+  if (!path) throw new Error(`节点 ${e.node.id} 的传输路径无效`);
   const q = new URLSearchParams({
     encryption: "none",
     security: "tls",
@@ -54,7 +68,7 @@ function vlessLink(uuid: string, e: Entry): string {
     fp: "chrome",
     type: "ws",
     host,
-    path: DEFAULT_PATH,
+    path: xrayWebSocketPath(path),
   });
   return `vless://${uuid}@${e.address}:443?${q.toString()}#${encodeURIComponent(e.name)}`;
 }
@@ -74,6 +88,8 @@ export function buildClash(user: UserRecord, entries: Entry[]): string {
   const names: string[] = [];
   const proxies = entries.map((e) => {
     names.push(e.name);
+    const path = nodeTransportPath(e.node.transport_path);
+    if (!path) throw new Error(`节点 ${e.node.id} 的传输路径无效`);
     return [
       `  - name: "${e.name}"`,
       `    type: vless`,
@@ -86,9 +102,11 @@ export function buildClash(user: UserRecord, entries: Entry[]): string {
       `    servername: ${e.node.hostname}`,
       `    client-fingerprint: chrome`,
       `    ws-opts:`,
-      `      path: "${DEFAULT_PATH}"`,
+      `      path: "${path}"`,
       `      headers:`,
       `        Host: ${e.node.hostname}`,
+      `      max-early-data: ${TRANSPORT_EARLY_DATA}`,
+      `      early-data-header-name: ${TRANSPORT_EARLY_DATA_HEADER}`,
     ].join("\n");
   });
   const nameList = names.map((n) => `      - "${n}"`).join("\n");
@@ -108,15 +126,26 @@ export function buildClash(user: UserRecord, entries: Entry[]): string {
 }
 
 export function buildSingbox(user: UserRecord, entries: Entry[]): string {
-  const outbounds = entries.map((e) => ({
-    type: "vless",
-    tag: e.name,
-    server: e.address,
-    server_port: 443,
-    uuid: user.uuid,
-    tls: { enabled: true, server_name: e.node.hostname, utls: { enabled: true, fingerprint: "chrome" } },
-    transport: { type: "ws", path: DEFAULT_PATH, headers: { Host: e.node.hostname } },
-  }));
+  const outbounds = entries.map((e) => {
+    const path = nodeTransportPath(e.node.transport_path);
+    if (!path) throw new Error(`节点 ${e.node.id} 的传输路径无效`);
+    return {
+      type: "vless",
+      tag: e.name,
+      server: e.address,
+      server_port: 443,
+      uuid: user.uuid,
+      // sing-box 官方已明确不建议依赖 uTLS 做指纹抵抗；保留系统 TLS 与严格证书校验。
+      tls: { enabled: true, server_name: e.node.hostname, insecure: false },
+      transport: {
+        type: "ws",
+        path,
+        headers: { Host: e.node.hostname },
+        max_early_data: TRANSPORT_EARLY_DATA,
+        early_data_header_name: TRANSPORT_EARLY_DATA_HEADER,
+      },
+    };
+  });
   return JSON.stringify({ outbounds }, null, 2);
 }
 

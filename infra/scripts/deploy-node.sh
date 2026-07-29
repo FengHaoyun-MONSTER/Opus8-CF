@@ -4,6 +4,8 @@
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
 #   CONTROL_ROOT_DOMAIN / ROOT_DOMAIN / NODE_HMAC_SECRET / NODE_ID / NODE_ACCOUNT_ALIAS / NODE_REGION
 #   NODE_DEPLOY_SUFFIX  (可选，例如 -v2，用于无损替换异常 Worker 槽位)
+#   NODE_TRANSPORT_PATH (可选；缺省时按节点稳定派生)
+#   TRANSPORT_MIGRATION_MODE=canary|strict（缺省 canary，上一条路径保留 72 小时）
 #   SERVICES_IP / SOCKS_USER / SOCKS_PASSWORD  (SOCKS5，可缺省 -> 纯 CF 出口)
 #   VPS_HOST / VPS_SSH_USER / VPS_SSH_PASSWORD / VPS_SSH_PORT
 #     (可选，仅用于部署后的第二视角冒烟)
@@ -30,6 +32,94 @@ CUSTOM_HOST="${NODE_ID}${NODE_DEPLOY_SUFFIX}.${ROOT_DOMAIN}"
 CUSTOM_URL="https://${CUSTOM_HOST}"
 WORKER_NAME="opus8cf-node-${NODE_ID}${NODE_DEPLOY_SUFFIX}"
 OPUS8_BUILD_ID="${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
+echo "STEP compliance-gate"
+node "$REPO_ROOT/infra/scripts/compliance-gate.mjs" \
+  --mode node-deploy \
+  --node-id "$NODE_ID" \
+  --account-alias "$NODE_ACCOUNT_ALIAS" \
+  --worker-name "$WORKER_NAME"
+echo "OK compliance-gate"
+TRANSPORT_MIGRATION_MODE="${TRANSPORT_MIGRATION_MODE:-$(
+  tr -d '[:space:]' <"$REPO_ROOT/infra/transport-mode.txt"
+)}"
+TRANSPORT_LEGACY_GRACE_HOURS="${TRANSPORT_LEGACY_GRACE_HOURS:-72}"
+case "$TRANSPORT_MIGRATION_MODE" in
+  canary|strict) ;;
+  *) echo "ERROR invalid-transport-migration-mode"; exit 9 ;;
+esac
+if ! printf '%s' "$TRANSPORT_LEGACY_GRACE_HOURS" | grep -qE '^[0-9]+$' \
+  || [ "$TRANSPORT_LEGACY_GRACE_HOURS" -lt 1 ] \
+  || [ "$TRANSPORT_LEGACY_GRACE_HOURS" -gt 720 ]; then
+  echo "ERROR invalid-transport-legacy-grace-hours"
+  exit 9
+fi
+normalize_transport_path() {
+  TRANSPORT_CANDIDATE="$1" node -e '
+    const path=String(process.env.TRANSPORT_CANDIDATE||"").trim();
+    const reserved=["/__opus8","/admin","/login","/sub","/version","/locations","/robots.txt","/favicon.ico"];
+    const lower=path.toLowerCase();
+    const valid=path.length>0&&path.length<=128&&
+      /^\/[A-Za-z0-9._~/-]*$/.test(path)&&!path.includes("//")&&
+      !path.split("/").some(x=>x==="."||x==="..")&&
+      !reserved.some(x=>lower===x||lower.startsWith(x+"/"));
+    if(!valid) process.exit(1);
+    process.stdout.write(path);
+  '
+}
+
+echo "STEP resolve-registered-transport"
+LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
+  'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
+CONTROL_ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
+  "$CONTROL_PLANE_URL/api/admin/login" \
+  -H 'content-type: application/json' -d "$LOGIN_BODY" \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.token)process.exit(1);process.stdout.write(j.token)})')
+echo "::add-mask::$CONTROL_ADMIN_TOKEN"
+REGISTERED_NODES=$(curl -fsS --max-time 20 "$CONTROL_PLANE_URL/api/nodes" \
+  -H "authorization: Bearer $CONTROL_ADMIN_TOKEN")
+PREVIOUS_TRANSPORT_PATH=$(printf '%s' "$REGISTERED_NODES" \
+  | NODE_ID="$NODE_ID" node -e '
+      let s="";
+      process.stdin.on("data",d=>s+=d).on("end",()=>{
+        const nodes=JSON.parse(s).nodes||[];
+        const node=nodes.find(x=>x.id===process.env.NODE_ID);
+        process.stdout.write(String(node?.transport_path||"/"));
+      });
+    ')
+if ! PREVIOUS_TRANSPORT_PATH=$(normalize_transport_path "$PREVIOUS_TRANSPORT_PATH"); then
+  echo "ERROR invalid-registered-transport-path"
+  exit 9
+fi
+
+if [ -n "${NODE_TRANSPORT_PATH:-}" ]; then
+  TRANSPORT_CANDIDATE="$NODE_TRANSPORT_PATH"
+elif [ "$PREVIOUS_TRANSPORT_PATH" != "/" ]; then
+  TRANSPORT_CANDIDATE="$PREVIOUS_TRANSPORT_PATH"
+else
+  TRANSPORT_HEX=$(printf 'transport-path-v1:%s' "$NODE_ID" \
+    | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r \
+    | cut -d' ' -f1)
+  TRANSPORT_CANDIDATE="/ws/${TRANSPORT_HEX:0:24}"
+fi
+if ! TRANSPORT_PATH=$(normalize_transport_path "$TRANSPORT_CANDIDATE"); then
+  echo "ERROR invalid-node-transport-path"
+  exit 9
+fi
+if [ "$TRANSPORT_MIGRATION_MODE" = "canary" ]; then
+  if [ "$PREVIOUS_TRANSPORT_PATH" != "$TRANSPORT_PATH" ]; then
+    TRANSPORT_LEGACY_PATH="$PREVIOUS_TRANSPORT_PATH"
+  elif [ "$TRANSPORT_PATH" != "/" ]; then
+    TRANSPORT_LEGACY_PATH="/"
+  else
+    TRANSPORT_LEGACY_PATH=""
+  fi
+  TRANSPORT_LEGACY_UNTIL=$(($(date +%s%3N) + TRANSPORT_LEGACY_GRACE_HOURS * 60 * 60 * 1000))
+else
+  TRANSPORT_LEGACY_PATH=""
+  TRANSPORT_LEGACY_UNTIL=0
+fi
+TRANSPORT_URL_PATH="${TRANSPORT_PATH}?ed=2560"
+echo "INFO transport path=$TRANSPORT_PATH previous=$PREVIOUS_TRANSPORT_PATH mode=$TRANSPORT_MIGRATION_MODE legacy=$TRANSPORT_LEGACY_PATH legacyUntil=$TRANSPORT_LEGACY_UNTIL"
 
 echo "STEP build"
 if ! node build/build.mjs >/tmp/nb.log 2>&1; then echo "ERROR build"; tail -n 8 /tmp/nb.log; exit 10; fi
@@ -102,6 +192,9 @@ NODE_ID = "${NODE_ID}"
 NODE_ACCOUNT_ALIAS = "${NODE_ACCOUNT_ALIAS}"
 NODE_REGION = "${NODE_REGION}"
 OPUS8_BUILD_ID = "${OPUS8_BUILD_ID}"
+OPUS8_TRANSPORT_PATH = "${TRANSPORT_PATH}"
+OPUS8_TRANSPORT_LEGACY_PATH = "${TRANSPORT_LEGACY_PATH}"
+OPUS8_TRANSPORT_LEGACY_UNTIL = "${TRANSPORT_LEGACY_UNTIL}"
 GO2SOCKS5 = "${GO2}"
 
 [[kv_namespaces]]
@@ -162,14 +255,28 @@ echo "STEP register"
 RCODE=000
 for n in $(seq 1 18); do
   TS=$(date +%s)000
-  BODY=$(H="$HOST" HASLAND="$LAND" node -e "process.stdout.write(JSON.stringify({nodeId:process.env.NODE_ID,accountAlias:process.env.NODE_ACCOUNT_ALIAS,hostname:process.env.H,region:process.env.NODE_REGION||null,capabilities:['vless-ws','anti-share-v1','usage-v1'].concat(process.env.HASLAND?['unlock']:[])}))")
-  SIG=$(printf '%s' "${TS}.${NODE_ID}.${BODY}" | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+  BODY=$(H="$HOST" HASLAND="$LAND" TP="$TRANSPORT_PATH" node -e "process.stdout.write(JSON.stringify({nodeId:process.env.NODE_ID,accountAlias:process.env.NODE_ACCOUNT_ALIAS,hostname:process.env.H,region:process.env.NODE_REGION||null,transportPath:process.env.TP,capabilities:['vless-ws','transport-path-v1','anti-share-v1','usage-v1','hmac-v2'].concat(process.env.HASLAND?['unlock']:[])}))")
+  SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+    "$TS" "$NODE_ID" "POST" "/api/nodes/register" "$BODY" \
+    | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
   RCODE=$(curl -s -o /tmp/reg.json -w '%{http_code}' --max-time 20 -X POST "$CONTROL_PLANE_URL/api/nodes/register" \
-    -H "x-opus8-ts: $TS" -H "x-opus8-node: $NODE_ID" -H "x-opus8-sign: $SIG" -H 'content-type: application/json' -d "$BODY" || true)
+    -H "x-opus8-ts: $TS" -H "x-opus8-node: $NODE_ID" -H "x-opus8-sign-v2: $SIG" -H 'content-type: application/json' -d "$BODY" || true)
   [ "$RCODE" = "200" ] && break
   sleep 10
 done
-if [ "$RCODE" = "200" ]; then echo "OK registered host=$HOST"; else echo "ERROR register http=$RCODE"; exit 13; fi
+REGISTERED_PATH=$(TP="$TRANSPORT_PATH" node -e '
+  const fs=require("node:fs");
+  try {
+    const value=JSON.parse(fs.readFileSync("/tmp/reg.json","utf8"));
+    process.stdout.write(value.transportPath===process.env.TP?value.transportPath:"");
+  } catch {}
+')
+if [ "$RCODE" = "200" ] && [ "$REGISTERED_PATH" = "$TRANSPORT_PATH" ]; then
+  echo "OK registered host=$HOST transport=$TRANSPORT_PATH"
+else
+  echo "ERROR register http=$RCODE transport-path-mismatch"
+  exit 13
+fi
 
 echo "STEP wait-custom-domain"
 DOMAIN_OK=0
@@ -182,12 +289,45 @@ done
 if [ "$DOMAIN_OK" != "1" ]; then echo "ERROR node-custom-domain-unreachable"; exit 14; fi
 echo "OK custom-domain-ready"
 
+echo "STEP edge-gateway-regression"
+ROOT_CODE=$(curl -sS -o /tmp/edge-root.body -D /tmp/edge-root.headers \
+  -w '%{http_code}' --max-time 15 "$URL/" || true)
+if [ "$ROOT_CODE" != "200" ] \
+  || ! grep -qi '^x-content-type-options:[[:space:]]*nosniff' /tmp/edge-root.headers \
+  || ! grep -qi '^content-security-policy:' /tmp/edge-root.headers; then
+  echo "ERROR edge-root-gateway http=$ROOT_CODE"
+  exit 14
+fi
+for route in login admin admin/config.json admin/sub-links sub version locations; do
+  for method in GET POST; do
+    GATEWAY_CODE=$(curl -sS -X "$method" -o /tmp/edge-gateway.body \
+      -D /tmp/edge-gateway.headers -w '%{http_code}' --max-time 15 \
+      "$URL/$route" || true)
+    if [ "$GATEWAY_CODE" != "404" ] \
+      || grep -qi '^set-cookie:' /tmp/edge-gateway.headers; then
+      echo "ERROR legacy-edge-route-open method=$method route=/$route http=$GATEWAY_CODE"
+      exit 14
+    fi
+  done
+done
+UPGRADE_CODE=$(curl -sS --http1.1 -o /tmp/edge-upgrade.body \
+  -D /tmp/edge-upgrade.headers -w '%{http_code}' --max-time 15 \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' "$URL/admin" || true)
+if [ "$UPGRADE_CODE" != "404" ]; then
+  echo "ERROR wrong-path-websocket-open http=$UPGRADE_CODE"
+  exit 14
+fi
+echo "OK edge-gateway-legacy-routes-closed"
+
 echo "STEP verify"
 echo "OK node-tls-http=$NC"
 TS2=$(date +%s)000
-SIG2=$(printf '%s' "${TS2}.${NODE_ID}." | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+UUID_PATH="/api/nodes/$NODE_ID/uuids"
+SIG2=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+  "$TS2" "$NODE_ID" "GET" "$UUID_PATH" "" \
+  | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
 if ! UDATA=$(curl -fsS --max-time 20 "$CONTROL_PLANE_URL/api/nodes/$NODE_ID/uuids" \
-  -H "x-opus8-ts: $TS2" -H "x-opus8-node: $NODE_ID" -H "x-opus8-sign: $SIG2"); then
+  -H "x-opus8-ts: $TS2" -H "x-opus8-node: $NODE_ID" -H "x-opus8-sign-v2: $SIG2"); then
   echo "ERROR uuids-endpoint"; exit 15
 fi
 UC=$(printf '%s' "$UDATA" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String((j.uuids||[]).length))}catch(e){process.stdout.write("err")}})')
@@ -196,11 +336,7 @@ HAS_LANDING_BUNDLE=$(printf '%s' "$UDATA" | node -e 'let s="";process.stdin.on("
 if [ "$HAS_LANDING_BUNDLE" = "1" ]; then echo "OK landing-bundle-encrypted"; else echo "ERROR landing-bundle-missing"; exit 16; fi
 
 echo "STEP canary-user"
-LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e 'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
-ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST "$CONTROL_PLANE_URL/api/admin/login" \
-  -H 'content-type: application/json' -d "$LOGIN_BODY" \
-  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.token)process.exit(1);process.stdout.write(j.token)})')
-echo "::add-mask::$ADMIN_TOKEN"
+ADMIN_TOKEN="$CONTROL_ADMIN_TOKEN"
 CANARY_NAME="opus8-node-canary-${NODE_ID}-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
 CREATE_BODY=$(CANARY_NAME="$CANARY_NAME" NODE_ID="$NODE_ID" node -e 'process.stdout.write(JSON.stringify({username:process.env.CANARY_NAME,nodeGroup:[process.env.NODE_ID],unlock:false,durationDays:1,deviceLimit:4,ipLimit24h:10,trafficLimitBytes:0}))')
 CANARY_USER=$(curl -fsS --max-time 20 -X POST "$CONTROL_PLANE_URL/api/users" \
@@ -228,12 +364,15 @@ fi
 
 echo "STEP policy-status"
 STATUS_TS=$(date +%s)000
-STATUS_SIG=$(printf '%s' "${STATUS_TS}.${NODE_ID}." | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+STATUS_PATH="/__opus8/policy/status?uuid=${TEST_UUID}"
+STATUS_SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+  "$STATUS_TS" "$NODE_ID" "GET" "$STATUS_PATH" "" \
+  | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
 POLICY_STATUS=$(curl -fsS --max-time 20 \
-  "${CUSTOM_URL}/__opus8/policy/status?uuid=${TEST_UUID}" \
+  "${CUSTOM_URL}${STATUS_PATH}" \
   -H "x-opus8-ts: $STATUS_TS" \
   -H "x-opus8-node: $NODE_ID" \
-  -H "x-opus8-sign: $STATUS_SIG")
+  -H "x-opus8-sign-v2: $STATUS_SIG")
 printf '%s' "$POLICY_STATUS" | node -e '
   let s="";
   process.stdin.on("data",d=>s+=d).on("end",()=>{
@@ -257,8 +396,9 @@ printf '%s' "$POLICY_STATUS" | node -e '
 echo "STEP vless-smoke"
 SMOKE_OK=0
 SMOKE_VANTAGE="github-runner"
+LEGACY_REMOTE_OK=0
 for n in $(seq 1 8); do
-  if python3 "$REPO_ROOT/infra/scripts/smoke-vless.py" --url "wss://${HOST}/?ed=2560" --uuid "$TEST_UUID" --expect-status 0 >/tmp/vless.log 2>&1; then
+  if python3 "$REPO_ROOT/infra/scripts/smoke-vless.py" --url "wss://${HOST}${TRANSPORT_URL_PATH}" --uuid "$TEST_UUID" --expect-status 0 >/tmp/vless.log 2>&1; then
     SMOKE_OK=1
     break
   fi
@@ -294,18 +434,31 @@ if [ "$SMOKE_OK" != "1" ]; then
         "$VPS_SSH_USER@$VPS_HOST:$REMOTE_SMOKE_PATH" >/dev/null 2>&1; then
       printf -v REMOTE_COMMAND '%q ' \
         python3 "$REMOTE_SMOKE_PATH" \
-        --url "wss://${HOST}/?ed=2560" \
+        --url "wss://${HOST}${TRANSPORT_URL_PATH}" \
         --uuid "$TEST_UUID" \
         --expect-status 0 \
         --timeout 20
       if "${SSH_BASE[@]}" "$REMOTE_COMMAND" >/tmp/vless-remote.log 2>&1; then
         SMOKE_OK=1
         SMOKE_VANTAGE="landing-vps"
+        if [ -n "$TRANSPORT_LEGACY_PATH" ]; then
+          printf -v REMOTE_LEGACY_COMMAND '%q ' \
+            python3 "$REMOTE_SMOKE_PATH" \
+            --url "wss://${HOST}${TRANSPORT_LEGACY_PATH}?ed=2560" \
+            --uuid "$TEST_UUID" \
+            --expect-status 0 \
+            --timeout 20
+          if "${SSH_BASE[@]}" "$REMOTE_LEGACY_COMMAND" \
+            >/tmp/vless-legacy-remote.log 2>&1; then
+            LEGACY_REMOTE_OK=1
+          fi
+        fi
       fi
       "${SSH_BASE[@]}" "rm -f -- '$REMOTE_SMOKE_PATH'" >/dev/null 2>&1 || true
     fi
   fi
 fi
+
 if [ "$SMOKE_OK" = "1" ]; then
   echo "OK vless-ws-auth-egress vantage=$SMOKE_VANTAGE"
 else
@@ -313,6 +466,22 @@ else
   tail -n 3 /tmp/vless.log
   [ -f /tmp/vless-remote.log ] && tail -n 3 /tmp/vless-remote.log
   exit 17
+fi
+
+if [ -n "$TRANSPORT_LEGACY_PATH" ]; then
+  echo "STEP transport-legacy-canary"
+  if [ "$LEGACY_REMOTE_OK" = "1" ] || python3 "$REPO_ROOT/infra/scripts/smoke-vless.py" \
+    --url "wss://${HOST}${TRANSPORT_LEGACY_PATH}?ed=2560" \
+    --uuid "$TEST_UUID" \
+    --expect-status 0 \
+    --timeout 20 >/tmp/vless-legacy.log 2>&1; then
+    echo "OK transport-legacy-grace"
+  else
+    echo "ERROR transport-legacy-grace"
+    tail -n 3 /tmp/vless-legacy.log
+    [ -f /tmp/vless-legacy-remote.log ] && tail -n 3 /tmp/vless-legacy-remote.log
+    exit 17
+  fi
 fi
 
 [ -n "$LAND" ] && echo "OK unlock=on(AI域名走落地)" || echo "INFO unlock=off"

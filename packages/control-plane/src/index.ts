@@ -4,15 +4,13 @@
  * 零运行时依赖：手写小路由 + WebCrypto。
  */
 import {
-  hmacSign,
   jwtSign,
   jwtVerify,
   timingSafeEqual,
   randomHex,
   randomUuid,
   randomToken,
-  SIGN_HEADERS,
-  SIGN_WINDOW_MS,
+  normalizeTransportPath,
   type ActiveUuidsResponse,
   type NodeRecord,
   type UserRecord,
@@ -66,20 +64,20 @@ import {
   type NodeHealthReportInput,
 } from "./node-health";
 import { listAlertIncidents } from "./alert-incidents";
+import { controlCorsPolicy, validateAdminPreflight } from "./cors";
+import { verifyNodeRequest, type NodeAuthResult } from "./node-auth";
+import {
+  enforceSubscriptionRateLimit,
+  validSubscriptionToken,
+} from "./subscription-rate-limit";
+import {
+  complianceStatus,
+  domainScopeIncreases,
+  proxyProvisioningAllowed,
+  trafficLimitIncreases,
+} from "./compliance";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
-const CORS = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-headers": "authorization, content-type",
-  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-};
-
-const json = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: { ...JSON_HEADERS, ...CORS },
-  });
-const err = (msg: string, status = 400) => json({ error: msg }, status);
 
 /** 校验管理员 JWT，返回 true/false。 */
 async function requireAdmin(req: Request, env: Env): Promise<boolean> {
@@ -90,22 +88,13 @@ async function requireAdmin(req: Request, env: Env): Promise<boolean> {
   return !!payload && payload.role === "admin";
 }
 
-/** 校验节点 HMAC 签名，返回 nodeId 或 null。body 为原始文本。 */
+/** 校验节点 HMAC 签名，返回签名身份与时间戳。body 为原始文本。 */
 async function verifyNodeSig(
   req: Request,
   env: Env,
   body: string,
-): Promise<string | null> {
-  const ts = req.headers.get(SIGN_HEADERS.ts);
-  const nodeId = req.headers.get(SIGN_HEADERS.node);
-  const sign = req.headers.get(SIGN_HEADERS.sign);
-  if (!ts || !nodeId || !sign) return null;
-  if (Math.abs(Date.now() - Number(ts)) > SIGN_WINDOW_MS) return null;
-  const ok = timingSafeEqual(
-    await hmacSign(env.NODE_HMAC_SECRET, `${ts}.${nodeId}.${body}`),
-    sign.toLowerCase(),
-  );
-  return ok ? nodeId : null;
+): Promise<NodeAuthResult | null> {
+  return verifyNodeRequest(req, env, body);
 }
 
 export default {
@@ -117,7 +106,33 @@ export default {
     const url = new URL(req.url);
     const p = url.pathname;
     const m = req.method;
-    if (m === "OPTIONS") return new Response(null, { headers: CORS });
+    const cors = controlCorsPolicy(req, env, p);
+    const json = (data: unknown, status = 200) =>
+      new Response(JSON.stringify(data), {
+        status,
+        headers: { ...JSON_HEADERS, ...cors.responseHeaders },
+      });
+    const err = (msg: string, status = 400) => json({ error: msg }, status);
+
+    if (m === "OPTIONS") {
+      const preflightError = validateAdminPreflight(req, cors);
+      if (preflightError) {
+        return new Response(
+          JSON.stringify({ error: "CORS preflight rejected" }),
+          {
+            status: cors.adminApi ? 403 : 404,
+            headers: JSON_HEADERS,
+          },
+        );
+      }
+      return new Response(null, {
+        status: 204,
+        headers: cors.responseHeaders,
+      });
+    }
+    if (cors.adminApi && cors.origin && !cors.allowed) {
+      return err("Origin not allowed", 403);
+    }
 
     try {
       // ---------- 健康 ----------
@@ -155,6 +170,10 @@ export default {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         return json(await operationsOverview(env));
       }
+      if (p === "/api/operations/compliance" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return json(complianceStatus(env));
+      }
       if (p === "/api/operations/alerts" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("Unauthorized", 401);
         const requestedStatus = url.searchParams.get("status");
@@ -182,6 +201,28 @@ export default {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         try {
           const input = (await req.json()) as NodeHealthReportInput;
+          if (
+            !proxyProvisioningAllowed(env) &&
+            Array.isArray(input.results)
+          ) {
+            const bannedNodes = new Set(
+              (await listNodes(env))
+                .filter((node) => node.health === "banned")
+                .map((node) => node.id),
+            );
+            if (
+              input.results.some(
+                (result) =>
+                  result.directOk === true &&
+                  bannedNodes.has(result.nodeId),
+              )
+            ) {
+              return err(
+                "Banned node recovery is locked pending documented Cloudflare authorization",
+                403,
+              );
+            }
+          }
           return json(await applyNodeHealthReport(env, input));
         } catch (error) {
           return err((error as Error).message, 400);
@@ -201,6 +242,12 @@ export default {
       }
       if (p === "/api/users" && m === "POST") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        if (!proxyProvisioningAllowed(env)) {
+          return err(
+            "Edge provisioning is locked pending documented Cloudflare authorization",
+            403,
+          );
+        }
         const b = (await req.json().catch(() => ({}))) as {
           username?: string;
           planId?: string;
@@ -300,6 +347,30 @@ export default {
           return err("没有可更新的字段");
         const currentLimits = await getUserLimits(env, userMatch[1]);
         if (!currentLimits) return err("用户不存在", 404);
+        const enablingUser =
+          currentLimits.enabled !== 1 && b.enabled === true;
+        const remainsEnabled =
+          currentLimits.enabled === 1 && b.enabled !== false;
+        const expandsActiveCapacity =
+          remainsEnabled &&
+          ((typeof deviceLimit === "number" &&
+            deviceLimit > currentLimits.deviceLimit) ||
+            (typeof ipLimit24h === "number" &&
+              ipLimit24h > currentLimits.ipLimit24h) ||
+            trafficLimitIncreases(
+              currentLimits.trafficLimitBytes,
+              trafficLimitBytes as number | undefined,
+            ) ||
+            (currentLimits.unlock !== 1 && b.unlock === true));
+        if (
+          !proxyProvisioningAllowed(env) &&
+          (enablingUser || expandsActiveCapacity)
+        ) {
+          return err(
+            "Capacity increases are locked pending documented Cloudflare authorization",
+            403,
+          );
+        }
         const effectiveDeviceLimit =
           typeof deviceLimit === "number"
             ? deviceLimit
@@ -366,6 +437,16 @@ export default {
             400,
           );
         }
+        const current = await getUnlockHosts(env);
+        if (
+          !proxyProvisioningAllowed(env) &&
+          domainScopeIncreases(current.hosts, validated.hosts)
+        ) {
+          return err(
+            "Landing route expansion is locked pending documented Cloudflare authorization",
+            403,
+          );
+        }
         const routing = await putUnlockHosts(env, validated.hosts);
         const policy = await publishEdgePolicyChange(env);
         return json({
@@ -376,6 +457,18 @@ export default {
       }
       if (p === "/api/settings/unlock-hosts" && m === "DELETE") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        if (!proxyProvisioningAllowed(env)) {
+          const current = await getUnlockHosts(env);
+          const defaults = validateUnlockHosts(
+            (env.DEFAULT_UNLOCK_HOSTS || "").split(",").filter(Boolean),
+          ).hosts;
+          if (domainScopeIncreases(current.hosts, defaults)) {
+            return err(
+              "Landing route expansion is locked pending documented Cloudflare authorization",
+              403,
+            );
+          }
+        }
         const routing = await resetUnlockHosts(env);
         const policy = await publishEdgePolicyChange(env);
         return json({
@@ -392,6 +485,12 @@ export default {
       }
       if (p === "/api/landings" && m === "POST") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        if (!proxyProvisioningAllowed(env)) {
+          return err(
+            "Landing provisioning is locked pending documented Cloudflare authorization",
+            403,
+          );
+        }
         const input = (await req.json().catch(() => ({}))) as LandingInput;
         let landing: Awaited<ReturnType<typeof createLanding>>;
         try {
@@ -421,6 +520,46 @@ export default {
       if (landingMatch && m === "PATCH") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         const input = (await req.json().catch(() => ({}))) as LandingInput;
+        const currentLanding = (await listLandings(env)).find(
+          (landing) => landing.id === landingMatch[1],
+        );
+        if (!currentLanding) return err("落地机不存在", 404);
+        if (!proxyProvisioningAllowed(env) && input.enabled !== false) {
+          let requestedMatchHosts = currentLanding.matchHosts;
+          if (input.matchHosts !== undefined) {
+            const validatedMatchHosts = validateUnlockHosts(input.matchHosts);
+            if (validatedMatchHosts.invalidHosts.length > 0) {
+              return err(
+                `存在无效负责域名: ${validatedMatchHosts.invalidHosts
+                  .slice(0, 5)
+                  .join(", ")}`,
+                400,
+              );
+            }
+            requestedMatchHosts = validatedMatchHosts.hosts;
+          }
+          const connectionChanged = [
+            input.hostname,
+            input.port,
+            input.username,
+            input.password,
+          ].some((value) => value !== undefined && value !== "");
+          const expandsLanding =
+            (!currentLanding.enabled && input.enabled === true) ||
+            (currentLanding.enabled &&
+              (connectionChanged ||
+                domainScopeIncreases(
+                  currentLanding.matchHosts,
+                  requestedMatchHosts,
+                  true,
+                )));
+          if (expandsLanding) {
+            return err(
+              "Landing capacity expansion is locked pending documented Cloudflare authorization",
+              403,
+            );
+          }
+        }
         let landing: Awaited<ReturnType<typeof updateLanding>>;
         try {
           landing = await updateLanding(env, landingMatch[1], input);
@@ -455,61 +594,86 @@ export default {
       }
       if (p === "/api/nodes/register" && m === "POST") {
         const body = await req.text();
-        const nodeId = await verifyNodeSig(req, env, body);
-        if (!nodeId) return err("签名校验失败", 401);
+        const auth = await verifyNodeSig(req, env, body);
+        if (auth && !proxyProvisioningAllowed(env)) {
+          return err(
+            "Edge node registration is locked pending documented Cloudflare authorization",
+            403,
+          );
+        }
+        if (!auth) return err("签名校验失败", 401);
         const b = JSON.parse(body) as RegisterRequest;
-        const now = Date.now();
+        if (b.nodeId !== auth.nodeId) return err("节点身份不匹配", 401);
+        let transportPath: string | null = null;
+        if (b.transportPath !== undefined) {
+          transportPath = normalizeTransportPath(b.transportPath);
+          if (!transportPath) return err("传输路径无效或命中保留路径", 400);
+        }
+        const now = auth.timestamp;
         const rec: NodeRecord = {
-          id: b.nodeId,
+          id: auth.nodeId,
           account_alias: b.accountAlias,
           hostname: b.hostname,
           region: b.region ?? null,
           capabilities: b.capabilities ? JSON.stringify(b.capabilities) : null,
           preferred_ip: b.preferredIp ?? null,
+          transport_path: transportPath,
           health: "healthy",
           enabled: 1,
           last_seen: now,
           created_at: now,
         };
         await upsertNode(env, rec);
-        return json({ ok: true });
+        return json({
+          ok: true,
+          ...(transportPath ? { transportPath } : {}),
+        });
       }
       if (p === "/api/nodes/heartbeat" && m === "POST") {
         const body = await req.text();
-        const nodeId = await verifyNodeSig(req, env, body);
-        if (!nodeId) return err("签名校验失败", 401);
+        const auth = await verifyNodeSig(req, env, body);
+        if (!auth) return err("签名校验失败", 401);
         const b = JSON.parse(body) as HeartbeatRequest;
+        if (b.nodeId !== auth.nodeId) return err("节点身份不匹配", 401);
         await touchNode(
           env,
-          b.nodeId,
+          auth.nodeId,
           b.health ?? "healthy",
           b.preferredIp ?? null,
-          Date.now(),
+          auth.timestamp,
         );
         return json({ ok: true });
       }
       if (p === "/api/nodes/admission" && m === "POST") {
         const body = await req.text();
-        const nodeId = await verifyNodeSig(req, env, body);
-        if (!nodeId) return err("签名校验失败", 401);
+        const auth = await verifyNodeSig(req, env, body);
+        if (!auth) return err("签名校验失败", 401);
         const b = JSON.parse(body) as Omit<AdmissionInput, "nodeId"> & {
           nodeId?: string;
         };
-        if (b.nodeId && b.nodeId !== nodeId) return err("节点身份不匹配", 401);
+        if (b.nodeId && b.nodeId !== auth.nodeId)
+          return err("节点身份不匹配", 401);
         try {
-          return json(await admitConnection(env, { ...b, nodeId }));
+          return json(
+            await admitConnection(
+              env,
+              { ...b, nodeId: auth.nodeId },
+              auth.timestamp,
+            ),
+          );
         } catch (error) {
           return err((error as Error).message, 400);
         }
       }
       if (p === "/api/nodes/usage" && m === "POST") {
         const body = await req.text();
-        const nodeId = await verifyNodeSig(req, env, body);
-        if (!nodeId) return err("签名校验失败", 401);
+        const auth = await verifyNodeSig(req, env, body);
+        if (!auth) return err("签名校验失败", 401);
         const b = JSON.parse(body) as { nodeId?: string; events?: unknown };
-        if (b.nodeId && b.nodeId !== nodeId) return err("节点身份不匹配", 401);
+        if (b.nodeId && b.nodeId !== auth.nodeId)
+          return err("节点身份不匹配", 401);
         try {
-          return json(await recordUsage(env, nodeId, b.events));
+          return json(await recordUsage(env, auth.nodeId, b.events));
         } catch (error) {
           return err((error as Error).message, 400);
         }
@@ -531,6 +695,12 @@ export default {
       }
       if (p === "/api/optimized-ips" && m === "POST") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        if (!proxyProvisioningAllowed(env)) {
+          return err(
+            "Optimized IP publication is locked pending documented Cloudflare authorization",
+            403,
+          );
+        }
         try {
           const b = (await req.json().catch(() => ({}))) as Partial<OptimizedIpPool>;
           const pool = normalizeOptimizedIpPool(b);
@@ -563,8 +733,8 @@ export default {
       const uuidsMatch = p.match(/^\/api\/nodes\/([^/]+)\/uuids$/);
       if (uuidsMatch && m === "GET") {
         const body = "";
-        const nodeId = await verifyNodeSig(req, env, body);
-        if (!nodeId || nodeId !== uuidsMatch[1])
+        const auth = await verifyNodeSig(req, env, body);
+        if (!auth || auth.nodeId !== uuidsMatch[1])
           return err("签名校验失败", 401);
         const [policy, routing, landings, policyVersion] = await Promise.all([
           activeUserPolicy(env),
@@ -583,7 +753,7 @@ export default {
           landingBundle: await sealJson(
             env.NODE_HMAC_SECRET,
             landings,
-            `node:${nodeId}`,
+            `node:${auth.nodeId}`,
           ),
         };
         return json(resp);
@@ -592,10 +762,41 @@ export default {
       // ---------- 订阅下发 ----------
       const subMatch = p.match(/^\/sub\/([^/]+)$/);
       if (subMatch && m === "GET") {
-        const user = await getUserByToken(env, subMatch[1]);
-        if (!user || user.enabled !== 1) return err("订阅无效", 404);
+        const subscriptionToken = subMatch[1];
+        const subscriptionError = (
+          message: string,
+          status: number,
+          retryAfter?: number,
+        ) =>
+          new Response(`${message}\n`, {
+            status,
+            headers: {
+              "content-type": "text/plain; charset=utf-8",
+              "cache-control": "private, no-store",
+              ...(retryAfter
+                ? { "retry-after": String(retryAfter) }
+                : {}),
+            },
+          });
+        if (!validSubscriptionToken(subscriptionToken))
+          return subscriptionError("订阅无效", 404);
+        const rateLimit = await enforceSubscriptionRateLimit(
+          req,
+          env,
+          subscriptionToken,
+        );
+        if (!rateLimit.allowed) {
+          return subscriptionError(
+            rateLimit.status === 429 ? "请求过于频繁" : "订阅服务暂不可用",
+            rateLimit.status,
+            rateLimit.retryAfterSeconds,
+          );
+        }
+        const user = await getUserByToken(env, subscriptionToken);
+        if (!user || user.enabled !== 1)
+          return subscriptionError("订阅无效", 404);
         if (user.expire_at && user.expire_at < Date.now())
-          return err("订阅已过期", 403);
+          return subscriptionError("订阅已过期", 403);
         const nodes = nodesForUser(user, await listNodes(env));
         const fmt = pickFormat(
           req.headers.get("user-agent") || "",
@@ -616,6 +817,8 @@ export default {
         return new Response(body, {
           headers: {
             "content-type": contentType,
+            "cache-control": "private, no-store",
+            "x-opus8-subscription-protection": "rate-limit-v1",
             "profile-update-interval": "12",
             "subscription-userinfo": subUserInfo(
               user,

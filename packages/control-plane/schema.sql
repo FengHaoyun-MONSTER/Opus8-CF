@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   region        TEXT,                       -- 地区（自报/探测）
   capabilities  TEXT,                       -- JSON: 支持的协议/特性
   preferred_ip  TEXT,                       -- 当前优选 IP（优选流程写回）
+  transport_path TEXT NOT NULL DEFAULT '/', -- WebSocket 数据面路径；查询参数由客户端格式单独生成
   health        TEXT DEFAULT 'unknown',     -- healthy / degraded / banned / unknown
   enabled       INTEGER DEFAULT 1,
   last_seen     INTEGER,                    -- 心跳时间戳(ms)

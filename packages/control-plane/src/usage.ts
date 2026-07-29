@@ -32,7 +32,11 @@ function boundedInt(value: unknown, max: number): number | null {
   return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= max ? parsed : null;
 }
 
-export async function admitConnection(env: Env, input: AdmissionInput) {
+export async function admitConnection(
+  env: Env,
+  input: AdmissionInput,
+  signedAt = Date.now(),
+) {
   if (
     !validToken(input.nodeId, 80)
     || !validToken(input.uuid, 64)
@@ -42,7 +46,10 @@ export async function admitConnection(env: Env, input: AdmissionInput) {
     throw new Error("invalid admission payload");
   }
 
-  const now = Date.now();
+  if (!Number.isSafeInteger(signedAt)) {
+    throw new Error("invalid admission timestamp");
+  }
+  const now = signedAt;
   const dayAgo = now - DAY_MS;
   const expiresAt = now + LEASE_TTL_MS;
   const results = await env.DB.batch([
@@ -85,10 +92,12 @@ export async function admitConnection(env: Env, input: AdmissionInput) {
            )
          )
        ON CONFLICT(user_id,ip_hash) DO UPDATE SET
-         node_id=excluded.node_id,
-         lease_id=excluded.lease_id,
-         last_seen=excluded.last_seen,
-         expires_at=excluded.expires_at`,
+         node_id=CASE WHEN excluded.last_seen>=active_leases.last_seen
+           THEN excluded.node_id ELSE active_leases.node_id END,
+         lease_id=CASE WHEN excluded.last_seen>=active_leases.last_seen
+           THEN excluded.lease_id ELSE active_leases.lease_id END,
+         last_seen=MAX(active_leases.last_seen,excluded.last_seen),
+         expires_at=MAX(active_leases.expires_at,excluded.expires_at)`,
     ).bind(
       input.uuid,
       input.nodeId,
@@ -101,9 +110,10 @@ export async function admitConnection(env: Env, input: AdmissionInput) {
     env.DB.prepare(
       `INSERT INTO ip_history (user_id, ip_hash, first_seen, last_seen)
        SELECT user_id, ip_hash, ?2, ?2
-       FROM active_leases WHERE lease_id=?1 AND uuid=?3
-       ON CONFLICT(user_id,ip_hash) DO UPDATE SET last_seen=excluded.last_seen`,
-    ).bind(input.leaseId, now, input.uuid),
+       FROM active_leases WHERE uuid=?1 AND ip_hash=?3
+       ON CONFLICT(user_id,ip_hash) DO UPDATE SET
+         last_seen=MAX(ip_history.last_seen,excluded.last_seen)`,
+    ).bind(input.uuid, now, input.ipHash),
     env.DB.prepare(
       `SELECT u.id,
          u.enabled,

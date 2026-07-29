@@ -1,0 +1,33 @@
+name: compliance-audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compliance-audit
+  cancel-in-progress: false
+
+jobs:
+  cloudflare-read-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      CF_ACCOUNT_ACC1: ${{ secrets.ACCOUNT_ID }}
+      CF_TOKEN_ACC1: ${{ secrets.API_TOKEN }}
+      CF_ACCOUNT_ACC2: ${{ secrets.ACCOUNT_ID_NUM1 }}
+      CF_TOKEN_ACC2: ${{ secrets.API_TOKEN_NUM1 }}
+      RESOURCE_AUDIT_OUTPUT: ${{ runner.temp }}/opus8-resource-audit.json
+    steps:
+      - name: Checkout pinned repository revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Use Node.js 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+      - name: Validate policy and query Cloudflare read-only analytics
+        run: node infra/scripts/cloudflare-resource-audit.mjs

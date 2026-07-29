@@ -46,7 +46,7 @@ jobs:
       ROOT_DOMAIN_ACC1: ${{ secrets.ROOT_DOMAIN }}
       ROOT_DOMAIN_ACC2: ${{ secrets.ROOT_DOMAIN_NUM1 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Validate and mask credentials
         shell: bash
@@ -166,12 +166,7 @@ jobs:
           ROOT_DOMAIN_ACC1="$(normalize_domain "$ROOT_DOMAIN_ACC1")"
           ROOT_DOMAIN_ACC2="$(normalize_domain "$ROOT_DOMAIN_ACC2")"
           CONTROL_API="https://api.${CONTROL_ROOT_DOMAIN}"
-          nodes=(
-            "acc1-n1|acc1-n1-v2.${ROOT_DOMAIN_ACC1}"
-            "acc1-n2|acc1-n2.${ROOT_DOMAIN_ACC1}"
-            "acc2-n1|acc2-n1.${ROOT_DOMAIN_ACC2}"
-            "acc2-n2|acc2-n2.${ROOT_DOMAIN_ACC2}"
-          )
+          nodes=()
 
           smoke_with_retry() {
             local label="$1"
@@ -194,6 +189,27 @@ jobs:
             -H 'content-type: application/json' \
             --data "$login_body" | jq -er '.token')"
           echo "::add-mask::$admin_token"
+          nodes_response="$(curl -fsS --max-time 20 "$CONTROL_API/api/nodes" \
+            -H "authorization: Bearer $admin_token")"
+          mapfile -t nodes < <(
+            printf '%s' "$nodes_response" | jq -er '
+              [.nodes[]
+                | select(
+                    .enabled == 1 and
+                    (.id == "acc1-n1" or .id == "acc1-n2" or
+                     .id == "acc2-n1" or .id == "acc2-n2")
+                  )
+              ] |
+              sort_by(.id) |
+              .[] |
+              [.id,.hostname,(.transport_path // "/")] |
+              join("|")
+            '
+          )
+          if [ "${#nodes[@]}" -ne 4 ]; then
+            echo "::error::Expected four registered nodes with transport paths"
+            exit 1
+          fi
 
           verify_user_id=""
           cleanup_verify_user() {
@@ -244,11 +260,22 @@ jobs:
 
           subscription="$(curl -fsS --max-time 20 "$SUB_URL" | base64 -d)"
           for entry in "${nodes[@]}"; do
-            IFS='|' read -r node host <<<"$entry"
+            IFS='|' read -r node host transport_path <<<"$entry"
             if ! printf '%s\n' "$subscription" | grep -Fq "$host"; then
               echo "::error::Subscription is missing $node hostname"
               exit 1
             fi
+            EXPECTED_PATH="$transport_path" node -e '
+              const fs=require("node:fs");
+              const lines=fs.readFileSync(0,"utf8").split(/\r?\n/).filter(Boolean);
+              if(!lines.some(line=>{
+                try{return new URL(line).searchParams.get("path")===process.env.EXPECTED_PATH+"?ed=2560"}
+                catch{return false}
+              })) process.exit(1);
+            ' <<<"$subscription" || {
+              echo "::error::Subscription is missing $node transport path"
+              exit 1
+            }
           done
           if printf '%s\n' "$subscription" | grep -Fq "acc1-n1.${ROOT_DOMAIN_ACC1}"; then
             echo "::error::Subscription still advertises retired acc1-n1 hostname"
@@ -264,16 +291,18 @@ jobs:
           BEFORE_BYTES=0
 
           for entry in "${nodes[@]}"; do
-            IFS='|' read -r node host <<<"$entry"
+            IFS='|' read -r node host transport_path <<<"$entry"
             timestamp="$(date +%s)000"
-            signature="$(printf '%s' "${timestamp}.${node}." \
+            request_path="/api/nodes/$node/uuids"
+            signature="$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+              "$timestamp" "$node" "GET" "$request_path" "" \
               | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r \
               | cut -d' ' -f1)"
             uuid="$(curl -fsS --max-time 20 \
               "$CONTROL_API/api/nodes/$node/uuids" \
               -H "x-opus8-ts: $timestamp" \
               -H "x-opus8-node: $node" \
-              -H "x-opus8-sign: $signature")"
+              -H "x-opus8-sign-v2: $signature")"
             printf '%s' "$uuid" | jq -e \
               --arg uuid "$VERIFY_UUID" \
               '(.uuids | index($uuid) != null) and (.unlockUuids | index($uuid) != null)' \
@@ -282,14 +311,14 @@ jobs:
 
             smoke_with_retry "$node direct-cf-egress" \
               infra/scripts/smoke-vless.py \
-              --url "wss://${host}/?ed=2560" \
+              --url "wss://${host}${transport_path}?ed=2560" \
               --uuid "$VERIFY_UUID" \
               --target example.com \
               --target-port 80 \
               --expect-status 0
             smoke_with_retry "$node ai-landing-warp-egress" \
               infra/scripts/smoke-vless.py \
-              --url "wss://${host}/?ed=2560" \
+              --url "wss://${host}${transport_path}?ed=2560" \
               --uuid "$VERIFY_UUID" \
               --target openai.com \
               --target-port 80 \
@@ -338,6 +367,12 @@ jobs:
             -H 'content-type: application/json' \
             --data "$login_body" | jq -er '.token')"
           echo "::add-mask::$admin_token"
+          account1_nodes="$(curl -fsS --max-time 20 "$CONTROL_API/api/nodes" \
+            -H "authorization: Bearer $admin_token")"
+          ACC1_N1_PATH="$(printf '%s' "$account1_nodes" \
+            | jq -er '.nodes[] | select(.id == "acc1-n1") | .transport_path // "/")"
+          ACC1_N2_PATH="$(printf '%s' "$account1_nodes" \
+            | jq -er '.nodes[] | select(.id == "acc1-n2") | .transport_path // "/")"
 
           canary_user_id=""
           cleanup_canary_user() {
@@ -393,15 +428,15 @@ jobs:
           expected_connections=0
           ws_failed=0
           for ws_entry in \
-            "acc1-n2-workers|opus8cf-node-acc1-n2.techtoolhub-office.workers.dev" \
-            "acc1-n2-custom|acc1-n2.${ROOT_DOMAIN_ACC1}" \
-            "acc1-n1-v2-workers|opus8cf-node-acc1-n1-v2.techtoolhub-office.workers.dev" \
-            "acc1-n1-v2-custom|acc1-n1-v2.${ROOT_DOMAIN_ACC1}"; do
-            IFS='|' read -r ws_label ws_host <<<"$ws_entry"
+            "acc1-n2-workers|opus8cf-node-acc1-n2.techtoolhub-office.workers.dev|${ACC1_N2_PATH}" \
+            "acc1-n2-custom|acc1-n2.${ROOT_DOMAIN_ACC1}|${ACC1_N2_PATH}" \
+            "acc1-n1-v2-workers|opus8cf-node-acc1-n1-v2.techtoolhub-office.workers.dev|${ACC1_N1_PATH}" \
+            "acc1-n1-v2-custom|acc1-n1-v2.${ROOT_DOMAIN_ACC1}|${ACC1_N1_PATH}"; do
+            IFS='|' read -r ws_label ws_host ws_path <<<"$ws_entry"
             route_ok=0
             for attempt in 1 2 3; do
               if python3 infra/scripts/smoke-vless.py \
-                --url "wss://${ws_host}/?ed=2560" \
+                --url "wss://${ws_host}${ws_path}?ed=2560" \
                 --uuid "$uuid" \
                 --target example.com \
                 --target-port 80 \

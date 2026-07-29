@@ -6,7 +6,18 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "esbuild src/index.ts --bundle --format=esm --external:cloudflare:sockets --outfile=dist/index.js",
+    "test:cors": "node test/cors-test.mjs",
+    "test:signature": "node test/signature-test.mjs",
+    "test:subscription-rate-limit": "node test/subscription-rate-limit-test.mjs",
+    "test:compliance": "node test/compliance-test.mjs",
+    "test:compliance:local": "pnpm build && node test/compliance-runtime-local.mjs",
+    "test:resource-audit": "node test/resource-audit-test.mjs",
+    "test:transport-path": "node test/transport-path-test.mjs",
+    "test:schema-migration": "node test/schema-transport-migration-test.mjs",
+    "test:client-compatibility": "node test/client-compatibility-test.mjs",
+    "test:supply-chain": "node test/supply-chain-test.mjs",
     "test:integration": "node test/integration.mjs",
+    "test:integration:local": "pnpm build && node test/integration-local.mjs",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

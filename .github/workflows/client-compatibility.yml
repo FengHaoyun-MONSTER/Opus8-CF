@@ -1,0 +1,31 @@
+name: client-compatibility
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_id:
+        description: Optional healthy node ID; empty selects the first healthy node
+        required: false
+        type: string
+permissions:
+  contents: read
+
+concurrency:
+  group: client-compatibility
+  cancel-in-progress: false
+
+jobs:
+  real-clients:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      COMPAT_NODE_ID: ${{ inputs.node_id || '' }}
+      CLOUDFLARE_PROXY_PERMISSION_REF: ${{ secrets.CLOUDFLARE_PROXY_PERMISSION_REF }}
+    steps:
+      - name: Checkout pinned repository revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Run pinned real-client matrix
+        shell: bash
+        run: bash infra/scripts/client-compatibility.sh

@@ -25,9 +25,29 @@ jobs:
       VPS_SSH_PASSWORD: ${{ secrets.SERVICES_CODE }}
       VPS_SSH_PORT: ${{ secrets.SERVICES_SSH_PORT }}
       HEALTH_ALERT_FILE: /tmp/opus8-health-state.json
+      CLOUDFLARE_PROXY_PERMISSION_REF: ${{ secrets.CLOUDFLARE_PROXY_PERMISSION_REF }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Check data-plane authorization
+        id: compliance
+        shell: bash
+        run: |
+          set +e
+          node infra/scripts/compliance-gate.mjs \
+            --mode data-plane-test --all-current-nodes
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "allowed=1" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -eq 3 ]; then
+            echo "allowed=0" >> "$GITHUB_OUTPUT"
+            echo "## Health check skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "Documented Cloudflare authorization has not passed the fail-closed gate." >> "$GITHUB_STEP_SUMMARY"
+          else
+            exit "$code"
+          fi
       - name: Prepare landing-vantage SSH
+        if: steps.compliance.outputs.allowed == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -37,14 +57,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
       - name: Probe every enabled node
+        if: steps.compliance.outputs.allowed == '1'
         id: probe
         run: bash infra/scripts/healthcheck-nodes.sh
       - name: Publish health alerts
-        if: always()
+        if: always() && steps.compliance.outputs.allowed == '1'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           HEALTHCHECK_OUTCOME: ${{ steps.probe.outcome }}
-          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
         run: bash infra/scripts/publish-health-alert.sh

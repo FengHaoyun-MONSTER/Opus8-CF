@@ -13,6 +13,7 @@ export async function registerNode(
     region: env.NODE_REGION,
     capabilities: opts.capabilities,
     preferredIp: opts.preferredIp,
+    transportPath: env.OPUS8_TRANSPORT_PATH,
     version: opts.version,
   };
   try {

@@ -35,7 +35,7 @@ jobs:
       CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Validate inputs
         shell: bash

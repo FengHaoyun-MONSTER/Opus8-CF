@@ -178,7 +178,7 @@ NODES_RESPONSE="$(curl -fsS --max-time 20 "$CONTROL_API/api/nodes" \
   -H "authorization: Bearer $ADMIN_TOKEN")"
 mapfile -t NODES < <(
   printf '%s' "$NODES_RESPONSE" |
-    jq -er '.nodes[] | select(.enabled == 1) | [.id,.hostname] | @tsv'
+    jq -er '.nodes[] | select(.enabled == 1) | [.id,.hostname,(.transport_path // "/")] | @tsv'
 )
 if [ "${#NODES[@]}" -eq 0 ]; then
   echo "ERROR no-enabled-nodes"
@@ -187,7 +187,7 @@ fi
 echo "OK enabled-nodes count=${#NODES[@]}"
 
 local_probe() {
-  local node_id="$1" probe_name="$2" host="$3" target="$4"
+  local node_id="$1" probe_name="$2" host="$3" transport_path="$4" target="$5"
   local attempt started ended code log_file
   PROBE_OK=false
   PROBE_LATENCY=null
@@ -198,7 +198,7 @@ local_probe() {
     started="$(date +%s%3N)"
     set +e
     python3 infra/scripts/smoke-vless.py \
-      --url "wss://${host}/?ed=2560" \
+      --url "wss://${host}${transport_path}?ed=2560" \
       --uuid "$PROBE_UUID" \
       --target "$target" \
       --target-port 80 \
@@ -221,7 +221,7 @@ local_probe() {
 }
 
 remote_probe() {
-  local node_id="$1" probe_name="$2" host="$3" target="$4"
+  local node_id="$1" probe_name="$2" host="$3" transport_path="$4" target="$5"
   local attempt started ended code log_file remote_command
   REMOTE_PROBE_OK=false
   REMOTE_PROBE_LATENCY=null
@@ -233,7 +233,7 @@ remote_probe() {
     started="$(date +%s%3N)"
     printf -v remote_command '%q ' \
       python3 "$REMOTE_SMOKE_PATH" \
-      --url "wss://${host}/?ed=2560" \
+      --url "wss://${host}${transport_path}?ed=2560" \
       --uuid "$PROBE_UUID" \
       --target "$target" \
       --target-port 80 \
@@ -258,14 +258,14 @@ remote_probe() {
 }
 
 aggregate_probe() {
-  local node_id="$1" probe_name="$2" host="$3" target="$4"
+  local node_id="$1" probe_name="$2" host="$3" transport_path="$4" target="$5"
   local github_ok github_latency github_error remote_ok remote_latency remote_error
 
-  local_probe "$node_id" "$probe_name" "$host" "$target"
+  local_probe "$node_id" "$probe_name" "$host" "$transport_path" "$target"
   github_ok="$PROBE_OK"
   github_latency="$PROBE_LATENCY"
   github_error="$PROBE_ERROR"
-  remote_probe "$node_id" "$probe_name" "$host" "$target"
+  remote_probe "$node_id" "$probe_name" "$host" "$transport_path" "$target"
   remote_ok="$REMOTE_PROBE_OK"
   remote_latency="$REMOTE_PROBE_LATENCY"
   remote_error="$REMOTE_PROBE_ERROR"
@@ -319,15 +319,15 @@ aggregate_probe() {
 
 RESULTS='[]'
 for entry in "${NODES[@]}"; do
-  IFS=$'\t' read -r NODE_ID NODE_HOST <<<"$entry"
+  IFS=$'\t' read -r NODE_ID NODE_HOST NODE_TRANSPORT_PATH <<<"$entry"
 
-  aggregate_probe "$NODE_ID" direct "$NODE_HOST" example.com
+  aggregate_probe "$NODE_ID" direct "$NODE_HOST" "$NODE_TRANSPORT_PATH" example.com
   DIRECT_OK="$AGGREGATE_OK"
   DIRECT_LATENCY="$AGGREGATE_LATENCY"
   DIRECT_ERROR="$AGGREGATE_ERROR"
   DIRECT_VANTAGES="$AGGREGATE_VANTAGES"
 
-  aggregate_probe "$NODE_ID" landing "$NODE_HOST" openai.com
+  aggregate_probe "$NODE_ID" landing "$NODE_HOST" "$NODE_TRANSPORT_PATH" openai.com
   LANDING_OK="$AGGREGATE_OK"
   LANDING_LATENCY="$AGGREGATE_LATENCY"
   LANDING_ERROR="$AGGREGATE_ERROR"

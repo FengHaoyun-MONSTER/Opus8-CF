@@ -30,13 +30,14 @@
 
 ## 🟥 多账号批量部署（P3，你选的核心）
 
-5. **N 个"节点" Cloudflare 账号**（越多越抗封；起步 2–3 个即可验证）
+5. **已被 Cloudflare 书面许可覆盖的节点账号**（账号数量不得用于规避配额、封禁或平台处置）
    对**每个**账号给我：
    - [ ] 账号别名（如 `acc-a`）
    - [ ] Account ID
    - [ ] API Token（权限：Workers Scripts 编辑、Zone/DNS 编辑；如用 workers.dev 子域可免自有域名）
    - [ ] 该账号可用的**域名**或是否用 `*.workers.dev` 默认域
-   > 这些会进 `infra/accounts.json`（不含明文密钥）+ GitHub Secrets。建议用**小号/一次性账号**，见架构文档 §7 封号说明。
+   > 这些会进 `infra/accounts.json`（不含明文密钥）+ GitHub Secrets。只允许使用归属清晰、
+   > 在书面许可范围内的正式账号；不要使用小号、一次性账号或账号轮换规避平台处置。
 
 ---
 

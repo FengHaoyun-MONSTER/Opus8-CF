@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, type OperationsOverview } from "../api";
+import {
+  api,
+  type ComplianceStatus,
+  type OperationsOverview,
+} from "../api";
 import { fmtBytes, fmtNumber, relTime } from "../util";
 
 interface Stat {
@@ -41,6 +45,7 @@ function alertTarget(kind: Alert["kind"]): string {
 
 export function Dashboard() {
   const [overview, setOverview] = useState<OperationsOverview | null>(null);
+  const [compliance, setCompliance] = useState<ComplianceStatus | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -51,7 +56,12 @@ export function Dashboard() {
     if (silent) setRefreshing(true);
     else setLoading(true);
     try {
-      setOverview(await api.operationsOverview());
+      const [overviewResponse, complianceResponse] = await Promise.all([
+        api.operationsOverview(),
+        api.complianceStatus().catch(() => null),
+      ]);
+      setOverview(overviewResponse);
+      setCompliance(complianceResponse);
       setError("");
     } catch (e) {
       setError((e as Error).message);
@@ -162,6 +172,17 @@ export function Dashboard() {
       </div>
 
       {error && <div className="err">{error}</div>}
+      {compliance &&
+        (compliance.proxyProvisioningAllowed ? (
+          <div className="ok">
+            Cloudflare 书面许可门禁已通过；新增用户与受控节点部署可用。
+          </div>
+        ) : (
+          <div className="err">
+            合规门禁为失败关闭：新增用户、扩容、节点注册、落地能力扩展与优选 IP 发布已锁定。
+            现有节点和订阅不会被系统自动删除。
+          </div>
+        ))}
 
       <div className="ops-stat-grid">
         {stats.map((stat) => (

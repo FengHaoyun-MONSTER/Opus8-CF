@@ -23,12 +23,32 @@ jobs:
       VPS_SSH_USER: ${{ secrets.SERVICES_USER }}
       VPS_SSH_PASSWORD: ${{ secrets.SERVICES_CODE }}
       VPS_SSH_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+      CLOUDFLARE_PROXY_PERMISSION_REF: ${{ secrets.CLOUDFLARE_PROXY_PERMISSION_REF }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 20
+      - name: Check data-plane authorization
+        id: compliance
+        shell: bash
+        run: |
+          set +e
+          node infra/scripts/compliance-gate.mjs \
+            --mode data-plane-test --all-current-nodes
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "allowed=1" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -eq 3 ]; then
+            echo "allowed=0" >> "$GITHUB_OUTPUT"
+            echo "## IP optimization skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "Documented Cloudflare authorization has not passed the fail-closed gate." >> "$GITHUB_STEP_SUMMARY"
+          else
+            exit "$code"
+          fi
       - name: Install probe dependencies
+        if: steps.compliance.outputs.allowed == '1'
         run: |
           echo "::add-mask::${VPS_HOST:-}"
           echo "::add-mask::${VPS_SSH_USER:-}"
@@ -36,13 +56,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
       - name: Optimize CF IPs
+        if: steps.compliance.outputs.allowed == '1'
         id: opt
         run: |
           set -o pipefail
           bash infra/scripts/optimize-ip.sh 2>&1 | tee /tmp/oi.log
 
       - name: Publish status back to repo
-        if: always()
+        if: always() && steps.compliance.outputs.allowed == '1'
         run: |
           mkdir -p infra/status
           MARKERS=$(grep -E '^(STEP|OK|WARN|ERROR|DONE) ' /tmp/oi.log || true)

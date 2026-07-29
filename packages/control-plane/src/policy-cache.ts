@@ -1,5 +1,11 @@
-import { hmacSign, SIGN_HEADERS } from "@opus8-cf/shared";
+import {
+  hmacSign,
+  nodeSignatureMessageV1,
+  nodeSignatureMessageV2,
+  SIGN_HEADERS,
+} from "@opus8-cf/shared";
 import { type Env, listNodes } from "./db";
+import { legacyNodeAllowed } from "./node-auth";
 
 const POLICY_VERSION_KEY = "edge_policy_version";
 const INVALIDATION_PATH = "/__opus8/policy/invalidate";
@@ -51,9 +57,24 @@ async function invalidateNode(
 ): Promise<boolean> {
   const body = JSON.stringify({ version });
   const timestamp = String(Date.now());
-  const signature = await hmacSign(
+  const legacyWindowOpen =
+    Number(env.HMAC_V1_ACCEPT_UNTIL || 0) >= Number(timestamp) &&
+    legacyNodeAllowed(env, nodeId);
+  const legacySignature = legacyWindowOpen
+    ? await hmacSign(
+        env.NODE_HMAC_SECRET,
+        nodeSignatureMessageV1(timestamp, nodeId, body),
+      )
+    : null;
+  const signatureV2 = await hmacSign(
     env.NODE_HMAC_SECRET,
-    `${timestamp}.${nodeId}.${body}`,
+    nodeSignatureMessageV2(
+      timestamp,
+      nodeId,
+      "POST",
+      INVALIDATION_PATH,
+      body,
+    ),
   );
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), INVALIDATION_TIMEOUT_MS);
@@ -64,7 +85,11 @@ async function invalidateNode(
         "content-type": "application/json",
         [SIGN_HEADERS.ts]: timestamp,
         [SIGN_HEADERS.node]: nodeId,
-        [SIGN_HEADERS.sign]: signature,
+        [SIGN_HEADERS.signV2]: signatureV2,
+        // Old edge nodes use v1 only inside the bounded rollout window.
+        ...(legacySignature
+          ? { [SIGN_HEADERS.sign]: legacySignature }
+          : {}),
       },
       body,
       signal: controller.signal,

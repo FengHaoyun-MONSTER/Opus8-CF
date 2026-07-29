@@ -14,11 +14,34 @@ async function OPUS8_hmac(secret, msg) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function OPUS8_signatureTarget(pathOrUrl) {
+  const url = new URL(pathOrUrl, "https://opus8-signature.invalid");
+  return url.pathname + url.search;
+}
+
+function OPUS8_signatureMessageV2(timestamp, nodeId, method, pathOrUrl, body) {
+  return [
+    "opus8-hmac-v2",
+    timestamp,
+    nodeId,
+    String(method || "").toUpperCase(),
+    OPUS8_signatureTarget(pathOrUrl),
+    body,
+  ].join("\n");
+}
+
 async function OPUS8_signedFetch(env, method, path, body = "") {
   const ts = String(Date.now());
   const nodeId = env.NODE_ID;
-  const sign = await OPUS8_hmac(env.NODE_HMAC_SECRET, ts + "." + nodeId + "." + body);
-  const headers = { "x-opus8-ts": ts, "x-opus8-node": nodeId, "x-opus8-sign": sign };
+  const signV2 = await OPUS8_hmac(
+    env.NODE_HMAC_SECRET,
+    OPUS8_signatureMessageV2(ts, nodeId, method, path, body),
+  );
+  const headers = {
+    "x-opus8-ts": ts,
+    "x-opus8-node": nodeId,
+    "x-opus8-sign-v2": signV2,
+  };
   if (method === "POST") headers["content-type"] = "application/json";
   return fetch(env.CONTROL_PLANE_URL + path, {
     method,
@@ -29,6 +52,140 @@ async function OPUS8_signedFetch(env, method, path, body = "") {
 
 function OPUS8_ready(env) {
   return !!(env.CONTROL_PLANE_URL && env.NODE_ID && env.NODE_HMAC_SECRET);
+}
+
+function OPUS8_normalizeTransportPath(value) {
+  const path = String(value || "").trim();
+  if (
+    !path ||
+    path.length > 128 ||
+    !/^\/[A-Za-z0-9._~/-]*$/.test(path) ||
+    path.includes("//") ||
+    path.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    return null;
+  }
+  const lower = path.toLowerCase();
+  const reserved = [
+    "/__opus8",
+    "/admin",
+    "/login",
+    "/sub",
+    "/version",
+    "/locations",
+    "/robots.txt",
+    "/favicon.ico",
+  ];
+  if (
+    reserved.some(
+      (prefix) => lower === prefix || lower.startsWith(prefix + "/"),
+    )
+  ) {
+    return null;
+  }
+  return path;
+}
+
+function OPUS8_transportPaths(env, now = Date.now()) {
+  const primary = OPUS8_normalizeTransportPath(
+    String(env?.OPUS8_TRANSPORT_PATH || "/"),
+  );
+  // A malformed primary path invalidates the data plane. Never fall back to a
+  // legacy path when the intended primary configuration is unsafe.
+  if (!primary) return [];
+
+  const paths = [primary];
+  const legacyRaw = String(env?.OPUS8_TRANSPORT_LEGACY_PATH || "").trim();
+  const legacyUntil = Number(env?.OPUS8_TRANSPORT_LEGACY_UNTIL || 0);
+  if (legacyRaw && Number.isFinite(legacyUntil) && now <= legacyUntil) {
+    const legacy = OPUS8_normalizeTransportPath(legacyRaw);
+    if (legacy && legacy !== primary) paths.push(legacy);
+  }
+  return paths;
+}
+
+function OPUS8_gatewayHeaders(contentType, cacheControl = "no-store") {
+  return {
+    "content-type": contentType,
+    "cache-control": cacheControl,
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+  };
+}
+
+function OPUS8_gatewayResponse(request, status, body, contentType, cacheControl) {
+  return new Response(request.method === "HEAD" ? null : body, {
+    status,
+    headers: OPUS8_gatewayHeaders(contentType, cacheControl),
+  });
+}
+
+// Public edge gateway. Returning null is an explicit hand-off to the vendor
+// transport core; every ordinary HTTP route is handled locally and fail-closed.
+function OPUS8_handleEdgeGateway(request, env) {
+  const url = new URL(request.url);
+  const transportPaths = OPUS8_transportPaths(env);
+  const onTransportPath = transportPaths.includes(url.pathname);
+  const upgrade = String(request.headers.get("Upgrade") || "").trim().toLowerCase();
+
+  if (onTransportPath && upgrade === "websocket") return null;
+  if (onTransportPath && request.method === "POST") return null;
+
+  if (
+    !upgrade &&
+    (request.method === "GET" || request.method === "HEAD") &&
+    url.pathname === "/"
+  ) {
+    const html = "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">" +
+      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+      "<title>Online</title><style>html{color-scheme:light dark;font:16px system-ui}" +
+      "body{display:grid;min-height:100vh;margin:0;place-items:center}" +
+      "main{padding:2rem;text-align:center}h1{font-size:1.35rem}</style>" +
+      "<main><h1>Service available</h1></main></html>";
+    return OPUS8_gatewayResponse(
+      request,
+      200,
+      html,
+      "text/html; charset=utf-8",
+      "public, max-age=300",
+    );
+  }
+
+  if (
+    !upgrade &&
+    (request.method === "GET" || request.method === "HEAD") &&
+    url.pathname === "/robots.txt"
+  ) {
+    return OPUS8_gatewayResponse(
+      request,
+      200,
+      "User-agent: *\nDisallow: /\n",
+      "text/plain; charset=utf-8",
+      "public, max-age=3600",
+    );
+  }
+
+  if (
+    !upgrade &&
+    (request.method === "GET" || request.method === "HEAD") &&
+    url.pathname === "/favicon.ico"
+  ) {
+    return new Response(null, {
+      status: 204,
+      headers: OPUS8_gatewayHeaders("image/x-icon", "public, max-age=86400"),
+    });
+  }
+
+  return OPUS8_gatewayResponse(
+    request,
+    404,
+    "Not Found\n",
+    "text/plain; charset=utf-8",
+    "no-store",
+  );
 }
 
 const OPUS8_requestPolicies = new WeakMap();
@@ -312,12 +469,14 @@ async function OPUS8_handleControlRequest(request, env) {
   const body = isInvalidation ? await request.text() : "";
   const timestamp = request.headers.get("x-opus8-ts") || "";
   const nodeId = request.headers.get("x-opus8-node") || "";
-  const signature = request.headers.get("x-opus8-sign") || "";
+  const signatureV2 = request.headers.get("x-opus8-sign-v2") || "";
   const timestampNumber = Number(timestamp);
   if (
     nodeId !== env.NODE_ID ||
+    !/^\d{13}$/.test(timestamp) ||
     !Number.isFinite(timestampNumber) ||
-    Math.abs(Date.now() - timestampNumber) > 5 * 60 * 1000
+    Math.abs(Date.now() - timestampNumber) > 5 * 60 * 1000 ||
+    !/^[a-fA-F0-9]{64}$/.test(signatureV2)
   ) {
     return new Response("Unauthorized", {
       status: 401,
@@ -326,9 +485,15 @@ async function OPUS8_handleControlRequest(request, env) {
   }
   const expected = await OPUS8_hmac(
     env.NODE_HMAC_SECRET,
-    timestamp + "." + nodeId + "." + body,
+    OPUS8_signatureMessageV2(
+      timestamp,
+      nodeId,
+      request.method,
+      request.url,
+      body,
+    ),
   );
-  if (!OPUS8_constantTimeEqual(expected, signature)) {
+  if (!OPUS8_constantTimeEqual(expected, signatureV2.toLowerCase())) {
     return new Response("Unauthorized", {
       status: 401,
       headers: { "cache-control": "no-store" },

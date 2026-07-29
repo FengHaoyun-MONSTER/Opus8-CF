@@ -37,6 +37,8 @@ if (!replaced.includes("sub-links.json")) {
 const injection =
   "const OPUS8_controlResponse = await OPUS8_handleControlRequest(request, env);\n" +
   "\t\tif (OPUS8_controlResponse) return OPUS8_controlResponse;\n" +
+  "\t\tconst OPUS8_gatewayResponse = OPUS8_handleEdgeGateway(request, env);\n" +
+  "\t\tif (OPUS8_gatewayResponse) return OPUS8_gatewayResponse;\n" +
   "\t\tconst OPUS8_activeState = await OPUS8_getActiveState(env, userID, ctx);\n" +
   "\t\tlet activeUUIDs = OPUS8_activeState.uuids;\n" +
   "\t\tlet activeSubLinks = [];\n" +

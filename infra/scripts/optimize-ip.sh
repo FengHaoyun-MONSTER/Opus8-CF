@@ -13,6 +13,13 @@ cd "$WS"
 : "${VPS_SSH_USER:?VPS_SSH_USER is required for two-vantage validation}"
 : "${VPS_SSH_PASSWORD:?VPS_SSH_PASSWORD is required for two-vantage validation}"
 
+for command in curl jq node python3 sha256sum tar; do
+  command -v "$command" >/dev/null 2>&1 || {
+    echo "ERROR missing-command=$command"
+    exit 2
+  }
+done
+
 VPS_SSH_PORT="${VPS_SSH_PORT:-22}"
 WORK_DIR="$(mktemp -d)"
 ADMIN_TOKEN=""
@@ -88,7 +95,7 @@ mapfile -t NODES < <(
       [.nodes[] | select(.enabled == 1 and .health != "banned")] |
       sort_by(.account_alias,.id) |
       .[] |
-      [.id,.hostname] | @tsv'
+      [.id,.hostname,(.transport_path // "/")] | @tsv'
 )
 if [ "${#NODES[@]}" -eq 0 ]; then
   echo "ERROR no-eligible-nodes"
@@ -115,10 +122,10 @@ echo "OK probe-user-created"
 sleep 8
 
 local_smoke() {
-  local node_host="$1" connect_host="${2:-}" log_file="$3"
+  local node_host="$1" transport_path="$2" connect_host="${3:-}" log_file="$4"
   local args=(
     python3 infra/scripts/smoke-vless.py
-    --url "wss://${node_host}/?ed=2560"
+    --url "wss://${node_host}${transport_path}?ed=2560"
     --uuid "$PROBE_UUID"
     --target example.com
     --target-port 80
@@ -130,11 +137,11 @@ local_smoke() {
 }
 
 remote_smoke() {
-  local node_host="$1" connect_host="${2:-}" log_file="$3"
+  local node_host="$1" transport_path="$2" connect_host="${3:-}" log_file="$4"
   local remote_command
   local args=(
     python3 "$REMOTE_SMOKE_PATH"
-    --url "wss://${node_host}/?ed=2560"
+    --url "wss://${node_host}${transport_path}?ed=2560"
     --uuid "$PROBE_UUID"
     --target example.com
     --target-port 80
@@ -149,13 +156,13 @@ remote_smoke() {
 echo "STEP verify-domain-baseline"
 BASELINE_NODES=()
 for entry in "${NODES[@]}"; do
-  IFS=$'\t' read -r node_id node_host <<<"$entry"
+  IFS=$'\t' read -r node_id node_host transport_path <<<"$entry"
   baseline_ok=0
   : >"$WORK_DIR/domain-local.log"
   : >"$WORK_DIR/domain-remote.log"
   for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-    if local_smoke "$node_host" "" "$WORK_DIR/domain-local.log" &&
-      remote_smoke "$node_host" "" "$WORK_DIR/domain-remote.log"; then
+    if local_smoke "$node_host" "$transport_path" "" "$WORK_DIR/domain-local.log" &&
+      remote_smoke "$node_host" "$transport_path" "" "$WORK_DIR/domain-remote.log"; then
       baseline_ok=1
       break
     fi
@@ -190,10 +197,34 @@ if [ -s "$WS/infra/optimized-ips.txt" ]; then
   sed 's/#.*//' "$WS/infra/optimized-ips.txt" >"$RAW_IPS"
   echo "OK candidate-source=custom-list"
 else
-  if ! curl -fsSL \
-    https://github.com/XIU2/CloudflareSpeedTest/releases/latest/download/cfst_linux_amd64.tar.gz \
-    -o "$WORK_DIR/cfst.tgz"; then
+  CFST_MANIFEST="$WS/infra/cfst-tool.json"
+  if ! jq -e '
+    .schemaVersion == 1 and
+    .platform == "linux-amd64" and
+    (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and
+    .releaseTag == ("v" + .version) and
+    .asset == "cfst_linux_amd64.tar.gz" and
+    .url == (
+      "https://github.com/XIU2/CloudflareSpeedTest/releases/download/" +
+      .releaseTag + "/" + .asset
+    ) and
+    (.sha256 | test("^[a-f0-9]{64}$"))
+  ' "$CFST_MANIFEST" >/dev/null; then
+    echo "ERROR invalid-cfst-manifest"
+    exit 12
+  fi
+  CFST_VERSION="$(jq -er '.version' "$CFST_MANIFEST")"
+  CFST_URL="$(jq -er '.url' "$CFST_MANIFEST")"
+  CFST_SHA256="$(jq -er '.sha256' "$CFST_MANIFEST")"
+  if ! curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors \
+    --connect-timeout 20 --max-time 240 \
+    "$CFST_URL" -o "$WORK_DIR/cfst.tgz"; then
     echo "ERROR cfst-download"
+    exit 12
+  fi
+  if ! printf '%s  %s\n' "$CFST_SHA256" "$WORK_DIR/cfst.tgz" \
+    | sha256sum -c - >/dev/null; then
+    echo "ERROR cfst-checksum"
     exit 12
   fi
   mkdir -p "$WORK_DIR/cfst"
@@ -222,7 +253,7 @@ else
     exit 13
   fi
   tail -n +2 "$WORK_DIR/cfst/result.csv" | cut -d, -f1 >"$RAW_IPS"
-  echo "OK candidate-source=cfst"
+  echo "OK candidate-source=cfst version=$CFST_VERSION sha256=verified"
 fi
 
 mapfile -t CFST_CANDIDATES < <(
@@ -248,8 +279,8 @@ PY
 echo "OK cfst-candidates count=${#CFST_CANDIDATES[@]}"
 
 local_candidate_ok() {
-  local ip="$1" node_id="$2" node_host="$3" reason
-  if local_smoke "$node_host" "$ip" "$WORK_DIR/local-candidate.log"; then
+  local ip="$1" node_id="$2" node_host="$3" transport_path="$4" reason
+  if local_smoke "$node_host" "$transport_path" "$ip" "$WORK_DIR/local-candidate.log"; then
     return 0
   fi
   reason="$(tail -n 1 "$WORK_DIR/local-candidate.log" |
@@ -260,8 +291,8 @@ local_candidate_ok() {
 }
 
 remote_candidate_ok() {
-  local ip="$1" node_id="$2" node_host="$3" reason
-  if remote_smoke "$node_host" "$ip" "$WORK_DIR/remote-candidate.log"; then
+  local ip="$1" node_id="$2" node_host="$3" transport_path="$4" reason
+  if remote_smoke "$node_host" "$transport_path" "$ip" "$WORK_DIR/remote-candidate.log"; then
     return 0
   fi
   reason="$(tail -n 1 "$WORK_DIR/remote-candidate.log" |
@@ -276,7 +307,7 @@ SAFE_NODE_IPS='{}'
 SAFE_NODE_COUNT=0
 SAFE_IP_COUNT=0
 for entry in "${BASELINE_NODES[@]}"; do
-  IFS=$'\t' read -r node_id node_host <<<"$entry"
+  IFS=$'\t' read -r node_id node_host transport_path <<<"$entry"
   NODE_RAW="$WORK_DIR/node-${node_id}-candidates.txt"
   : >"$NODE_RAW"
   getent ahostsv4 "$node_host" 2>/dev/null |
@@ -309,8 +340,8 @@ PY
 
   VALIDATED=()
   for ip in "${NODE_CANDIDATES[@]}"; do
-    if local_candidate_ok "$ip" "$node_id" "$node_host" &&
-      remote_candidate_ok "$ip" "$node_id" "$node_host"; then
+    if local_candidate_ok "$ip" "$node_id" "$node_host" "$transport_path" &&
+      remote_candidate_ok "$ip" "$node_id" "$node_host" "$transport_path"; then
       VALIDATED+=("$ip")
       echo "OK candidate=$ip node=$node_id vantages=2"
     fi
@@ -321,8 +352,9 @@ PY
     SAFE_NODE_IPS="$(printf '%s' "$SAFE_NODE_IPS" | jq -c \
       --arg nodeId "$node_id" \
       --arg hostname "$node_host" \
+      --arg transportPath "$transport_path" \
       --argjson ips "$IPS_JSON" \
-      '. + {($nodeId):{hostname:$hostname,ips:$ips}}')"
+      '. + {($nodeId):{hostname:$hostname,transportPath:$transportPath,ips:$ips}}')"
     SAFE_NODE_COUNT=$((SAFE_NODE_COUNT + 1))
     SAFE_IP_COUNT=$((SAFE_IP_COUNT + ${#VALIDATED[@]}))
   else
@@ -385,7 +417,8 @@ for (const [nodeId, node] of Object.entries(expected)) {
         return (
           url.hostname === ip &&
           url.searchParams.get("sni") === node.hostname &&
-          url.searchParams.get("host") === node.hostname
+          url.searchParams.get("host") === node.hostname &&
+          url.searchParams.get("path") === node.transportPath + "?ed=2560"
         );
       } catch {
         return false;

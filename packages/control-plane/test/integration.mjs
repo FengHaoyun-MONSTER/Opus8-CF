@@ -5,6 +5,7 @@ const adminPassword = process.env.OPUS8_TEST_ADMIN || "test-admin";
 const nodeSecret = process.env.OPUS8_TEST_NODE_SECRET || "test-node-hmac";
 const nodeId = `test-node-${process.pid}-${Date.now()}`;
 const nodeHost = `${nodeId}.example.com`;
+const transportPath = `/ws/integration-${process.pid}`;
 const username = "__limits_integration__";
 
 function assert(value, message) {
@@ -18,12 +19,19 @@ async function jsonResponse(response) {
   return data;
 }
 
-async function signedPost(path, payload) {
+async function signedPost(path, payload, timestamp = String(Date.now())) {
   const body = JSON.stringify(payload);
-  const timestamp = String(Date.now());
+  const target = new URL(path, base).pathname + new URL(path, base).search;
   const signature = crypto
     .createHmac("sha256", nodeSecret)
-    .update(`${timestamp}.${nodeId}.${body}`)
+    .update([
+      "opus8-hmac-v2",
+      timestamp,
+      nodeId,
+      "POST",
+      target,
+      body,
+    ].join("\n"))
     .digest("hex");
   return fetch(base + path, {
     method: "POST",
@@ -31,7 +39,7 @@ async function signedPost(path, payload) {
       "content-type": "application/json",
       "x-opus8-ts": timestamp,
       "x-opus8-node": nodeId,
-      "x-opus8-sign": signature,
+      "x-opus8-sign-v2": signature,
     },
     body,
   });
@@ -49,14 +57,78 @@ const adminHeaders = {
   "content-type": "application/json",
 };
 
-await jsonResponse(
+const compliance = await jsonResponse(
+  await fetch(`${base}/api/operations/compliance`, {
+    headers: adminHeaders,
+  }),
+);
+assert(
+  compliance.proxyProvisioningAllowed === true &&
+    compliance.enforcement === "fail-closed" &&
+    compliance.policyId === "cloudflare-data-plane-v1",
+  `local integration must explicitly enable provisioning: ${JSON.stringify(compliance)}`,
+);
+
+const registered = await jsonResponse(
   await signedPost("/api/nodes/register", {
     nodeId,
     accountAlias: "integration",
     hostname: nodeHost,
     region: "test",
     capabilities: ["vless", "ws"],
+    transportPath,
   }),
+);
+assert(
+  registered.transportPath === transportPath,
+  "node registration must acknowledge the canonical transport path",
+);
+const reservedTransport = await signedPost("/api/nodes/register", {
+  nodeId,
+  accountAlias: "integration",
+  hostname: nodeHost,
+  region: "test",
+  capabilities: ["vless", "ws"],
+  transportPath: "/__opus8/policy",
+});
+assert(
+  reservedTransport.status === 400,
+  "reserved control paths must be rejected during registration",
+);
+
+const mismatchedHeartbeat = await signedPost("/api/nodes/heartbeat", {
+  nodeId: `${nodeId}-forged`,
+  health: "healthy",
+});
+assert(
+  mismatchedHeartbeat.status === 401,
+  "signed node identity must match the heartbeat body",
+);
+
+const newerHeartbeatAt = Date.now() + 2_000;
+await jsonResponse(
+  await signedPost(
+    "/api/nodes/heartbeat",
+    { nodeId, health: "healthy", preferredIp: "198.51.100.2" },
+    String(newerHeartbeatAt),
+  ),
+);
+await jsonResponse(
+  await signedPost(
+    "/api/nodes/heartbeat",
+    { nodeId, health: "healthy", preferredIp: "198.51.100.1" },
+    String(newerHeartbeatAt - 1_000),
+  ),
+);
+const replaySafeNodes = await jsonResponse(
+  await fetch(`${base}/api/nodes`, { headers: adminHeaders }),
+);
+const replaySafeNode = replaySafeNodes.nodes.find((item) => item.id === nodeId);
+assert(
+  replaySafeNode?.preferred_ip === "198.51.100.2" &&
+    replaySafeNode?.last_seen === newerHeartbeatAt &&
+    replaySafeNode?.transport_path === transportPath,
+  `older signed heartbeat must not regress node state: ${JSON.stringify(replaySafeNode)}`,
 );
 
 const reportNodeHealth = async (runId, directOk, landingOk = true) =>
@@ -501,7 +573,44 @@ try {
   );
 
   const subscription = await fetch(created.subUrl);
+  const base64Subscription = Buffer.from(
+    await subscription.text(),
+    "base64",
+  ).toString("utf8");
   const usageHeader = subscription.headers.get("subscription-userinfo") || "";
+  assert(
+    subscription.headers.get("x-opus8-subscription-protection") ===
+      "rate-limit-v1" &&
+      (subscription.headers.get("cache-control") || "").includes("no-store"),
+    "subscription responses must confirm native rate limiting and disable caching",
+  );
+  const base64Node = new URL(
+    base64Subscription.split(/\r?\n/).find(Boolean),
+  );
+  assert(
+    base64Node.searchParams.get("path") === `${transportPath}?ed=2560`,
+    `base64/Xray subscription must use the registered path: ${base64Subscription}`,
+  );
+  const clashSubscription = await (
+    await fetch(`${created.subUrl}?format=clash`)
+  ).text();
+  assert(
+    clashSubscription.includes(`path: "${transportPath}"`) &&
+      clashSubscription.includes("max-early-data: 2560") &&
+      !clashSubscription.includes(`path: "${transportPath}?ed=2560"`),
+    "Mihomo subscription must use a query-free registered path and explicit Early Data",
+  );
+  const singboxSubscription = await (
+    await fetch(`${created.subUrl}?format=singbox`)
+  ).json();
+  const singboxTransport = singboxSubscription.outbounds?.[0]?.transport;
+  assert(
+    singboxTransport?.path === transportPath &&
+      singboxTransport?.max_early_data === 2560 &&
+      singboxTransport?.early_data_header_name ===
+        "Sec-WebSocket-Protocol",
+    "sing-box subscription must use the registered path and explicit Early Data",
+  );
   assert(
     usageHeader.includes("upload=100"),
     `missing upload usage: ${usageHeader}`,
@@ -527,6 +636,35 @@ try {
     `cleared lease should permit a new IP: ${JSON.stringify(afterReset)}`,
   );
 
+  const malformedSubscription = await fetch(
+    `${base}/sub/${"a".repeat(31)}`,
+  );
+  assert(
+    malformedSubscription.status === 404 &&
+      (malformedSubscription.headers.get("cache-control") || "").includes(
+        "no-store",
+      ),
+    "malformed subscription tokens must fail before D1 and remain non-cacheable",
+  );
+
+  if (process.env.OPUS8_TEST_RATE_LIMIT === "1") {
+    let limitedResponse = null;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const response = await fetch(created.subUrl);
+      if (response.status === 429) {
+        limitedResponse = response;
+        break;
+      }
+    }
+    assert(
+      limitedResponse?.headers.get("retry-after") === "60" &&
+        (limitedResponse.headers.get("cache-control") || "").includes(
+          "no-store",
+        ),
+      "local native rate limiter must return a non-cacheable 429 with Retry-After",
+    );
+  }
+
   console.log("OK admission-first-ip");
   console.log("OK active-ip-limit-denial");
   console.log("OK idempotent-usage-accounting");
@@ -547,6 +685,8 @@ try {
   console.log("OK optimized-ip-operations-alerts");
   console.log("OK alert-incidents-d1-deduplication");
   console.log("OK alert-incidents-resolution-history");
+  console.log("OK subscription-native-rate-limit");
+  console.log("OK transport-path-single-source");
 } finally {
   if (landingId) {
     await fetch(`${base}/api/landings/${landingId}`, {

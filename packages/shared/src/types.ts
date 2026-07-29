@@ -7,6 +7,7 @@ export interface NodeRecord {
   region: string | null;
   capabilities: string | null; // JSON 字符串
   preferred_ip: string | null;
+  transport_path: string | null;
   health: "healthy" | "degraded" | "banned" | "unknown";
   enabled: number;
   last_seen: number | null;
@@ -65,6 +66,7 @@ export interface RegisterRequest {
   region?: string;
   capabilities?: string[];
   preferredIp?: string;
+  transportPath?: string;
   version?: string;
 }
 

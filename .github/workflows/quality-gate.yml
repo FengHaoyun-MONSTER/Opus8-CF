@@ -1,0 +1,70 @@
+name: quality-gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "infra/**"
+      - "packages/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig.base.json"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "infra/**"
+      - "packages/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "tsconfig.base.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout pinned repository revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Use Node.js 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.12.0 --activate
+          pnpm install --frozen-lockfile
+      - name: Typecheck and build
+        run: |
+          pnpm typecheck
+          pnpm --filter @opus8-cf/control-plane build
+          pnpm --filter @opus8-cf/admin-ui build
+          pnpm --filter @opus8-cf/edge-node build
+      - name: Static security and compatibility tests
+        run: |
+          pnpm --filter @opus8-cf/control-plane test:cors
+          pnpm --filter @opus8-cf/control-plane test:signature
+          pnpm --filter @opus8-cf/control-plane test:subscription-rate-limit
+          pnpm --filter @opus8-cf/control-plane test:compliance
+          pnpm --filter @opus8-cf/control-plane test:resource-audit
+          pnpm --filter @opus8-cf/control-plane test:transport-path
+          pnpm --filter @opus8-cf/control-plane test:schema-migration
+          pnpm --filter @opus8-cf/control-plane test:client-compatibility
+          pnpm --filter @opus8-cf/control-plane test:supply-chain
+          pnpm --filter @opus8-cf/edge-node test:policy
+      - name: Local Worker integration tests
+        run: |
+          pnpm --filter @opus8-cf/control-plane test:compliance:local
+          pnpm --filter @opus8-cf/control-plane test:integration:local
+      - name: Dependency vulnerability gate
+        run: pnpm audit --audit-level high --registry=https://registry.npmjs.org
