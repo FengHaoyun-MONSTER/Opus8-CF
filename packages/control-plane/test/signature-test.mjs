@@ -28,6 +28,10 @@ function hmac(message) {
   return crypto.createHmac("sha256", secret).update(message).digest("hex");
 }
 
+function hmacWith(key, message) {
+  return crypto.createHmac("sha256", key).update(message).digest("hex");
+}
+
 function target(pathOrUrl) {
   const url = new URL(pathOrUrl, "https://opus8-signature.invalid");
   return url.pathname + url.search;
@@ -83,6 +87,39 @@ const valid = await verifyNodeRequest(
 assert(
   valid?.nodeId === nodeId && valid.timestamp === now && valid.version === 2,
   "valid v2 signature must authenticate",
+);
+assert(valid?.secretSlot === "current", "current key slot must be reported");
+
+const previousSecret = "signature-test-previous-secret";
+const previousRequest = signedRequest("/api/nodes/heartbeat", {
+  body,
+  v2Signature: hmacWith(
+    previousSecret,
+    v2Message(String(now), "POST", "/api/nodes/heartbeat", body),
+  ),
+});
+const previousValid = await verifyNodeRequest(
+  previousRequest,
+  {
+    NODE_HMAC_SECRET: secret,
+    NODE_HMAC_SECRET_PREVIOUS: previousSecret,
+  },
+  body,
+  now,
+);
+assert(
+  previousValid?.secretSlot === "previous" &&
+    previousValid.version === 2,
+  "bounded previous HMAC key must authenticate and report its slot",
+);
+assert(
+  await verifyNodeRequest(
+    previousRequest,
+    { NODE_HMAC_SECRET: secret },
+    body,
+    now,
+  ) === null,
+  "previous HMAC key must fail after the fallback binding is removed",
 );
 
 const pathReplay = signedRequest("/api/nodes/heartbeat", { body });

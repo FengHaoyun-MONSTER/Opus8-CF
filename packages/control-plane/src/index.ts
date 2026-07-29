@@ -5,7 +5,6 @@
  */
 import {
   jwtSign,
-  jwtVerify,
   timingSafeEqual,
   randomHex,
   randomUuid,
@@ -65,7 +64,11 @@ import {
 } from "./node-health";
 import { listAlertIncidents } from "./alert-incidents";
 import { controlCorsPolicy, validateAdminPreflight } from "./cors";
-import { verifyNodeRequest, type NodeAuthResult } from "./node-auth";
+import {
+  nodeSecretForAuth,
+  verifyNodeRequest,
+  type NodeAuthResult,
+} from "./node-auth";
 import {
   enforceSubscriptionRateLimit,
   validSubscriptionToken,
@@ -76,6 +79,14 @@ import {
   proxyProvisioningAllowed,
   trafficLimitIncreases,
 } from "./compliance";
+import {
+  previousSecretConfigured,
+  verifyJwtWithRotation,
+} from "./key-rotation";
+import {
+  landingCredentialRotationStatus,
+  migrateLandingCredentialsToCurrentKey,
+} from "./landing-key-rotation";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
@@ -84,7 +95,7 @@ async function requireAdmin(req: Request, env: Env): Promise<boolean> {
   const auth = req.headers.get("authorization") || "";
   const token = auth.replace(/^Bearer\s+/i, "");
   if (!token) return false;
-  const payload = await jwtVerify(token, env.JWT_SECRET);
+  const payload = await verifyJwtWithRotation(token, env);
   return !!payload && payload.role === "admin";
 }
 
@@ -173,6 +184,39 @@ export default {
       if (p === "/api/operations/compliance" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         return json(complianceStatus(env));
+      }
+      if (p === "/api/operations/key-rotation" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return json({
+          previousSecretsConfigured: {
+            jwt: previousSecretConfigured(
+              env.JWT_SECRET,
+              env.JWT_SECRET_PREVIOUS,
+            ),
+            nodeHmac: previousSecretConfigured(
+              env.NODE_HMAC_SECRET,
+              env.NODE_HMAC_SECRET_PREVIOUS,
+            ),
+            landingConfig: previousSecretConfigured(
+              env.LANDING_CONFIG_KEY,
+              env.LANDING_CONFIG_KEY_PREVIOUS,
+            ),
+          },
+          landingCredentials: await landingCredentialRotationStatus(env),
+        });
+      }
+      if (
+        p === "/api/operations/key-rotation/landings" &&
+        m === "POST"
+      ) {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        try {
+          return json(
+            await migrateLandingCredentialsToCurrentKey(env),
+          );
+        } catch (error) {
+          return err((error as Error).message, 409);
+        }
       }
       if (p === "/api/operations/alerts" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("Unauthorized", 401);
@@ -751,7 +795,7 @@ export default {
           socks5Enabled: true,
           accessPolicies: policy.accessPolicies,
           landingBundle: await sealJson(
-            env.NODE_HMAC_SECRET,
+            nodeSecretForAuth(env, auth),
             landings,
             `node:${auth.nodeId}`,
           ),

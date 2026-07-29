@@ -1,0 +1,45 @@
+name: d1-backup
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d1-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+      D1_BACKUP_ENCRYPTION_KEY: ${{ secrets.D1_BACKUP_ENCRYPTION_KEY }}
+    steps:
+      - name: Checkout pinned repository revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Export and encrypt D1
+        run: |
+          set -euo pipefail
+          : "${D1_BACKUP_ENCRYPTION_KEY:?Configure D1_BACKUP_ENCRYPTION_KEY before running backups}"
+          npm install --global wrangler@4.115.0
+          output="$RUNNER_TEMP/opus8cf-d1-$(date -u +%Y%m%dT%H%M%SZ).opus8bk"
+          bash infra/scripts/d1-backup.sh backup "$output"
+          printf 'BACKUP_PATH=%s\n' "$output" >>"$GITHUB_ENV"
+      - name: Upload encrypted backup only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: opus8cf-d1-encrypted-${{ github.run_id }}
+          path: |
+            ${{ env.BACKUP_PATH }}
+            ${{ env.BACKUP_PATH }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

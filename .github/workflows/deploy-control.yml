@@ -2,6 +2,18 @@ name: deploy-control
 
 on:
   workflow_dispatch:
+    inputs:
+      retire_previous_secret:
+        description: Retire one previous-key binding after its rotation checks
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - jwt
+          - landing-config
+          - node-hmac
+          - all
   push:
     branches: [main]
     paths:
@@ -32,8 +44,12 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      JWT_SECRET_PREVIOUS: ${{ secrets.JWT_SECRET_PREVIOUS }}
       NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
+      NODE_HMAC_SECRET_PREVIOUS: ${{ secrets.NODE_HMAC_SECRET_PREVIOUS }}
       LANDING_CONFIG_KEY: ${{ secrets.LANDING_CONFIG_KEY }}
+      LANDING_CONFIG_KEY_PREVIOUS: ${{ secrets.LANDING_CONFIG_KEY_PREVIOUS }}
+      RETIRE_PREVIOUS_SECRET: ${{ inputs.retire_previous_secret || 'none' }}
       ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       ADMIN_UI_ORIGINS: https://opus8cf-admin-openal.pages.dev
       SERVICES_IP: ${{ secrets.SERVICES_IP }}

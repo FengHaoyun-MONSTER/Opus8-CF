@@ -1,7 +1,7 @@
 import { connect } from "cloudflare:sockets";
 import { randomHex } from "@opus8-cf/shared";
 import type { Env } from "./db";
-import { openJson, sealJson } from "./secret-box";
+import { openJsonWithRotation, sealJson } from "./secret-box";
 import { validateUnlockHosts } from "./routing";
 
 interface LandingRow {
@@ -152,11 +152,13 @@ function validateCommon(input: LandingInput, partial: boolean): {
 }
 
 async function credentialFor(env: Env, row: LandingRow): Promise<LandingCredential> {
-  return openJson<LandingCredential>(
+  const opened = await openJsonWithRotation<LandingCredential>(
     env.LANDING_CONFIG_KEY,
+    env.LANDING_CONFIG_KEY_PREVIOUS,
     row.credential_enc,
     `landing:${row.id}`,
   );
+  return opened.value;
 }
 
 async function rowToPublic(env: Env, row: LandingRow): Promise<PublicLanding> {

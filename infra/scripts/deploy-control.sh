@@ -28,7 +28,44 @@ echo "OK compliance-policy provisioning=$COMPLIANCE_PROXY_ALLOWED policy=$COMPLI
 cd packages/control-plane
 
 : "${ROOT_DOMAIN:?ROOT_DOMAIN is required for production custom domains}"
+: "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
+: "${JWT_SECRET:?JWT_SECRET is required}"
+: "${NODE_HMAC_SECRET:?NODE_HMAC_SECRET is required}"
 : "${LANDING_CONFIG_KEY:?LANDING_CONFIG_KEY is required}"
+RETIRE_PREVIOUS_SECRET="${RETIRE_PREVIOUS_SECRET:-none}"
+case "$RETIRE_PREVIOUS_SECRET" in
+  none) ;;
+  jwt)
+    [ -z "${JWT_SECRET_PREVIOUS:-}" ] || {
+      echo "ERROR remove JWT_SECRET_PREVIOUS GitHub Secret before retirement"
+      exit 9
+    }
+    ;;
+  node-hmac)
+    [ -z "${NODE_HMAC_SECRET_PREVIOUS:-}" ] || {
+      echo "ERROR remove NODE_HMAC_SECRET_PREVIOUS GitHub Secret before retirement"
+      exit 9
+    }
+    ;;
+  landing-config)
+    [ -z "${LANDING_CONFIG_KEY_PREVIOUS:-}" ] || {
+      echo "ERROR remove LANDING_CONFIG_KEY_PREVIOUS GitHub Secret before retirement"
+      exit 9
+    }
+    ;;
+  all)
+    if [ -n "${JWT_SECRET_PREVIOUS:-}" ] \
+      || [ -n "${NODE_HMAC_SECRET_PREVIOUS:-}" ] \
+      || [ -n "${LANDING_CONFIG_KEY_PREVIOUS:-}" ]; then
+      echo "ERROR remove all previous-key GitHub Secrets before retirement"
+      exit 9
+    fi
+    ;;
+  *)
+    echo "ERROR invalid RETIRE_PREVIOUS_SECRET"
+    exit 9
+    ;;
+esac
 ROOT_DOMAIN="${ROOT_DOMAIN#https://}"
 ROOT_DOMAIN="${ROOT_DOMAIN#http://}"
 ROOT_DOMAIN="${ROOT_DOMAIN%%/*}"
@@ -165,6 +202,14 @@ if ! node test/signature-test.mjs >/tmp/signature-test.log 2>&1; then
   echo "ERROR signature-test"; tail -n 8 /tmp/signature-test.log; exit 12
 fi
 echo "OK signature-test"
+if ! node test/key-rotation-test.mjs >/tmp/key-rotation-test.log 2>&1; then
+  echo "ERROR key-rotation-test"; tail -n 8 /tmp/key-rotation-test.log; exit 12
+fi
+echo "OK key-rotation-test"
+if ! node test/d1-backup-crypto-test.mjs >/tmp/d1-backup-test.log 2>&1; then
+  echo "ERROR d1-backup-test"; tail -n 8 /tmp/d1-backup-test.log; exit 12
+fi
+echo "OK d1-backup-test"
 if ! node test/subscription-rate-limit-test.mjs >/tmp/sub-rate-test.log 2>&1; then
   echo "ERROR subscription-rate-limit-test"; tail -n 8 /tmp/sub-rate-test.log; exit 12
 fi
@@ -216,12 +261,63 @@ SUB_WAF_MODE="${SUB_WAF_MODE:-optional}" \
   bash ../../infra/scripts/configure-subscription-waf.sh
 
 echo "STEP secrets"
-printf '%s' "${ADMIN_PASSWORD:-}"   | wrangler secret put ADMIN_PASSWORD   >/dev/null 2>&1 && echo "OK secret ADMIN_PASSWORD"
-printf '%s' "${JWT_SECRET:-}"       | wrangler secret put JWT_SECRET       >/dev/null 2>&1 && echo "OK secret JWT_SECRET"
-printf '%s' "${NODE_HMAC_SECRET:-}" | wrangler secret put NODE_HMAC_SECRET >/dev/null 2>&1 && echo "OK secret NODE_HMAC_SECRET"
-printf '%s' "$LANDING_CONFIG_KEY"     | wrangler secret put LANDING_CONFIG_KEY >/dev/null 2>&1 && echo "OK secret LANDING_CONFIG_KEY"
-printf '%s' "$ROOT_DOMAIN" | wrangler secret put ROOT_DOMAIN >/dev/null 2>&1 && echo "OK secret ROOT_DOMAIN"
-printf '%s' "$SUB_URL"     | wrangler secret put SUB_BASE    >/dev/null 2>&1 && echo "OK secret SUB_BASE"
+put_secret() {
+  local name="$1"
+  local value="$2"
+  if ! printf '%s' "$value" | wrangler secret put "$name" >/dev/null 2>&1; then
+    echo "ERROR secret-update-failed name=$name"
+    exit 13
+  fi
+  echo "OK secret $name"
+}
+
+put_previous_secret() {
+  local name="$1"
+  local previous="$2"
+  local current="$3"
+  if [ -n "$previous" ] && [ "$previous" != "$current" ]; then
+    put_secret "$name" "$previous"
+  fi
+}
+
+# Install fallback bindings before changing current keys, so the version
+# transition never creates a reject-all interval.
+put_previous_secret JWT_SECRET_PREVIOUS \
+  "${JWT_SECRET_PREVIOUS:-}" "$JWT_SECRET"
+put_previous_secret NODE_HMAC_SECRET_PREVIOUS \
+  "${NODE_HMAC_SECRET_PREVIOUS:-}" "$NODE_HMAC_SECRET"
+put_previous_secret LANDING_CONFIG_KEY_PREVIOUS \
+  "${LANDING_CONFIG_KEY_PREVIOUS:-}" "$LANDING_CONFIG_KEY"
+put_secret ADMIN_PASSWORD "$ADMIN_PASSWORD"
+put_secret JWT_SECRET "$JWT_SECRET"
+put_secret NODE_HMAC_SECRET "$NODE_HMAC_SECRET"
+put_secret LANDING_CONFIG_KEY "$LANDING_CONFIG_KEY"
+put_secret ROOT_DOMAIN "$ROOT_DOMAIN"
+put_secret SUB_BASE "$SUB_URL"
+
+if [ "$RETIRE_PREVIOUS_SECRET" != "none" ]; then
+  echo "STEP retire-previous-secrets"
+  retire_names=()
+  case "$RETIRE_PREVIOUS_SECRET" in
+    jwt) retire_names=(JWT_SECRET_PREVIOUS) ;;
+    node-hmac) retire_names=(NODE_HMAC_SECRET_PREVIOUS) ;;
+    landing-config) retire_names=(LANDING_CONFIG_KEY_PREVIOUS) ;;
+    all)
+      retire_names=(
+        JWT_SECRET_PREVIOUS
+        NODE_HMAC_SECRET_PREVIOUS
+        LANDING_CONFIG_KEY_PREVIOUS
+      )
+      ;;
+  esac
+  for name in "${retire_names[@]}"; do
+    if ! printf 'y\n' | wrangler secret delete "$name" >/dev/null 2>&1; then
+      echo "ERROR previous-secret-retirement-failed name=$name"
+      exit 13
+    fi
+    echo "OK retired $name"
+  done
+fi
 
 echo "STEP wait-deployed-version"
 VERSION_READY=0
@@ -279,6 +375,16 @@ if ! printf '%s' "$REMOTE_COMPLIANCE" \
   exit 16
 fi
 echo "OK smoke-compliance-state provisioning=$COMPLIANCE_PROXY_ALLOWED"
+
+REMOTE_ROTATION=$(curl -fsS --max-time 15 \
+  "$API_URL/api/operations/key-rotation" \
+  -H "authorization: Bearer $TOK")
+if ! printf '%s' "$REMOTE_ROTATION" \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);const c=x.landingCredentials||{};const valid=Number.isInteger(c.total)&&Number.isInteger(c.current)&&Number.isInteger(c.previous)&&c.unreadable===0&&c.current+c.previous===c.total;process.exit(valid?0:1)})'; then
+  echo "ERROR smoke-key-rotation-state"
+  exit 16
+fi
+echo "OK smoke-key-rotation-state unreadable=0"
 
 echo "STEP cors-regression"
 PREFLIGHT_OK=0

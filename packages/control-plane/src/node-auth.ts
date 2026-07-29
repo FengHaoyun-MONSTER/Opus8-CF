@@ -6,9 +6,14 @@ import {
   SIGN_WINDOW_MS,
   timingSafeEqual,
 } from "@opus8-cf/shared";
+import {
+  secretCandidates,
+  type SecretSlot,
+} from "./key-rotation";
 
 export interface NodeAuthEnv {
   NODE_HMAC_SECRET: string;
+  NODE_HMAC_SECRET_PREVIOUS?: string;
   HMAC_V1_ACCEPT_UNTIL?: string;
   HMAC_V1_NODE_IDS?: string;
 }
@@ -17,6 +22,7 @@ export interface NodeAuthResult {
   nodeId: string;
   timestamp: number;
   version: 1 | 2;
+  secretSlot: SecretSlot;
 }
 
 function validTimestamp(value: string): number | null {
@@ -86,19 +92,28 @@ export async function verifyNodeRequest(
   const signatureV2 = request.headers.get(SIGN_HEADERS.signV2);
   if (signatureV2 !== null) {
     if (!validSignature(signatureV2)) return null;
-    const expectedV2 = await hmacSign(
-      env.NODE_HMAC_SECRET,
-      nodeSignatureMessageV2(
-        timestampText,
-        nodeId,
-        request.method,
-        request.url,
-        body,
-      ),
+    const message = nodeSignatureMessageV2(
+      timestampText,
+      nodeId,
+      request.method,
+      request.url,
+      body,
     );
-    return timingSafeEqual(expectedV2, signatureV2.toLowerCase())
-      ? { nodeId, timestamp, version: 2 }
-      : null;
+    for (const candidate of secretCandidates(
+      env.NODE_HMAC_SECRET,
+      env.NODE_HMAC_SECRET_PREVIOUS,
+    )) {
+      const expectedV2 = await hmacSign(candidate.secret, message);
+      if (timingSafeEqual(expectedV2, signatureV2.toLowerCase())) {
+        return {
+          nodeId,
+          timestamp,
+          version: 2,
+          secretSlot: candidate.slot,
+        };
+      }
+    }
+    return null;
   }
 
   if (
@@ -110,11 +125,34 @@ export async function verifyNodeRequest(
   }
   const signatureV1 = request.headers.get(SIGN_HEADERS.sign) || "";
   if (!validSignature(signatureV1)) return null;
-  const expectedV1 = await hmacSign(
+  const message = nodeSignatureMessageV1(timestampText, nodeId, body);
+  for (const candidate of secretCandidates(
     env.NODE_HMAC_SECRET,
-    nodeSignatureMessageV1(timestampText, nodeId, body),
-  );
-  return timingSafeEqual(expectedV1, signatureV1.toLowerCase())
-    ? { nodeId, timestamp, version: 1 }
-    : null;
+    env.NODE_HMAC_SECRET_PREVIOUS,
+  )) {
+    const expectedV1 = await hmacSign(candidate.secret, message);
+    if (timingSafeEqual(expectedV1, signatureV1.toLowerCase())) {
+      return {
+        nodeId,
+        timestamp,
+        version: 1,
+        secretSlot: candidate.slot,
+      };
+    }
+  }
+  return null;
+}
+
+export function nodeSecretForAuth(
+  env: NodeAuthEnv,
+  auth: Pick<NodeAuthResult, "secretSlot">,
+): string {
+  if (
+    auth.secretSlot === "previous" &&
+    env.NODE_HMAC_SECRET_PREVIOUS &&
+    env.NODE_HMAC_SECRET_PREVIOUS !== env.NODE_HMAC_SECRET
+  ) {
+    return env.NODE_HMAC_SECRET_PREVIOUS;
+  }
+  return env.NODE_HMAC_SECRET;
 }

@@ -51,6 +51,7 @@ validateRelease(
 for (const relativePath of [
   ["infra", "scripts", "optimize-ip.sh"],
   ["infra", "scripts", "client-compatibility.sh"],
+  ["infra", "scripts", "d1-backup.sh"],
 ]) {
   const source = await readFile(join(repoRoot, ...relativePath), "utf8");
   assert.doesNotMatch(
@@ -59,5 +60,30 @@ for (const relativePath of [
     `${relativePath.join("/")} must not execute unpinned releases`,
   );
 }
+
+const backupWorkflow = await readFile(
+  join(repoRoot, ".github", "workflows", "d1-backup.yml"),
+  "utf8",
+);
+assert.match(
+  backupWorkflow,
+  /actions\/upload-artifact@[a-f0-9]{40}/,
+  "backup artifact action must be pinned to a full commit SHA",
+);
+assert.doesNotMatch(
+  backupWorkflow,
+  /^\s*schedule:/m,
+  "scheduled backups must remain disabled until an offline key and restore drill exist",
+);
+assert.match(
+  backupWorkflow,
+  /\$\{\{ env\.BACKUP_PATH \}\}/,
+  "the encrypted backup path must be the uploaded artifact",
+);
+assert.doesNotMatch(
+  backupWorkflow,
+  /\.sql\s*$/m,
+  "the workflow must never upload plaintext SQL",
+);
 
 console.log("supply-chain pinning tests passed");

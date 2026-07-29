@@ -22,13 +22,18 @@
 |---|---|
 | `ADMIN_PASSWORD` | 管理后台登录密码 |
 | `JWT_SECRET` | 管理 JWT 签名 |
+| `JWT_SECRET_PREVIOUS` | JWT 无停机轮换期的旧密钥；平时不配置 |
 | `NODE_HMAC_SECRET` | 边缘节点 ↔ 控制面 请求签名共享密钥 |
+| `NODE_HMAC_SECRET_PREVIOUS` | 节点滚动轮换期的旧共享密钥；平时不配置 |
 | `LANDING_CONFIG_KEY` | D1 中落地机账号密码的 AES-GCM 静态加密密钥（至少 32 字符） |
+| `LANDING_CONFIG_KEY_PREVIOUS` | 落地凭据迁移期的旧加密密钥；平时不配置 |
+| `D1_BACKUP_ENCRYPTION_KEY` | D1 离线备份的独立加密密钥（至少 32 字符，另存离线副本） |
 | `ACCESS_ADMIN_EMAIL` | Cloudflare Access 唯一允许登录的管理邮箱 |
 | `CLOUDFLARE_PROXY_PERMISSION_REF` | Cloudflare 书面许可引用；仅在许可范围、有效期和 SHA-256 摘要都写入合规策略后启用 |
 
-以上各项均必须以 GitHub Actions Secrets 保存，不要写入仓库。`LANDING_CONFIG_KEY` 不可随意轮换；直接更换会使已保存的
-落地机凭据无法解密，应先迁移或重新录入。`NODE_HMAC_SECRET` 轮换后需让控制面和全部节点依次重新部署。
+以上各项均必须以 GitHub Actions Secrets 保存，不要写入仓库。三个 `*_PREVIOUS` 仅在轮换窗口配置；
+控制面会先安装过渡密钥再切换当前密钥。D1 备份与逐类轮换、迁移和退休步骤见
+[`P6.9-DISASTER-RECOVERY-AND-KEY-ROTATION.md`](P6.9-DISASTER-RECOVERY-AND-KEY-ROTATION.md)。
 
 ### 节点 HMAC v2 与滚动升级
 

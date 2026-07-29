@@ -8,6 +8,8 @@
     "build": "esbuild src/index.ts --bundle --format=esm --external:cloudflare:sockets --outfile=dist/index.js",
     "test:cors": "node test/cors-test.mjs",
     "test:signature": "node test/signature-test.mjs",
+    "test:key-rotation": "node test/key-rotation-test.mjs",
+    "test:d1-backup": "node test/d1-backup-crypto-test.mjs",
     "test:subscription-rate-limit": "node test/subscription-rate-limit-test.mjs",
     "test:compliance": "node test/compliance-test.mjs",
     "test:compliance:local": "pnpm build && node test/compliance-runtime-local.mjs",

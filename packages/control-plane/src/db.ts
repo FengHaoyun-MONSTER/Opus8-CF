@@ -14,8 +14,11 @@ export interface Env {
   KV: KVNamespace;
   ADMIN_PASSWORD: string;
   JWT_SECRET: string;
+  JWT_SECRET_PREVIOUS?: string;
   NODE_HMAC_SECRET: string;
+  NODE_HMAC_SECRET_PREVIOUS?: string;
   LANDING_CONFIG_KEY: string;
+  LANDING_CONFIG_KEY_PREVIOUS?: string;
   DEFAULT_UNLOCK_HOSTS?: string;
   ROOT_DOMAIN?: string;
   SUB_BASE?: string;

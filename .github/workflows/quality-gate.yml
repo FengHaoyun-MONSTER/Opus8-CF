@@ -54,6 +54,8 @@ jobs:
         run: |
           pnpm --filter @opus8-cf/control-plane test:cors
           pnpm --filter @opus8-cf/control-plane test:signature
+          pnpm --filter @opus8-cf/control-plane test:key-rotation
+          pnpm --filter @opus8-cf/control-plane test:d1-backup
           pnpm --filter @opus8-cf/control-plane test:subscription-rate-limit
           pnpm --filter @opus8-cf/control-plane test:compliance
           pnpm --filter @opus8-cf/control-plane test:resource-audit

@@ -69,6 +69,28 @@ assert(
   `local integration must explicitly enable provisioning: ${JSON.stringify(compliance)}`,
 );
 
+const rotation = await jsonResponse(
+  await fetch(`${base}/api/operations/key-rotation`, {
+    headers: adminHeaders,
+  }),
+);
+assert(
+  rotation.landingCredentials?.total === 0 &&
+    rotation.landingCredentials?.unreadable === 0 &&
+    rotation.previousSecretsConfigured?.jwt === false &&
+    rotation.previousSecretsConfigured?.nodeHmac === false &&
+    rotation.previousSecretsConfigured?.landingConfig === false,
+  `fresh local worker must expose a safe rotation state: ${JSON.stringify(rotation)}`,
+);
+const prematureLandingRotation = await fetch(
+  `${base}/api/operations/key-rotation/landings`,
+  { method: "POST", headers: adminHeaders },
+);
+assert(
+  prematureLandingRotation.status === 409,
+  "landing key migration must reject requests without a distinct previous key",
+);
+
 const registered = await jsonResponse(
   await signedPost("/api/nodes/register", {
     nodeId,

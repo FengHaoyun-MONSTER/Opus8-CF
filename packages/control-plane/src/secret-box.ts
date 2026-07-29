@@ -57,3 +57,29 @@ export async function openJson<T>(
   );
   return JSON.parse(decoder.decode(plaintext)) as T;
 }
+
+export async function openJsonWithRotation<T>(
+  currentSecret: string,
+  previousSecret: string | undefined,
+  envelope: string,
+  additionalData: string,
+): Promise<{ value: T; secretSlot: "current" | "previous" }> {
+  try {
+    return {
+      value: await openJson<T>(currentSecret, envelope, additionalData),
+      secretSlot: "current",
+    };
+  } catch {
+    if (!previousSecret || previousSecret === currentSecret) {
+      throw new Error("加密配置无法使用当前密钥解密");
+    }
+  }
+  try {
+    return {
+      value: await openJson<T>(previousSecret, envelope, additionalData),
+      secretSlot: "previous",
+    };
+  } catch {
+    throw new Error("加密配置无法使用当前或过渡密钥解密");
+  }
+}

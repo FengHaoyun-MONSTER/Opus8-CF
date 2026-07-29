@@ -56,55 +56,68 @@ async function invalidateNode(
   version: number,
 ): Promise<boolean> {
   const body = JSON.stringify({ version });
-  const timestamp = String(Date.now());
-  const legacyWindowOpen =
-    Number(env.HMAC_V1_ACCEPT_UNTIL || 0) >= Number(timestamp) &&
-    legacyNodeAllowed(env, nodeId);
-  const legacySignature = legacyWindowOpen
-    ? await hmacSign(
-        env.NODE_HMAC_SECRET,
-        nodeSignatureMessageV1(timestamp, nodeId, body),
-      )
-    : null;
-  const signatureV2 = await hmacSign(
+  const secrets = [
     env.NODE_HMAC_SECRET,
-    nodeSignatureMessageV2(
-      timestamp,
-      nodeId,
-      "POST",
-      INVALIDATION_PATH,
-      body,
-    ),
-  );
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), INVALIDATION_TIMEOUT_MS);
-  try {
-    const response = await fetch(`https://${hostname}${INVALIDATION_PATH}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        [SIGN_HEADERS.ts]: timestamp,
-        [SIGN_HEADERS.node]: nodeId,
-        [SIGN_HEADERS.signV2]: signatureV2,
-        // Old edge nodes use v1 only inside the bounded rollout window.
-        ...(legacySignature
-          ? { [SIGN_HEADERS.sign]: legacySignature }
-          : {}),
-      },
-      body,
-      signal: controller.signal,
-    });
-    if (!response.ok) return false;
-    const result = await response.json().catch(() => null) as {
-      ok?: boolean;
-      version?: number;
-    } | null;
-    return result?.ok === true && Number(result.version) >= version;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
+    ...(env.NODE_HMAC_SECRET_PREVIOUS &&
+    env.NODE_HMAC_SECRET_PREVIOUS !== env.NODE_HMAC_SECRET
+      ? [env.NODE_HMAC_SECRET_PREVIOUS]
+      : []),
+  ];
+  for (const secret of secrets) {
+    const timestamp = String(Date.now());
+    const legacyWindowOpen =
+      Number(env.HMAC_V1_ACCEPT_UNTIL || 0) >= Number(timestamp) &&
+      legacyNodeAllowed(env, nodeId);
+    const legacySignature = legacyWindowOpen
+      ? await hmacSign(
+          secret,
+          nodeSignatureMessageV1(timestamp, nodeId, body),
+        )
+      : null;
+    const signatureV2 = await hmacSign(
+      secret,
+      nodeSignatureMessageV2(
+        timestamp,
+        nodeId,
+        "POST",
+        INVALIDATION_PATH,
+        body,
+      ),
+    );
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), INVALIDATION_TIMEOUT_MS);
+    try {
+      const response = await fetch(`https://${hostname}${INVALIDATION_PATH}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [SIGN_HEADERS.ts]: timestamp,
+          [SIGN_HEADERS.node]: nodeId,
+          [SIGN_HEADERS.signV2]: signatureV2,
+          // Old edge nodes use v1 only inside the bounded rollout window.
+          ...(legacySignature
+            ? { [SIGN_HEADERS.sign]: legacySignature }
+            : {}),
+        },
+        body,
+        signal: controller.signal,
+      });
+      if (response.ok) {
+        const result = await response.json().catch(() => null) as {
+          ok?: boolean;
+          version?: number;
+        } | null;
+        if (result?.ok === true && Number(result.version) >= version) {
+          return true;
+        }
+      }
+    } catch {
+      // Try the bounded previous key, if configured.
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  return false;
 }
 
 /**

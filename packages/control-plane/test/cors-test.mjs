@@ -34,6 +34,8 @@ for (const path of [
   "/api/admin/login",
   "/api/users/user-1/activity",
   "/api/operations/overview",
+  "/api/operations/key-rotation",
+  "/api/operations/key-rotation/landings",
   "/api/settings/unlock-hosts",
   "/api/landings/landing-1/test",
   "/api/optimized-ips",
