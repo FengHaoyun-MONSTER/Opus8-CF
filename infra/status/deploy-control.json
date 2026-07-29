@@ -1,6 +1,6 @@
 {
-  "result": "success",
-  "controlUrl": "https://api.thinderbox.com",
+  "result": "failure",
+  "controlUrl": "",
   "markers": [
     "STEP ensure-d1-kv",
     "OK ids-resolved d1=260b0f8f… kv=4526bc39…",
@@ -37,11 +37,11 @@
     "OK smoke-subscription",
     "OK smoke-subscription-usage",
     "OK smoke-sub-has-node",
-    "OK smoke-sub-hostname-only",
-    "OK smoke-cleanup",
-    "DONE url=https://api.thinderbox.com"
+    "ERROR smoke-sub-still-uses-unverified-ip"
   ],
   "tail": [
+    "OK smoke-landing-socks5",
+    "OK smoke-unlock-hosts count=61",
     "OK smoke-create-user(D1-write)",
     "OK smoke-active-ip-limit",
     "OK smoke-idempotent-usage",
@@ -51,9 +51,7 @@
     "OK smoke-subscription",
     "OK <redacted>",
     "OK smoke-sub-has-node",
-    "OK smoke-sub-hostname-only",
-    "OK smoke-cleanup",
-    "DONE url=https://api.thinderbox.com"
+    "ERROR <redacted>"
   ],
-  "finishedAt": "2026-07-29T03:25:07Z"
+  "finishedAt": "2026-07-29T05:08:47Z"
 }
