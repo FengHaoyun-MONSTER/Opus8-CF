@@ -1,7 +1,7 @@
 {
   "node": "acc2-n1",
-  "result": "success",
-  "nodeUrl": "https://acc2-n1.openal.uk",
+  "result": "failure",
+  "nodeUrl": "",
   "markers": [
     "STEP build",
     "OK built (OK build: dist/index.js (306807 bytes), patch replaced 961 chars)",
@@ -28,11 +28,9 @@
     "OK canary-user-created",
     "INFO edge-policy-invalidation acknowledged=4 target=1",
     "STEP policy-status",
-    "INFO policy-status={\"invalidatedVersion\":1785302126637,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785302130374,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785302126637,\"liveUuidCount\":3,\"liveContainsUuid\":true,\"liveError\":\"\"}",
+    "INFO policy-status={\"invalidatedVersion\":1785304059443,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785304063241,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785304059443,\"liveUuidCount\":3,\"liveContainsUuid\":true,\"liveError\":\"\"}",
     "STEP vless-smoke",
-    "OK vless-ws-auth-egress vantage=github-runner",
-    "OK unlock=on(AI域名走落地)",
-    "DONE url=https://acc2-n1.openal.uk"
+    "ERROR vless-smoke all-available-vantages-failed"
   ],
-  "finishedAt": "2026-07-29T05:15:32Z"
+  "finishedAt": "2026-07-29T05:49:04Z"
 }
