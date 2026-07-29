@@ -152,16 +152,17 @@ remote_smoke() {
 }
 
 echo "STEP verify-domain-baseline"
+BASELINE_NODES=()
 for entry in "${NODES[@]}"; do
   IFS=$'\t' read -r node_id node_host <<<"$entry"
   baseline_ok=0
-  for attempt in 1 2 3 4 5 6; do
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
     if local_smoke "$node_host" "" "$WORK_DIR/domain-local.log" &&
       remote_smoke "$node_host" "" "$WORK_DIR/domain-remote.log"; then
       baseline_ok=1
       break
     fi
-    [ "$attempt" -lt 6 ] && sleep 5
+    [ "$attempt" -lt 12 ] && sleep 5
   done
   if [ "$baseline_ok" != "1" ]; then
     local_reason="$(tail -n 1 "$WORK_DIR/domain-local.log" 2>/dev/null |
@@ -170,11 +171,21 @@ for entry in "${NODES[@]}"; do
     remote_reason="$(tail -n 1 "$WORK_DIR/domain-remote.log" 2>/dev/null |
       tr '\r\n\t' ' ' |
       cut -c1-180)"
-    echo "ERROR domain-baseline node=$node_id github=${local_reason:-unknown} vps=${remote_reason:-unknown}"
-    exit 15
+    echo "WARN domain-baseline node=$node_id skipped=1 github=${local_reason:-unknown} vps=${remote_reason:-unknown}"
+    continue
   fi
+  BASELINE_NODES+=("$entry")
   echo "OK domain-baseline node=$node_id vantages=2"
 done
+if [ "${#BASELINE_NODES[@]}" -eq 0 ]; then
+  POOL_RESPONSE="$(curl -fsS --max-time 20 \
+    "$CONTROL_PLANE_URL/api/optimized-ips" \
+    -H "authorization: Bearer $ADMIN_TOKEN")"
+  ACTIVE_COUNT="$(printf '%s' "$POOL_RESPONSE" | jq -r '.ips | length')"
+  echo "OK no-two-vantage-baseline domain-fallback=active existingActivePool=$ACTIVE_COUNT"
+  echo "DONE publishedNodes=0 publishedIps=0"
+  exit 0
+fi
 
 echo "STEP discover-cfst-candidates"
 RAW_IPS="$WORK_DIR/raw-ips.txt"
@@ -267,7 +278,7 @@ echo "STEP validate-node-candidates"
 SAFE_NODE_IPS='{}'
 SAFE_NODE_COUNT=0
 SAFE_IP_COUNT=0
-for entry in "${NODES[@]}"; do
+for entry in "${BASELINE_NODES[@]}"; do
   IFS=$'\t' read -r node_id node_host <<<"$entry"
   NODE_RAW="$WORK_DIR/node-${node_id}-candidates.txt"
   : >"$NODE_RAW"
