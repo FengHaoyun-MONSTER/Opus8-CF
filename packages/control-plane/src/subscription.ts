@@ -26,11 +26,16 @@ interface Entry {
   name: string;
 }
 
+export type OptimizedIpsByNode = Record<string, string[]>;
+
 /** 把节点展开成订阅条目：有优选IP时每节点多条(不同IP)，否则每节点一条。 */
-function expand(nodes: NodeRecord[], optIps: string[]): Entry[] {
-  const ips = (optIps || []).slice(0, MAX_IPS_PER_NODE);
+function expand(
+  nodes: NodeRecord[],
+  optIpsByNode: OptimizedIpsByNode,
+): Entry[] {
   const entries: Entry[] = [];
   for (const n of nodes) {
+    const ips = (optIpsByNode?.[n.id] || []).slice(0, MAX_IPS_PER_NODE);
     if (ips.length) {
       ips.forEach((ip, i) => entries.push({ node: n, address: ip, name: `${nodeName(n)}-ip${i + 1}` }));
     } else {
@@ -116,9 +121,12 @@ export function buildSingbox(user: UserRecord, entries: Entry[]): string {
 }
 
 export function renderSubscription(
-  format: SubFormat, user: UserRecord, nodes: NodeRecord[], optIps: string[] = [],
+  format: SubFormat,
+  user: UserRecord,
+  nodes: NodeRecord[],
+  optIpsByNode: OptimizedIpsByNode = {},
 ): { body: string; contentType: string } {
-  const entries = expand(nodes, optIps);
+  const entries = expand(nodes, optIpsByNode);
   if (format === "clash")
     return { body: buildClash(user, entries), contentType: "text/yaml; charset=utf-8" };
   if (format === "singbox")

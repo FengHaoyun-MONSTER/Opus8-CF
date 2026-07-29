@@ -356,17 +356,42 @@ try {
     method: "POST",
     headers: adminHeaders,
     body: JSON.stringify({
-      version: 2,
-      ips: ["172.64.1.1"],
-      validatedAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
-      vantages: ["github-runner"],
-      nodeIds: [nodeId, `${nodeId}-second`],
+      version: 3,
+      nodes: {
+        [nodeId]: {
+          hostname: nodeHost,
+          ips: ["172.64.1.1"],
+          validatedAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+          vantages: ["github-runner"],
+        },
+      },
     }),
   });
   assert(
     invalidPoolResponse.status === 400,
     `single-vantage optimized pool must be rejected: ${invalidPoolResponse.status}`,
+  );
+
+  const mismatchedHostResponse = await fetch(`${base}/api/optimized-ips`, {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({
+      version: 3,
+      nodes: {
+        [nodeId]: {
+          hostname: "wrong.example.com",
+          ips: ["172.64.1.1"],
+          validatedAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+          vantages: ["github-runner", "landing-vps"],
+        },
+      },
+    }),
+  });
+  assert(
+    mismatchedHostResponse.status === 400,
+    `optimized pool hostname mismatch must be rejected: ${mismatchedHostResponse.status}`,
   );
 
   const validatedAt = Date.now();
@@ -375,12 +400,16 @@ try {
       method: "POST",
       headers: adminHeaders,
       body: JSON.stringify({
-        version: 2,
-        ips: ["172.64.1.1"],
-        validatedAt,
-        expiresAt: validatedAt + 60_000,
-        vantages: ["github-runner", "landing-vps"],
-        nodeIds: [nodeId, `${nodeId}-second`],
+        version: 3,
+        nodes: {
+          [nodeId]: {
+            hostname: nodeHost,
+            ips: ["172.64.1.1"],
+            validatedAt,
+            expiresAt: validatedAt + 60_000,
+            vantages: ["github-runner", "landing-vps"],
+          },
+        },
       }),
     }),
   );
@@ -389,9 +418,19 @@ try {
   );
   assert(
     optimizedPool.active === true &&
-      optimizedPool.pool?.version === 2 &&
-      optimizedPool.pool?.vantages?.length === 2,
+      optimizedPool.activeNodeCount === 1 &&
+      optimizedPool.pool?.version === 3 &&
+      optimizedPool.pool?.nodes?.[nodeId]?.vantages?.length === 2,
     `validated optimized pool must be observable: ${JSON.stringify(optimizedPool)}`,
+  );
+  const optimizedSubscription = Buffer.from(
+    await (await fetch(created.subUrl)).text(),
+    "base64",
+  ).toString("utf8");
+  assert(
+    optimizedSubscription.includes(`@172.64.1.1:443`) &&
+      optimizedSubscription.includes(`sni=${nodeHost}`),
+    `node-specific optimized IP must retain node SNI: ${optimizedSubscription}`,
   );
 
   await reportNodeHealth(`${runPrefix}-final-healthy`, true, true);
@@ -439,6 +478,7 @@ try {
   console.log("OK node-health-overview");
   console.log("OK landing-real-probe-alert");
   console.log("OK optimized-ip-two-vantage-admission");
+  console.log("OK optimized-ip-node-specific-subscription");
 } finally {
   if (landingId) {
     await fetch(`${base}/api/landings/${landingId}`, {

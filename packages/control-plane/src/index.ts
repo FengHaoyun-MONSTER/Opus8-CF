@@ -35,7 +35,12 @@ import {
   clearUserLeases,
   getUserLimits,
 } from "./db";
-import { nodesForUser, renderSubscription, pickFormat } from "./subscription";
+import {
+  nodesForUser,
+  renderSubscription,
+  pickFormat,
+  type OptimizedIpsByNode,
+} from "./subscription";
 import {
   getUnlockHosts,
   putUnlockHosts,
@@ -493,9 +498,13 @@ export default {
       if (p === "/api/optimized-ips" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         const pool = await getOptimizedIpPool(env);
+        const ips = pool
+          ? [...new Set(Object.values(pool.nodes).flatMap((node) => node.ips))]
+          : [];
         return json({
-          ips: pool?.ips ?? [],
+          ips,
           active: Boolean(pool),
+          activeNodeCount: pool ? Object.keys(pool.nodes).length : 0,
           subscriptionEnabled: env.USE_OPTIMIZED_IPS === "1",
           pool,
         });
@@ -505,14 +514,26 @@ export default {
         try {
           const b = (await req.json().catch(() => ({}))) as Partial<OptimizedIpPool>;
           const pool = normalizeOptimizedIpPool(b);
+          const registeredNodes = new Map(
+            (await listNodes(env)).map((node) => [node.id, node]),
+          );
+          for (const [nodeId, nodePool] of Object.entries(pool.nodes)) {
+            const registered = registeredNodes.get(nodeId);
+            if (!registered) throw new Error(`优选 IP 包含未注册节点 ${nodeId}`);
+            if (registered.hostname !== nodePool.hostname) {
+              throw new Error(`节点 ${nodeId} 的主机名与注册信息不一致`);
+            }
+          }
           await env.KV.put("opus8:opt-ips", JSON.stringify(pool));
+          const count = Object.values(pool.nodes).reduce(
+            (sum, node) => sum + node.ips.length,
+            0,
+          );
           return json({
             ok: true,
-            count: pool.ips.length,
-            validatedAt: pool.validatedAt,
-            expiresAt: pool.expiresAt,
-            vantages: pool.vantages,
-            nodeIds: pool.nodeIds,
+            count,
+            nodeCount: Object.keys(pool.nodes).length,
+            nodes: pool.nodes,
           });
         } catch (error) {
           return err((error as Error).message, 400);
@@ -562,10 +583,14 @@ export default {
         );
         // GitHub-hosted CFST 只代表运行器所在网络，不能作为终端用户的可用性证明。
         // 默认关闭 IP 展开；只有部署侧显式启用后才会把经过端到端验证的地址写入订阅。
-        const optIps =
-          env.USE_OPTIMIZED_IPS === "1" ? await getOptimizedIps(env) : [];
+        const optIpsByNode =
+          env.USE_OPTIMIZED_IPS === "1"
+            ? await getOptimizedIpsByNode(env, nodes)
+            : {};
         const [{ body, contentType }, usage] = await Promise.all([
-          Promise.resolve(renderSubscription(fmt, user, nodes, optIps)),
+          Promise.resolve(
+            renderSubscription(fmt, user, nodes, optIpsByNode),
+          ),
           getUserUsage(env, user.id),
         ]);
         return new Response(body, {
@@ -589,13 +614,18 @@ export default {
   },
 };
 
-interface OptimizedIpPool {
-  version: 2;
+interface OptimizedNodeIpPool {
+  hostname: string;
   ips: string[];
   validatedAt: number;
   expiresAt: number;
   vantages: string[];
-  nodeIds: string[];
+}
+
+interface OptimizedIpPool {
+  version: 3;
+  generatedAt: number;
+  nodes: Record<string, OptimizedNodeIpPool>;
 }
 
 function uniqueCleanStrings(
@@ -614,10 +644,11 @@ function uniqueCleanStrings(
   ].slice(0, limit);
 }
 
-function normalizeOptimizedIpPool(
-  value: Partial<OptimizedIpPool>,
-  requireFreshValidation = true,
-): OptimizedIpPool {
+function normalizeOptimizedNodePool(
+  value: Partial<OptimizedNodeIpPool>,
+  requireFreshValidation: boolean,
+  requireUnexpired: boolean,
+): OptimizedNodeIpPool {
   const now = Date.now();
   const ips = uniqueCleanStrings(value.ips, /^[0-9a-fA-F.:]+$/, 10);
   const vantages = uniqueCleanStrings(
@@ -625,14 +656,16 @@ function normalizeOptimizedIpPool(
     /^[A-Za-z0-9._:-]+$/,
     10,
   );
-  const nodeIds = uniqueCleanStrings(
-    value.nodeIds,
-    /^[A-Za-z0-9._:-]+$/,
-    50,
-  );
+  const hostname =
+    typeof value.hostname === "string"
+      ? value.hostname.trim().toLowerCase().slice(0, 253)
+      : "";
   const validatedAt = Number(value.validatedAt);
   const expiresAt = Number(value.expiresAt);
-  if (ips.length === 0) throw new Error("优选 IP 池不能为空");
+  if (!hostname || !/^[a-z0-9.-]+$/.test(hostname)) {
+    throw new Error("优选 IP 节点主机名无效");
+  }
+  if (ips.length === 0) throw new Error("节点优选 IP 池不能为空");
   if (
     !Number.isSafeInteger(validatedAt) ||
     validatedAt <= 0 ||
@@ -643,7 +676,7 @@ function normalizeOptimizedIpPool(
   }
   if (
     !Number.isSafeInteger(expiresAt) ||
-    expiresAt <= now ||
+    (requireUnexpired && expiresAt <= now) ||
     expiresAt > validatedAt + 24 * 60 * 60_000
   ) {
     throw new Error("优选 IP 有效期无效");
@@ -654,17 +687,33 @@ function normalizeOptimizedIpPool(
   ) {
     throw new Error("优选 IP 必须通过 GitHub Runner 与落地 VPS 双视角验证");
   }
-  if (nodeIds.length < 2) {
-    throw new Error("优选 IP 必须覆盖至少两个代表节点");
-  }
   return {
-    version: 2,
+    hostname,
     ips,
     validatedAt,
     expiresAt,
     vantages,
-    nodeIds,
   };
+}
+
+function normalizeOptimizedIpPool(
+  value: Partial<OptimizedIpPool>,
+): OptimizedIpPool {
+  if (!value.nodes || typeof value.nodes !== "object" || Array.isArray(value.nodes)) {
+    throw new Error("按节点优选 IP 池不能为空");
+  }
+  const entries = Object.entries(value.nodes);
+  if (entries.length === 0 || entries.length > 50) {
+    throw new Error("按节点优选 IP 池数量无效");
+  }
+  const nodes: Record<string, OptimizedNodeIpPool> = {};
+  for (const [nodeId, nodePool] of entries) {
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(nodeId)) {
+      throw new Error(`优选 IP 节点 ID 无效: ${nodeId}`);
+    }
+    nodes[nodeId] = normalizeOptimizedNodePool(nodePool, true, true);
+  }
+  return { version: 3, generatedAt: Date.now(), nodes };
 }
 
 async function getOptimizedIpPool(env: Env): Promise<OptimizedIpPool | null> {
@@ -672,17 +721,55 @@ async function getOptimizedIpPool(env: Env): Promise<OptimizedIpPool | null> {
     const raw = await env.KV.get("opus8:opt-ips");
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<OptimizedIpPool>;
-    if (value.version !== 2) return null;
-    const pool = normalizeOptimizedIpPool(value, false);
-    if (pool.expiresAt <= Date.now()) return null;
-    return pool;
+    if (
+      value.version !== 3 ||
+      !value.nodes ||
+      typeof value.nodes !== "object" ||
+      Array.isArray(value.nodes)
+    ) {
+      return null;
+    }
+    const nodes: Record<string, OptimizedNodeIpPool> = {};
+    for (const [nodeId, nodePool] of Object.entries(value.nodes)) {
+      if (!/^[A-Za-z0-9._:-]{1,128}$/.test(nodeId)) continue;
+      try {
+        const normalized = normalizeOptimizedNodePool(
+          nodePool,
+          false,
+          false,
+        );
+        if (normalized.expiresAt > Date.now()) nodes[nodeId] = normalized;
+      } catch {
+        // One malformed or expired node must not suppress other safe nodes.
+      }
+    }
+    if (Object.keys(nodes).length === 0) return null;
+    return {
+      version: 3,
+      generatedAt: Number(value.generatedAt) || Date.now(),
+      nodes,
+    };
   } catch {
     return null;
   }
 }
 
-async function getOptimizedIps(env: Env): Promise<string[]> {
-  return (await getOptimizedIpPool(env))?.ips ?? [];
+async function getOptimizedIpsByNode(
+  env: Env,
+  currentNodes: NodeRecord[],
+): Promise<OptimizedIpsByNode> {
+  const pool = await getOptimizedIpPool(env);
+  if (!pool) return {};
+  const registeredHostnames = new Map(
+    currentNodes.map((node) => [node.id, node.hostname]),
+  );
+  return Object.fromEntries(
+    Object.entries(pool.nodes)
+      .filter(
+        ([nodeId, node]) => registeredHostnames.get(nodeId) === node.hostname,
+      )
+      .map(([nodeId, node]) => [nodeId, node.ips]),
+  );
 }
 
 function subUserInfo(

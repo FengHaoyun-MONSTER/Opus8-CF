@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Discover Cloudflare anycast candidates, then publish only addresses that pass
-# real VLESS-over-WebSocket checks from both GitHub and the landing VPS.
+# Discover Cloudflare anycast candidates and publish a separate, expiring IP
+# pool for each node. Every published node/IP pair must pass a real VLESS test
+# from both GitHub and the landing VPS.
 set -euo pipefail
 
 WS="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -78,30 +79,28 @@ ADMIN_TOKEN="$(printf '%s' "$LOGIN_RESPONSE" | jq -er '.token')"
 echo "::add-mask::$ADMIN_TOKEN"
 echo "OK login"
 
-echo "STEP representative-nodes"
+echo "STEP eligible-nodes"
 NODES_RESPONSE="$(curl -fsS --max-time 20 "$CONTROL_PLANE_URL/api/nodes" \
   -H "authorization: Bearer $ADMIN_TOKEN")"
-mapfile -t REPRESENTATIVES < <(
+mapfile -t NODES < <(
   printf '%s' "$NODES_RESPONSE" |
     jq -er '
       [.nodes[] | select(.enabled == 1 and .health != "banned")] |
       sort_by(.account_alias,.id) |
-      group_by(.account_alias) |
-      map(.[0]) |
       .[] |
       [.id,.hostname] | @tsv'
 )
-if [ "${#REPRESENTATIVES[@]}" -lt 2 ]; then
-  echo "ERROR fewer-than-two-account-representatives"
+if [ "${#NODES[@]}" -eq 0 ]; then
+  echo "ERROR no-eligible-nodes"
   exit 11
 fi
-REPRESENTATIVE_IDS="$(
-  printf '%s\n' "${REPRESENTATIVES[@]}" |
+NODE_IDS="$(
+  printf '%s\n' "${NODES[@]}" |
     cut -f1 |
     jq -R . |
     jq -sc .
 )"
-echo "OK representative-nodes count=${#REPRESENTATIVES[@]}"
+echo "OK eligible-nodes count=${#NODES[@]}"
 
 echo "STEP create-isolated-probe-user"
 PROBE_USERNAME="__optimize__-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
@@ -111,7 +110,7 @@ CREATE_RESPONSE="$(curl -fsS --max-time 30 -X POST \
   -H 'content-type: application/json' \
   --data "$(jq -nc \
     --arg username "$PROBE_USERNAME" \
-    --argjson nodeGroup "$REPRESENTATIVE_IDS" \
+    --argjson nodeGroup "$NODE_IDS" \
     '{username:$username,nodeGroup:$nodeGroup,durationDays:1,unlock:false,deviceLimit:20,ipLimit24h:100}')")"
 USER_ID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.id')"
 PROBE_UUID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.uuid')"
@@ -120,34 +119,64 @@ echo "::add-mask::$PROBE_UUID"
 echo "OK probe-user-created"
 sleep 8
 
+local_smoke() {
+  local node_host="$1" connect_host="${2:-}" log_file="$3"
+  local args=(
+    python3 infra/scripts/smoke-vless.py
+    --url "wss://${node_host}/?ed=2560"
+    --uuid "$PROBE_UUID"
+    --target example.com
+    --target-port 80
+    --expect-status 0
+    --timeout 12
+  )
+  [ -n "$connect_host" ] && args+=(--connect-host "$connect_host")
+  "${args[@]}" >"$log_file" 2>&1
+}
+
+remote_smoke() {
+  local node_host="$1" connect_host="${2:-}" log_file="$3"
+  local remote_command
+  local args=(
+    python3 "$REMOTE_SMOKE_PATH"
+    --url "wss://${node_host}/?ed=2560"
+    --uuid "$PROBE_UUID"
+    --target example.com
+    --target-port 80
+    --expect-status 0
+    --timeout 12
+  )
+  [ -n "$connect_host" ] && args+=(--connect-host "$connect_host")
+  printf -v remote_command '%q ' "${args[@]}"
+  "${SSH_BASE[@]}" "$remote_command" >"$log_file" 2>&1
+}
+
 echo "STEP verify-domain-baseline"
-for entry in "${REPRESENTATIVES[@]}"; do
+for entry in "${NODES[@]}"; do
   IFS=$'\t' read -r node_id node_host <<<"$entry"
   baseline_ok=0
   for attempt in 1 2 3 4 5 6; do
-    if python3 infra/scripts/smoke-vless.py \
-      --url "wss://${node_host}/?ed=2560" \
-      --uuid "$PROBE_UUID" \
-      --target example.com \
-      --target-port 80 \
-      --expect-status 0 \
-      --timeout 12 >"$WORK_DIR/domain-baseline.log" 2>&1; then
+    if local_smoke "$node_host" "" "$WORK_DIR/domain-local.log" &&
+      remote_smoke "$node_host" "" "$WORK_DIR/domain-remote.log"; then
       baseline_ok=1
       break
     fi
     [ "$attempt" -lt 6 ] && sleep 5
   done
   if [ "$baseline_ok" != "1" ]; then
-    reason="$(tail -n 1 "$WORK_DIR/domain-baseline.log" |
+    local_reason="$(tail -n 1 "$WORK_DIR/domain-local.log" 2>/dev/null |
       tr '\r\n\t' ' ' |
-      cut -c1-300)"
-    echo "ERROR domain-baseline node=$node_id reason=$reason"
+      cut -c1-180)"
+    remote_reason="$(tail -n 1 "$WORK_DIR/domain-remote.log" 2>/dev/null |
+      tr '\r\n\t' ' ' |
+      cut -c1-180)"
+    echo "ERROR domain-baseline node=$node_id github=${local_reason:-unknown} vps=${remote_reason:-unknown}"
     exit 15
   fi
-  echo "OK domain-baseline node=$node_id"
+  echo "OK domain-baseline node=$node_id vantages=2"
 done
 
-echo "STEP discover-candidates"
+echo "STEP discover-cfst-candidates"
 RAW_IPS="$WORK_DIR/raw-ips.txt"
 if [ -s "$WS/infra/optimized-ips.txt" ]; then
   sed 's/#.*//' "$WS/infra/optimized-ips.txt" >"$RAW_IPS"
@@ -188,7 +217,7 @@ else
   echo "OK candidate-source=cfst"
 fi
 
-mapfile -t CANDIDATES < <(
+mapfile -t CFST_CANDIDATES < <(
   python3 - "$RAW_IPS" <<'PY'
 import ipaddress
 import sys
@@ -204,101 +233,128 @@ for raw in open(sys.argv[1], encoding="utf-8"):
         continue
     seen.add(candidate)
     print(candidate)
-    if len(seen) >= 5:
+    if len(seen) >= 8:
         break
 PY
 )
-if [ "${#CANDIDATES[@]}" -eq 0 ]; then
-  echo "ERROR no-valid-candidates"
-  exit 14
-fi
-echo "OK candidates count=${#CANDIDATES[@]}"
+echo "OK cfst-candidates count=${#CFST_CANDIDATES[@]}"
 
 local_candidate_ok() {
-  local ip="$1" entry node_id node_host reason
-  for entry in "${REPRESENTATIVES[@]}"; do
-    IFS=$'\t' read -r node_id node_host <<<"$entry"
-    if ! python3 infra/scripts/smoke-vless.py \
-      --url "wss://${node_host}/?ed=2560" \
-      --connect-host "$ip" \
-      --uuid "$PROBE_UUID" \
-      --target example.com \
-      --target-port 80 \
-      --expect-status 0 \
-      --timeout 12 >"$WORK_DIR/local-candidate.log" 2>&1; then
-      reason="$(tail -n 1 "$WORK_DIR/local-candidate.log" |
-        tr '\r\n\t' ' ' |
-        cut -c1-300)"
-      echo "WARN candidate=$ip vantage=github-runner node=$node_id reason=$reason"
-      return 1
-    fi
-  done
+  local ip="$1" node_id="$2" node_host="$3" reason
+  if local_smoke "$node_host" "$ip" "$WORK_DIR/local-candidate.log"; then
+    return 0
+  fi
+  reason="$(tail -n 1 "$WORK_DIR/local-candidate.log" |
+    tr '\r\n\t' ' ' |
+    cut -c1-240)"
+  echo "WARN candidate=$ip vantage=github-runner node=$node_id reason=$reason"
+  return 1
 }
 
 remote_candidate_ok() {
-  local ip="$1" entry node_id node_host remote_command reason
-  for entry in "${REPRESENTATIVES[@]}"; do
-    IFS=$'\t' read -r node_id node_host <<<"$entry"
-    printf -v remote_command '%q ' \
-      python3 "$REMOTE_SMOKE_PATH" \
-      --url "wss://${node_host}/?ed=2560" \
-      --connect-host "$ip" \
-      --uuid "$PROBE_UUID" \
-      --target example.com \
-      --target-port 80 \
-      --expect-status 0 \
-      --timeout 12
-    if ! "${SSH_BASE[@]}" "$remote_command" >"$WORK_DIR/remote-candidate.log" 2>&1; then
-      reason="$(tail -n 1 "$WORK_DIR/remote-candidate.log" |
-        tr '\r\n\t' ' ' |
-        cut -c1-300)"
-      echo "WARN candidate=$ip vantage=landing-vps node=$node_id reason=$reason"
-      return 1
-    fi
-  done
+  local ip="$1" node_id="$2" node_host="$3" reason
+  if remote_smoke "$node_host" "$ip" "$WORK_DIR/remote-candidate.log"; then
+    return 0
+  fi
+  reason="$(tail -n 1 "$WORK_DIR/remote-candidate.log" |
+    tr '\r\n\t' ' ' |
+    cut -c1-240)"
+  echo "WARN candidate=$ip vantage=landing-vps node=$node_id reason=$reason"
+  return 1
 }
 
-echo "STEP validate-candidates"
-VALIDATED=()
-for ip in "${CANDIDATES[@]}"; do
-  if local_candidate_ok "$ip" && remote_candidate_ok "$ip"; then
-    VALIDATED+=("$ip")
-    echo "OK candidate=$ip vantages=2 representatives=${#REPRESENTATIVES[@]}"
+echo "STEP validate-node-candidates"
+SAFE_NODE_IPS='{}'
+SAFE_NODE_COUNT=0
+SAFE_IP_COUNT=0
+for entry in "${NODES[@]}"; do
+  IFS=$'\t' read -r node_id node_host <<<"$entry"
+  NODE_RAW="$WORK_DIR/node-${node_id}-candidates.txt"
+  : >"$NODE_RAW"
+  getent ahostsv4 "$node_host" 2>/dev/null |
+    awk '{print $1}' >>"$NODE_RAW" || true
+  "${SSH_BASE[@]}" "getent ahostsv4 '$node_host' 2>/dev/null | tr -s ' ' | cut -d' ' -f1" \
+    >>"$NODE_RAW" 2>/dev/null || true
+  printf '%s\n' "${CFST_CANDIDATES[@]}" >>"$NODE_RAW"
+
+  mapfile -t NODE_CANDIDATES < <(
+    python3 - "$NODE_RAW" <<'PY'
+import ipaddress
+import sys
+
+seen = set()
+for raw in open(sys.argv[1], encoding="utf-8"):
+    candidate = raw.strip()
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        continue
+    if address.version != 4 or candidate in seen:
+        continue
+    seen.add(candidate)
+    print(candidate)
+    if len(seen) >= 10:
+        break
+PY
+  )
+  echo "OK node-candidates node=$node_id count=${#NODE_CANDIDATES[@]}"
+
+  VALIDATED=()
+  for ip in "${NODE_CANDIDATES[@]}"; do
+    if local_candidate_ok "$ip" "$node_id" "$node_host" &&
+      remote_candidate_ok "$ip" "$node_id" "$node_host"; then
+      VALIDATED+=("$ip")
+      echo "OK candidate=$ip node=$node_id vantages=2"
+    fi
+    [ "${#VALIDATED[@]}" -ge 2 ] && break
+  done
+  if [ "${#VALIDATED[@]}" -gt 0 ]; then
+    IPS_JSON="$(printf '%s\n' "${VALIDATED[@]}" | jq -R . | jq -sc .)"
+    SAFE_NODE_IPS="$(printf '%s' "$SAFE_NODE_IPS" | jq -c \
+      --arg nodeId "$node_id" \
+      --arg hostname "$node_host" \
+      --argjson ips "$IPS_JSON" \
+      '. + {($nodeId):{hostname:$hostname,ips:$ips}}')"
+    SAFE_NODE_COUNT=$((SAFE_NODE_COUNT + 1))
+    SAFE_IP_COUNT=$((SAFE_IP_COUNT + ${#VALIDATED[@]}))
+  else
+    echo "OK node-domain-fallback node=$node_id"
   fi
-  [ "${#VALIDATED[@]}" -ge 3 ] && break
 done
-if [ "${#VALIDATED[@]}" -eq 0 ]; then
+
+if [ "$SAFE_NODE_COUNT" -eq 0 ]; then
   POOL_RESPONSE="$(curl -fsS --max-time 20 \
     "$CONTROL_PLANE_URL/api/optimized-ips" \
     -H "authorization: Bearer $ADMIN_TOKEN")"
   ACTIVE_COUNT="$(printf '%s' "$POOL_RESPONSE" | jq -r '.ips | length')"
   echo "OK no-safe-candidates domain-fallback=active existingActivePool=$ACTIVE_COUNT"
-  echo "DONE published=0"
+  echo "DONE publishedNodes=0 publishedIps=0"
   exit 0
 fi
 
 echo "STEP push-to-control"
 NOW_MS="$(date +%s%3N)"
 EXPIRES_MS=$((NOW_MS + 8 * 60 * 60 * 1000))
-IPS_JSON="$(printf '%s\n' "${VALIDATED[@]}" | jq -R . | jq -sc .)"
-BODY="$(jq -nc \
-  --argjson ips "$IPS_JSON" \
+POOL_NODES="$(printf '%s' "$SAFE_NODE_IPS" | jq -c \
   --argjson validatedAt "$NOW_MS" \
   --argjson expiresAt "$EXPIRES_MS" \
-  --argjson nodeIds "$REPRESENTATIVE_IDS" \
-  '{
-    version:2,
-    ips:$ips,
-    validatedAt:$validatedAt,
-    expiresAt:$expiresAt,
-    vantages:["github-runner","landing-vps"],
-    nodeIds:$nodeIds
-  }')"
+  'with_entries(
+    .value += {
+      validatedAt:$validatedAt,
+      expiresAt:$expiresAt,
+      vantages:["github-runner","landing-vps"]
+    }
+  )')"
+BODY="$(jq -nc \
+  --argjson nodes "$POOL_NODES" \
+  '{version:3,nodes:$nodes}')"
 RESPONSE="$(curl -fsS --max-time 20 -X POST \
   "$CONTROL_PLANE_URL/api/optimized-ips" \
   -H "authorization: Bearer $ADMIN_TOKEN" \
   -H 'content-type: application/json' \
   --data "$BODY")"
-printf '%s' "$RESPONSE" | jq -e '.ok == true' >/dev/null
-echo "OK pushed count=${#VALIDATED[@]} expiresHours=8"
-echo "DONE"
+printf '%s' "$RESPONSE" | jq -e \
+  --argjson nodeCount "$SAFE_NODE_COUNT" \
+  '.ok == true and .nodeCount == $nodeCount' >/dev/null
+echo "OK pushed nodes=$SAFE_NODE_COUNT ips=$SAFE_IP_COUNT expiresHours=8"
+echo "DONE publishedNodes=$SAFE_NODE_COUNT publishedIps=$SAFE_IP_COUNT"

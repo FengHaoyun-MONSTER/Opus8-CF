@@ -4,6 +4,9 @@ main = "dist/index.js"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
+[vars]
+USE_OPTIMIZED_IPS = "1"
+
 # routes 由 CI 按 ROOT_DOMAIN 注入，如 api.<ROOT_DOMAIN>/*
 
 [[d1_databases]]
