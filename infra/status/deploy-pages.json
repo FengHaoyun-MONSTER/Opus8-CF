@@ -1,6 +1,6 @@
 {
-  "result": "success",
-  "adminUrl": "https://opus8cf-admin-openal.pages.dev",
+  "result": "failure",
+  "adminUrl": "",
   "markers": [
     "STEP install",
     "OK installed",
@@ -8,8 +8,7 @@
     "OK built",
     "STEP pages-project",
     "STEP deploy",
-    "OK deployed deploy=https://452d9ad4.opus8cf-admin-openal.pages.dev",
-    "DONE url=https://opus8cf-admin-openal.pages.dev"
+    "ERROR pages-deploy"
   ],
   "tail": [
     "STEP install",
@@ -18,8 +17,10 @@
     "OK built",
     "STEP pages-project",
     "STEP deploy",
-    "OK deployed deploy=https://452d9ad4.opus8cf-admin-openal.pages.dev",
-    "DONE url=https://opus8cf-admin-openal.pages.dev"
+    "ERROR pages-deploy",
+    "Wrangler requires at least Node.js v22.0.0. You are using v20.20.2. Please update your version of Node.js.",
+    "",
+    "Consider using a Node.js version manager such as https://volta.sh/ or https://github.com/nvm-sh/nvm."
   ],
-  "finishedAt": "2026-07-29T05:45:46Z"
+  "finishedAt": "2026-07-29T14:38:50Z"
 }
