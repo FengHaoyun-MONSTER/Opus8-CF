@@ -1,5 +1,5 @@
 {
-  "result": "failure",
+  "result": "cancelled",
   "markers": [
     "STEP prepare-vantages",
     "OK vantages=github-runner,landing-vps",
@@ -9,7 +9,9 @@
     "OK eligible-nodes count=4",
     "STEP create-isolated-probe-user",
     "OK probe-user-created",
-    "STEP verify-domain-baseline"
+    "STEP verify-domain-baseline",
+    "WARN domain-baseline node=acc1-n1 skipped=1 github=vless smoke failed: server closed before VLESS response  vps=unknown",
+    "WARN domain-baseline node=acc1-n2 skipped=1 github=vless smoke failed: server closed before VLESS response  vps=unknown"
   ],
-  "finishedAt": "2026-07-29T03:36:11Z"
+  "finishedAt": "2026-07-29T03:43:11Z"
 }
