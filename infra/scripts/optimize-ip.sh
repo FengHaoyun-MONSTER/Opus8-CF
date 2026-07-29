@@ -94,12 +94,6 @@ if [ "${#NODES[@]}" -eq 0 ]; then
   echo "ERROR no-eligible-nodes"
   exit 11
 fi
-NODE_IDS="$(
-  printf '%s\n' "${NODES[@]}" |
-    cut -f1 |
-    jq -R . |
-    jq -sc .
-)"
 echo "OK eligible-nodes count=${#NODES[@]}"
 
 echo "STEP create-isolated-probe-user"
@@ -110,8 +104,7 @@ CREATE_RESPONSE="$(curl -fsS --max-time 30 -X POST \
   -H 'content-type: application/json' \
   --data "$(jq -nc \
     --arg username "$PROBE_USERNAME" \
-    --argjson nodeGroup "$NODE_IDS" \
-    '{username:$username,nodeGroup:$nodeGroup,durationDays:1,unlock:false,deviceLimit:20,ipLimit24h:100}')")"
+    '{username:$username,durationDays:1,unlock:true,deviceLimit:20,ipLimit24h:100}')")"
 USER_ID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.id')"
 PROBE_UUID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.uuid')"
 echo "::add-mask::$USER_ID"

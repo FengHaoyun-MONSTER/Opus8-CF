@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: optimize-ip
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   optimize:
