@@ -156,6 +156,8 @@ BASELINE_NODES=()
 for entry in "${NODES[@]}"; do
   IFS=$'\t' read -r node_id node_host <<<"$entry"
   baseline_ok=0
+  : >"$WORK_DIR/domain-local.log"
+  : >"$WORK_DIR/domain-remote.log"
   for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
     if local_smoke "$node_host" "" "$WORK_DIR/domain-local.log" &&
       remote_smoke "$node_host" "" "$WORK_DIR/domain-remote.log"; then
@@ -167,10 +169,10 @@ for entry in "${NODES[@]}"; do
   if [ "$baseline_ok" != "1" ]; then
     local_reason="$(tail -n 1 "$WORK_DIR/domain-local.log" 2>/dev/null |
       tr '\r\n\t' ' ' |
-      cut -c1-180)"
+      cut -c1-180 || true)"
     remote_reason="$(tail -n 1 "$WORK_DIR/domain-remote.log" 2>/dev/null |
       tr '\r\n\t' ' ' |
-      cut -c1-180)"
+      cut -c1-180 || true)"
     echo "WARN domain-baseline node=$node_id skipped=1 github=${local_reason:-unknown} vps=${remote_reason:-unknown}"
     continue
   fi
