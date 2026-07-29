@@ -97,7 +97,11 @@ case "$operation" in
     }
     echo "STEP encrypt-backup"
     node "$CRYPTO_SCRIPT" encrypt "$temp_dir/export.sql" "$output"
-    sha256sum "$output" >"${output}.sha256"
+    (
+      cd "$(dirname "$output")"
+      output_name="$(basename "$output")"
+      sha256sum "$output_name" >"${output_name}.sha256"
+    )
     echo "OK encrypted-backup"
     ;;
   restore)

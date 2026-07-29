@@ -86,4 +86,34 @@ assert.doesNotMatch(
   "the workflow must never upload plaintext SQL",
 );
 
+const recoveryWorkflow = await readFile(
+  join(repoRoot, ".github", "workflows", "d1-recovery-drill.yml"),
+  "utf8",
+);
+assert.match(
+  recoveryWorkflow,
+  /actions\/download-artifact@[a-f0-9]{40}/,
+  "recovery download action must be pinned to a full commit SHA",
+);
+assert.match(
+  recoveryWorkflow,
+  /\^opus8cf-recovery-/,
+  "recovery workflow must restrict target database names",
+);
+assert.match(
+  recoveryWorkflow,
+  /\[ "\$RECOVERY_DATABASE" != "opus8cf-db" \]/,
+  "recovery workflow must explicitly reject the production database",
+);
+assert.match(
+  recoveryWorkflow,
+  /OPUS8_RESTORE_CONFIRM="\$RESTORE_CONFIRMATION"/,
+  "recovery workflow must pass the exact manual confirmation to the restore guard",
+);
+assert.doesNotMatch(
+  recoveryWorkflow,
+  /^\s*schedule:/m,
+  "recovery drills must remain manual",
+);
+
 console.log("supply-chain pinning tests passed");

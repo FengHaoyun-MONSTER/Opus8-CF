@@ -1,0 +1,103 @@
+name: d1-recovery-drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_run_id:
+        description: Run ID of a successful d1-backup workflow
+        required: true
+        type: string
+      recovery_database:
+        description: Empty isolation target named opus8cf-recovery-*
+        required: true
+        default: opus8cf-recovery-drill
+        type: string
+      confirmation:
+        description: Type restore:<recovery_database>
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: d1-recovery-drill
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.ACCOUNT_ID }}
+      D1_BACKUP_ENCRYPTION_KEY: ${{ secrets.D1_BACKUP_ENCRYPTION_KEY }}
+      BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
+      RECOVERY_DATABASE: ${{ inputs.recovery_database }}
+      RESTORE_CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - name: Checkout pinned repository revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Validate isolation target
+        run: |
+          set -euo pipefail
+          : "${D1_BACKUP_ENCRYPTION_KEY:?Configure D1_BACKUP_ENCRYPTION_KEY before running a recovery drill}"
+          printf '%s' "$BACKUP_RUN_ID" | grep -Eq '^[0-9]+$'
+          printf '%s' "$RECOVERY_DATABASE" \
+            | grep -Eq '^opus8cf-recovery-[a-z0-9-]{3,48}$'
+          [ "$RECOVERY_DATABASE" != "opus8cf-db" ]
+          [ "$RESTORE_CONFIRMATION" = "restore:$RECOVERY_DATABASE" ]
+      - name: Download encrypted backup
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.backup_run_id }}
+          pattern: opus8cf-d1-encrypted-*
+          path: ${{ runner.temp }}/d1-backup
+          merge-multiple: true
+      - name: Restore into isolated D1
+        run: |
+          set -euo pipefail
+          npm install --global wrangler@4.115.0
+          mapfile -t backups < <(find "$RUNNER_TEMP/d1-backup" \
+            -type f -name '*.opus8bk' -print)
+          [ "${#backups[@]}" -eq 1 ] || {
+            echo "ERROR expected exactly one encrypted backup"
+            exit 3
+          }
+          backup="${backups[0]}"
+          checksum="${backup}.sha256"
+          [ -f "$checksum" ] || {
+            echo "ERROR encrypted backup checksum is missing"
+            exit 3
+          }
+          (
+            cd "$(dirname "$backup")"
+            sha256sum --check "$(basename "$checksum")"
+          )
+          if ! wrangler d1 list --json 2>/dev/null \
+              | D1_LOOKUP_NAME="$RECOVERY_DATABASE" node -e '
+                  let input="";
+                  process.stdin.on("data", chunk => input += chunk).on("end", () => {
+                    const rows=JSON.parse(input);
+                    process.exit(rows.some(row => row.name === process.env.D1_LOOKUP_NAME) ? 0 : 1);
+                  });
+                '; then
+            wrangler d1 create "$RECOVERY_DATABASE" >/dev/null
+            echo "OK recovery-database-created name=$RECOVERY_DATABASE"
+          fi
+          OPUS8_RESTORE_CONFIRM="$RESTORE_CONFIRMATION" \
+            bash infra/scripts/d1-backup.sh restore \
+              "$backup" "$RECOVERY_DATABASE"
+          {
+            echo "## D1 recovery drill"
+            echo
+            echo "- Result: isolated restore completed"
+            echo "- Target: \`$RECOVERY_DATABASE\`"
+            echo "- Production database was not a valid restore target"
+          } >>"$GITHUB_STEP_SUMMARY"
