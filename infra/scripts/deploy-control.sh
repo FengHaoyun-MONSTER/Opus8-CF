@@ -376,11 +376,19 @@ if ! printf '%s' "$REMOTE_COMPLIANCE" \
 fi
 echo "OK smoke-compliance-state provisioning=$COMPLIANCE_PROXY_ALLOWED"
 
-REMOTE_ROTATION=$(curl -fsS --max-time 15 \
-  "$API_URL/api/operations/key-rotation" \
-  -H "authorization: Bearer $TOK")
-if ! printf '%s' "$REMOTE_ROTATION" \
-  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);const c=x.landingCredentials||{};const valid=Number.isInteger(c.total)&&Number.isInteger(c.current)&&Number.isInteger(c.previous)&&c.unreadable===0&&c.current+c.previous===c.total;process.exit(valid?0:1)})'; then
+ROTATION_STATE_OK=0
+for n in $(seq 1 18); do
+  REMOTE_ROTATION=$(curl -fsS --max-time 15 \
+    "$API_URL/api/operations/key-rotation" \
+    -H "authorization: Bearer $TOK" 2>/dev/null || true)
+  if printf '%s' "$REMOTE_ROTATION" \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const x=JSON.parse(s);const c=x.landingCredentials||{};const valid=Number.isInteger(c.total)&&Number.isInteger(c.current)&&Number.isInteger(c.previous)&&c.unreadable===0&&c.current+c.previous===c.total;process.exit(valid?0:1)}catch{process.exit(1)}})'; then
+    ROTATION_STATE_OK=1
+    break
+  fi
+  sleep 3
+done
+if [ "$ROTATION_STATE_OK" != "1" ]; then
   echo "ERROR smoke-key-rotation-state"
   exit 16
 fi
