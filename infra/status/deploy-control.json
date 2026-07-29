@@ -28,11 +28,11 @@
     "OK smoke-landings count=1",
     "OK smoke-landing-socks5",
     "OK smoke-unlock-hosts count=61",
-    "OK smoke-cleaned-orphans",
     "OK smoke-create-user(D1-write)",
     "OK smoke-active-ip-limit",
     "OK smoke-idempotent-usage",
     "OK smoke-operations-overview",
+    "OK smoke-alert-history-d1-kv-writes=0",
     "OK smoke-node-health-overview",
     "OK smoke-user-activity",
     "OK smoke-subscription",
@@ -43,10 +43,10 @@
     "DONE url=https://api.thinderbox.com"
   ],
   "tail": [
-    "OK smoke-create-user(D1-write)",
     "OK smoke-active-ip-limit",
     "OK smoke-idempotent-usage",
     "OK <redacted>",
+    "OK <redacted>=0",
     "OK <redacted>",
     "OK smoke-user-activity",
     "OK smoke-subscription",
@@ -56,5 +56,5 @@
     "OK smoke-cleanup",
     "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-07-29T05:13:02Z"
+  "finishedAt": "2026-07-29T05:45:44Z"
 }
