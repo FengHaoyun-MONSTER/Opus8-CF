@@ -1,6 +1,6 @@
 {
-  "result": "success",
-  "controlUrl": "https://api.thinderbox.com",
+  "result": "failure",
+  "controlUrl": "",
   "markers": [
     "STEP compliance-policy",
     "OK compliance-policy provisioning=0 policy=cloudflare-data-plane-v1",
@@ -11,6 +11,8 @@
     "STEP cors-test",
     "OK cors-test",
     "OK signature-test",
+    "OK key-rotation-test",
+    "OK d1-backup-test",
     "OK subscription-rate-limit-test",
     "OK compliance-test",
     "OK resource-audit-test",
@@ -38,29 +40,21 @@
     "STEP smoke",
     "OK smoke-health",
     "OK smoke-login",
-    "OK smoke-compliance-state provisioning=0",
-    "STEP cors-regression",
-    "OK cors-admin-only",
-    "STEP ensure-default-landing",
-    "OK smoke-landings count=1",
-    "OK smoke-landing-socks5",
-    "OK smoke-unlock-hosts count=61",
-    "OK smoke-compliance-provisioning-block",
-    "DONE url=https://api.thinderbox.com"
+    "OK smoke-compliance-state provisioning=0"
   ],
   "tail": [
+    "OK secret LANDING_CONFIG_KEY",
+    "OK secret ROOT_DOMAIN",
+    "OK secret SUB_BASE",
+    "STEP wait-deployed-version",
+    "OK deployed-version-active custom=1 workers=1",
+    "STEP wait-custom-domain",
+    "OK custom-domain-ready api=https://api.thinderbox.com sub=https://sub.thinderbox.com",
     "STEP smoke",
     "OK smoke-health",
     "OK smoke-login",
     "OK smoke-compliance-state provisioning=0",
-    "STEP cors-regression",
-    "OK cors-admin-only",
-    "STEP ensure-default-landing",
-    "OK smoke-landings count=1",
-    "OK smoke-landing-socks5",
-    "OK smoke-unlock-hosts count=61",
-    "OK <redacted>",
-    "DONE url=https://api.thinderbox.com"
+    "curl: (22) The requested URL returned error: 404"
   ],
-  "finishedAt": "2026-07-29T14:54:49Z"
+  "finishedAt": "2026-07-29T16:16:39Z"
 }
