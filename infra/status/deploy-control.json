@@ -1,6 +1,6 @@
 {
-  "result": "failure",
-  "controlUrl": "",
+  "result": "success",
+  "controlUrl": "https://api.thinderbox.com",
   "markers": [
     "STEP ensure-d1-kv",
     "OK ids-resolved d1=260b0f8f… kv=4526bc39…",
@@ -28,6 +28,7 @@
     "OK smoke-landings count=1",
     "OK smoke-landing-socks5",
     "OK smoke-unlock-hosts count=61",
+    "OK smoke-cleaned-orphans",
     "OK smoke-create-user(D1-write)",
     "OK smoke-active-ip-limit",
     "OK smoke-idempotent-usage",
@@ -37,11 +38,11 @@
     "OK smoke-subscription",
     "OK smoke-subscription-usage",
     "OK smoke-sub-has-node",
-    "ERROR smoke-sub-still-uses-unverified-ip"
+    "OK smoke-sub-optimized-ip-safe count=8",
+    "OK smoke-cleanup",
+    "DONE url=https://api.thinderbox.com"
   ],
   "tail": [
-    "OK smoke-landing-socks5",
-    "OK smoke-unlock-hosts count=61",
     "OK smoke-create-user(D1-write)",
     "OK smoke-active-ip-limit",
     "OK smoke-idempotent-usage",
@@ -51,7 +52,9 @@
     "OK smoke-subscription",
     "OK <redacted>",
     "OK smoke-sub-has-node",
-    "ERROR <redacted>"
+    "OK <redacted> count=8",
+    "OK smoke-cleanup",
+    "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-07-29T05:08:47Z"
+  "finishedAt": "2026-07-29T05:13:02Z"
 }
