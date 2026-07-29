@@ -28,11 +28,11 @@
     "OK canary-user-created",
     "INFO edge-policy-invalidation acknowledged=4 target=1",
     "STEP policy-status",
-    "INFO policy-status={\"invalidatedVersion\":1785244715148,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785244719068,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785244715148,\"liveUuidCount\":2,\"liveContainsUuid\":true,\"liveError\":\"\"}",
+    "INFO policy-status={\"invalidatedVersion\":1785295580289,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785295584246,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785295580289,\"liveUuidCount\":2,\"liveContainsUuid\":true,\"liveError\":\"\"}",
     "STEP vless-smoke",
-    "OK vless-ws-auth-egress vantage=github-runner",
+    "OK vless-ws-auth-egress vantage=landing-vps",
     "OK unlock=on(AI域名走落地)",
     "DONE url=https://acc1-n1-v2.thinderbox.com"
   ],
-  "finishedAt": "2026-07-28T13:20:26Z"
+  "finishedAt": "2026-07-29T03:27:47Z"
 }
