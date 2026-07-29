@@ -257,10 +257,43 @@ else
   echo "ERROR smoke-subscription-usage"; exit 24
 fi
 if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -q 'vless://'; then echo "OK smoke-sub-has-node"; else echo "ERROR smoke-sub-no-node"; exit 23; fi
-if printf '%s' "$SUBBODY" | base64 -d 2>/dev/null | grep -qE 'vless://[^@]+@[0-9]{1,3}\.[0-9]{1,3}\.'; then
-  echo "ERROR smoke-sub-still-uses-unverified-ip"; exit 24
+printf '%s' "$SUBBODY" > /tmp/sub.body
+curl -fsS --max-time 20 "$API_URL/api/optimized-ips" \
+  -H "authorization: Bearer $TOK" > /tmp/optimized-ips.json
+if VERIFIED_IP_COUNT=$(node <<'NODE'
+const fs = require("fs");
+const subscription = Buffer.from(
+  fs.readFileSync("/tmp/sub.body", "utf8"),
+  "base64",
+).toString("utf8");
+const response = JSON.parse(
+  fs.readFileSync("/tmp/optimized-ips.json", "utf8"),
+);
+const safe = new Set();
+for (const node of Object.values(response.pool?.nodes || {})) {
+  for (const ip of node.ips || []) safe.add(`${ip}|${node.hostname}`);
+}
+let ipCount = 0;
+for (const line of subscription.split(/\r?\n/).filter(Boolean)) {
+  const url = new URL(line);
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(url.hostname)) continue;
+  ipCount += 1;
+  const sni = url.searchParams.get("sni") || "";
+  const host = url.searchParams.get("host") || "";
+  if (host !== sni || !safe.has(`${url.hostname}|${sni}`)) {
+    process.exit(1);
+  }
+}
+process.stdout.write(String(ipCount));
+NODE
+); then
+  if [ "$VERIFIED_IP_COUNT" -gt 0 ]; then
+    echo "OK smoke-sub-optimized-ip-safe count=$VERIFIED_IP_COUNT"
+  else
+    echo "OK smoke-sub-hostname-only"
+  fi
 else
-  echo "OK smoke-sub-hostname-only"
+  echo "ERROR smoke-sub-unverified-ip-or-host-mismatch"; exit 24
 fi
 if curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-cleanup"; else echo "ERROR smoke-cleanup"; exit 25; fi
 
