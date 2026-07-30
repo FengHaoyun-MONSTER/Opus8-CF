@@ -60,6 +60,36 @@ database_id = "$id"
 EOF
 }
 
+export_database() {
+  local binding="$1"
+  local config="$2"
+  local output="$3"
+  local attempts="${D1_EXPORT_ATTEMPTS:-6}"
+  local delay_seconds="${D1_EXPORT_RETRY_DELAY_SECONDS:-20}"
+  local attempt=1
+  local status
+  local error_log="${output}.stderr"
+
+  while true; do
+    if wrangler d1 export "$binding" --remote \
+        --config "$config" \
+        --output "$output" >/dev/null 2>"$error_log"; then
+      rm -f -- "$error_log"
+      return 0
+    else
+      status="$?"
+    fi
+    if [ "$attempt" -ge "$attempts" ] \
+        || ! grep -Fq 'Currently processing a long-running import' "$error_log"; then
+      cat "$error_log" >&2
+      return "$status"
+    fi
+    echo "WARN D1 is busy with an import; retrying export attempt=$attempt/$attempts delay=${delay_seconds}s"
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+  done
+}
+
 operation="${1:-}"
 case "$operation" in
   backup)
@@ -84,9 +114,8 @@ case "$operation" in
     }
     write_config "$temp_dir/wrangler.toml" "BACKUP_DB" "$DATABASE_NAME" "$database_id"
     echo "STEP export-d1"
-    wrangler d1 export BACKUP_DB --remote \
-      --config "$temp_dir/wrangler.toml" \
-      --output "$temp_dir/full-export.sql" >/dev/null
+    export_database "BACKUP_DB" "$temp_dir/wrangler.toml" \
+      "$temp_dir/full-export.sql"
     python3 infra/scripts/d1-export-data.py \
       "$temp_dir/full-export.sql" "$temp_dir/data.sql"
     {

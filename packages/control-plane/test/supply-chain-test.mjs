@@ -72,8 +72,13 @@ assert.match(
 );
 assert.match(
   backupScript,
-  /wrangler d1 export BACKUP_DB --remote[\s\S]*--output "\$temp_dir\/full-export\.sql"/,
+  /wrangler d1 export "\$binding" --remote[\s\S]*--output "\$output"/,
   "backup must use the Wrangler full export path that returns a signed download",
+);
+assert.match(
+  backupScript,
+  /export_database "BACKUP_DB" "\$temp_dir\/wrangler\.toml"[\s\S]*"\$temp_dir\/full-export\.sql"/,
+  "backup must export the production binding into the protected temporary directory",
 );
 assert.match(
   backupScript,
