@@ -6,9 +6,9 @@
     "STEP compliance-gate",
     "OK compliance-gate",
     "STEP resolve-registered-transport",
-    "INFO transport path=/ws/9c3efd20351bea7b0629fad8 previous=/ws/9c3efd20351bea7b0629fad8 mode=canary legacy=/ legacyUntil=1785663545487",
+    "INFO transport path=/ws/9c3efd20351bea7b0629fad8 previous=/ws/9c3efd20351bea7b0629fad8 mode=canary legacy=/ legacyUntil=1785673883857",
     "STEP build",
-    "OK built (OK build: dist/index.js (311979 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (312718 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
@@ -28,12 +28,12 @@
     "OK edge-gateway-legacy-routes-closed",
     "STEP verify",
     "OK node-tls-http=200",
-    "OK uuids-endpoint-count=1",
+    "OK uuids-endpoint-count=2",
     "OK landing-bundle-encrypted",
     "STEP canary-user",
     "OK maintenance-canary-uses-node-fallback",
     "STEP policy-status",
-    "INFO policy-status={\"invalidatedVersion\":1785403586683,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785404387542,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785403586683,\"liveUuidCount\":1,\"liveContainsUuid\":false,\"liveError\":\"\"}",
+    "INFO policy-status={\"invalidatedVersion\":1785414658774,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785414737280,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785414658774,\"liveUuidCount\":2,\"liveContainsUuid\":false,\"liveError\":\"\"}",
     "STEP vless-smoke",
     "OK vless-ws-auth-egress vantage=github-runner",
     "STEP transport-legacy-canary",
@@ -41,5 +41,5 @@
     "OK unlock=on(AI域名走落地)",
     "DONE url=https://acc1-n1-v2.thinderbox.com"
   ],
-  "finishedAt": "2026-07-30T09:39:51Z"
+  "finishedAt": "2026-07-30T12:32:21Z"
 }
