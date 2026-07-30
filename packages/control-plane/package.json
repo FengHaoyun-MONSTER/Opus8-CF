@@ -9,7 +9,7 @@
     "test:cors": "node test/cors-test.mjs",
     "test:signature": "node test/signature-test.mjs",
     "test:key-rotation": "node test/key-rotation-test.mjs",
-    "test:d1-backup": "node test/d1-backup-crypto-test.mjs",
+    "test:d1-backup": "node test/d1-backup-crypto-test.mjs && node test/d1-export-data-test.mjs",
     "test:subscription-rate-limit": "node test/subscription-rate-limit-test.mjs",
     "test:compliance": "node test/compliance-test.mjs",
     "test:compliance:local": "pnpm build && node test/compliance-runtime-local.mjs",

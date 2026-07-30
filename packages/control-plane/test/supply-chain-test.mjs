@@ -72,8 +72,13 @@ assert.match(
 );
 assert.match(
   backupScript,
-  /wrangler d1 export BACKUP_DB --remote[\s\S]*--no-schema/,
-  "backup export must use repository schema before importing D1 data",
+  /wrangler d1 export BACKUP_DB --remote[\s\S]*--output "\$temp_dir\/full-export\.sql"/,
+  "backup must use the Wrangler full export path that returns a signed download",
+);
+assert.match(
+  backupScript,
+  /python3 infra\/scripts\/d1-export-data\.py/,
+  "backup must extract complete data statements before assembling the recovery bundle",
 );
 assert.match(
   backupScript,

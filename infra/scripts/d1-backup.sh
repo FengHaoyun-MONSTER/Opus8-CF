@@ -86,8 +86,9 @@ case "$operation" in
     echo "STEP export-d1"
     wrangler d1 export BACKUP_DB --remote \
       --config "$temp_dir/wrangler.toml" \
-      --no-schema \
-      --output "$temp_dir/data.sql" >/dev/null
+      --output "$temp_dir/full-export.sql" >/dev/null
+    python3 infra/scripts/d1-export-data.py \
+      "$temp_dir/full-export.sql" "$temp_dir/data.sql"
     {
       printf '%s\n' '-- Opus8 D1 recovery bundle: authoritative schema followed by exported data.'
       cat packages/control-plane/schema.sql
