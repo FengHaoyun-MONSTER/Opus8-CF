@@ -3,7 +3,29 @@
   "result": "failure",
   "nodeUrl": "",
   "markers": [
-    "STEP compliance-gate"
+    "STEP compliance-gate",
+    "OK compliance-gate",
+    "STEP resolve-registered-transport",
+    "INFO transport path=/ws/9c3efd20351bea7b0629fad8 previous=/ mode=canary legacy=/ legacyUntil=1785652698159",
+    "STEP build",
+    "OK built (OK build: dist/index.js (311643 bytes), patch replaced 961 chars)",
+    "OK policy-test",
+    "STEP probe-landing",
+    "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
+    "STEP kv",
+    "OK kv=40a6527c…",
+    "STEP deploy",
+    "OK deployed workers=https://opus8cf-node-acc1-n1-v2.techtoolhub-office.workers.dev custom=https://acc1-n1-v2.thinderbox.com",
+    "STEP secrets",
+    "OK secrets-bulk hmac+uuid+socks5",
+    "STEP wait-deployed-version",
+    "OK deployed-version-active custom=1 workers=1",
+    "STEP register",
+    "OK registered host=acc1-n1-v2.thinderbox.com transport=/ws/9c3efd20351bea7b0629fad8",
+    "STEP wait-custom-domain",
+    "OK custom-domain-ready",
+    "STEP edge-gateway-regression",
+    "ERROR edge-root-gateway http=200"
   ],
-  "finishedAt": "2026-07-30T06:06:04Z"
+  "finishedAt": "2026-07-30T06:38:28Z"
 }
