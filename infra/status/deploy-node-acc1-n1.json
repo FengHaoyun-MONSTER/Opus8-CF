@@ -6,9 +6,9 @@
     "STEP compliance-gate",
     "OK compliance-gate",
     "STEP resolve-registered-transport",
-    "INFO transport path=/ws/9c3efd20351bea7b0629fad8 previous=/ mode=canary legacy=/ legacyUntil=1785652698159",
+    "INFO transport path=/ws/9c3efd20351bea7b0629fad8 previous=/ws/9c3efd20351bea7b0629fad8 mode=canary legacy=/ legacyUntil=1785653273053",
     "STEP build",
-    "OK built (OK build: dist/index.js (311643 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (311979 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
@@ -25,7 +25,7 @@
     "STEP wait-custom-domain",
     "OK custom-domain-ready",
     "STEP edge-gateway-regression",
-    "ERROR edge-root-gateway http=200"
+    "ERROR wrong-path-websocket-open http=400"
   ],
-  "finishedAt": "2026-07-30T06:38:28Z"
+  "finishedAt": "2026-07-30T06:49:04Z"
 }
