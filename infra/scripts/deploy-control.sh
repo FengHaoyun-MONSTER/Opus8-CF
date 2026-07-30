@@ -226,6 +226,10 @@ if ! node test/subscription-rate-limit-test.mjs >/tmp/sub-rate-test.log 2>&1; th
   echo "ERROR subscription-rate-limit-test"; tail -n 8 /tmp/sub-rate-test.log; exit 12
 fi
 echo "OK subscription-rate-limit-test"
+if ! node test/device-credentials-test.mjs >/tmp/device-credentials-test.log 2>&1; then
+  echo "ERROR device-credentials-test"; tail -n 8 /tmp/device-credentials-test.log; exit 12
+fi
+echo "OK device-credentials-test"
 if ! node test/compliance-test.mjs >/tmp/compliance-test.log 2>&1; then
   echo "ERROR compliance-test"; tail -n 8 /tmp/compliance-test.log; exit 12
 fi
@@ -537,7 +541,7 @@ fi
 ORPH=$(curl -fsS --max-time 15 "$API_URL/api/users" -H "authorization: Bearer $TOK" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const u=JSON.parse(s).users||[];process.stdout.write(u.filter(x=>x.username==="__smoke__").map(x=>x.id).join(" "))}catch(e){}})')
 for id in $ORPH; do curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$id" -H "authorization: Bearer $TOK" >/dev/null; done
 [ -n "$ORPH" ] && echo "OK smoke-cleaned-orphans" || true
-CU=$(curl -fsS --max-time 15 -X POST "$API_URL/api/users" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"username":"__smoke__","durationDays":1}')
+CU=$(curl -fsS --max-time 15 -X POST "$API_URL/api/users" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"username":"__smoke__","durationDays":1,"trafficLimitBytes":1048576}')
 SUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.id||"")}catch(e){process.stdout.write("")}})')
 SUB=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).subUrl||"")}catch(e){process.stdout.write("")}})')
 SUUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.uuid||"")}catch(e){process.stdout.write("")}})')
@@ -594,7 +598,7 @@ fi
 echo "OK hmac-v2-method-path-body-identity-bound"
 
 for suffix in a b c; do
-  ADMISSION_BODY=$(SUUID="$SUUID" SUFFIX="$suffix" node -e 'process.stdout.write(JSON.stringify({nodeId:"smoke-node",uuid:process.env.SUUID,leaseId:"smoke-lease-"+process.env.SUFFIX,ipHash:"smoke-ip-"+process.env.SUFFIX}))')
+  ADMISSION_BODY=$(SUID="$SUID" SUUID="$SUUID" SUFFIX="$suffix" node -e 'process.stdout.write(JSON.stringify({nodeId:"smoke-node",userId:process.env.SUID,uuid:process.env.SUUID,leaseId:"smoke-lease-"+process.env.SUFFIX,ipHash:"smoke-ip-"+process.env.SUFFIX}))')
   signed_node_post "/api/nodes/admission" "$ADMISSION_BODY" "/tmp/admission-$suffix.json"
 done
 if node -e 'const fs=require("fs");const a=JSON.parse(fs.readFileSync("/tmp/admission-a.json"));const b=JSON.parse(fs.readFileSync("/tmp/admission-b.json"));const c=JSON.parse(fs.readFileSync("/tmp/admission-c.json"));process.exit(a.allowed&&b.allowed&&!c.allowed&&c.reason==="active_ip_limit_exceeded"?0:1)'; then
@@ -604,7 +608,7 @@ else
 fi
 
 BUCKET=$(( $(date +%s) / 3600 * 3600 * 1000 ))
-USAGE_BODY=$(SUUID="$SUUID" BUCKET="$BUCKET" node -e 'process.stdout.write(JSON.stringify({nodeId:"smoke-node",events:[{id:"smoke-node:usage-event",uuid:process.env.SUUID,connections:1,bytesUp:111,bytesDown:222,tsBucket:Number(process.env.BUCKET)}]}))')
+USAGE_BODY=$(SUID="$SUID" SUUID="$SUUID" BUCKET="$BUCKET" node -e 'process.stdout.write(JSON.stringify({nodeId:"smoke-node",events:[{id:"smoke-node:usage-event",userId:process.env.SUID,uuid:process.env.SUUID,connections:1,bytesUp:111,bytesDown:222,tsBucket:Number(process.env.BUCKET)}]}))')
 signed_node_post "/api/nodes/usage" "$USAGE_BODY" /tmp/usage-1.json
 signed_node_post "/api/nodes/usage" "$USAGE_BODY" /tmp/usage-2.json
 USERS_AFTER=$(curl -fsS --max-time 15 "$API_URL/api/users" -H "authorization: Bearer $TOK")
@@ -650,7 +654,7 @@ fi
 SUBBODY=$(curl -fsS -D /tmp/sub.headers --max-time 20 "$SUB")
 if [ -n "$SUBBODY" ]; then echo "OK smoke-subscription"; else echo "ERROR smoke-subscription"; exit 22; fi
 if grep -qi '^cache-control:.*private.*no-store' /tmp/sub.headers \
-  && grep -qi '^x-opus8-subscription-protection:[[:space:]]*rate-limit-v1' /tmp/sub.headers; then
+  && grep -qi '^x-opus8-subscription-protection:[[:space:]]*device-token-v1' /tmp/sub.headers; then
   echo "OK smoke-subscription-rate-limit-binding"
 else
   echo "ERROR smoke-subscription-protection-headers"; exit 24
