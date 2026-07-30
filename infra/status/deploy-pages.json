@@ -8,7 +8,7 @@
     "OK built",
     "STEP pages-project",
     "STEP deploy",
-    "OK deployed deploy=https://6d2d47c2.opus8cf-admin-openal.pages.dev",
+    "OK deployed deploy=https://3033a87d.opus8cf-admin-openal.pages.dev",
     "DONE url=https://opus8cf-admin-openal.pages.dev"
   ],
   "tail": [
@@ -18,8 +18,8 @@
     "OK built",
     "STEP pages-project",
     "STEP deploy",
-    "OK deployed deploy=https://6d2d47c2.opus8cf-admin-openal.pages.dev",
+    "OK deployed deploy=https://3033a87d.opus8cf-admin-openal.pages.dev",
     "DONE url=https://opus8cf-admin-openal.pages.dev"
   ],
-  "finishedAt": "2026-07-30T07:53:04Z"
+  "finishedAt": "2026-07-30T12:30:48Z"
 }
