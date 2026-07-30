@@ -1,14 +1,14 @@
 {
   "node": "acc2-n1",
-  "result": "failure",
+  "result": "cancelled",
   "nodeUrl": "",
   "markers": [
     "STEP compliance-gate",
     "OK compliance-gate",
     "STEP resolve-registered-transport",
-    "INFO transport path=/ws/cd1848676213389eaa88ff87 previous=/ mode=canary legacy=/ legacyUntil=1785652730795",
+    "INFO transport path=/ws/cd1848676213389eaa88ff87 previous=/ws/cd1848676213389eaa88ff87 mode=canary legacy=/ legacyUntil=1785653371851",
     "STEP build",
-    "OK built (OK build: dist/index.js (311643 bytes), patch replaced 961 chars)",
+    "OK built (OK build: dist/index.js (311979 bytes), patch replaced 961 chars)",
     "OK policy-test",
     "STEP probe-landing",
     "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
@@ -20,12 +20,7 @@
     "OK secrets-bulk hmac+uuid+socks5",
     "STEP wait-deployed-version",
     "OK deployed-version-active custom=1 workers=1",
-    "STEP register",
-    "OK registered host=acc2-n1.openal.uk transport=/ws/cd1848676213389eaa88ff87",
-    "STEP wait-custom-domain",
-    "OK custom-domain-ready",
-    "STEP edge-gateway-regression",
-    "ERROR legacy-edge-route-open method=POST route=/admin http=400"
+    "STEP register"
   ],
-  "finishedAt": "2026-07-30T06:39:26Z"
+  "finishedAt": "2026-07-30T06:50:12Z"
 }
