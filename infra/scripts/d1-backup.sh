@@ -91,8 +91,12 @@ case "$operation" in
     {
       printf '%s\n' '-- Opus8 D1 recovery bundle: authoritative schema followed by exported data.'
       cat packages/control-plane/schema.sql
+      printf '\n%s\n' \
+        "DELETE FROM runtime_state WHERE key='edge_policy_version' AND value=1 AND updated_at=0;"
       printf '\n%s\n' 'PRAGMA defer_foreign_keys = true;'
       cat "$temp_dir/data.sql"
+      printf '\n%s\n' \
+        "INSERT OR IGNORE INTO runtime_state (key, value, updated_at) VALUES ('edge_policy_version', 1, 0);"
     } >"$temp_dir/export.sql"
     [ -s "$temp_dir/export.sql" ] || {
       echo "ERROR D1 export is empty" >&2

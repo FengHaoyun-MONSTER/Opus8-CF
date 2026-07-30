@@ -80,6 +80,16 @@ assert.match(
   /cat packages\/control-plane\/schema\.sql[\s\S]*cat "\$temp_dir\/data\.sql"/,
   "backup bundle must place the authoritative schema before data",
 );
+assert.match(
+  backupScript,
+  /DELETE FROM runtime_state WHERE key='edge_policy_version' AND value=1 AND updated_at=0;/,
+  "the schema seed must be removed before restoring the authoritative runtime_state row",
+);
+assert.match(
+  backupScript,
+  /INSERT OR IGNORE INTO runtime_state \(key, value, updated_at\) VALUES \('edge_policy_version', 1, 0\);/,
+  "the runtime_state seed must be restored only when the backup had no row",
+);
 
 const backupWorkflow = await readFile(
   join(repoRoot, ".github", "workflows", "d1-backup.yml"),
