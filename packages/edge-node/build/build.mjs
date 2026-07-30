@@ -128,18 +128,44 @@ patchedCore = patchedCore.slice(0, uuidMatchStart) + uuidMatchBlock + patchedCor
 
 // --- 补丁5：允许 SOCKS5 连接函数接收每次请求选择出的落地凭据，避免多落地并发串线。---
 const socksFunctionNeedle = "async function socks5Connect(targetHost, targetPort, initialData, TCP连接) {";
+const socksFunctionEndNeedle = "\nasync function httpConnect(";
 const socksCredentialNeedle = "\tconst { username, password, hostname, port } = parsedSocks5Address;";
-if (!patchedCore.includes(socksFunctionNeedle) || !patchedCore.includes(socksCredentialNeedle)) {
+const socksFunctionStart = patchedCore.indexOf(socksFunctionNeedle);
+const socksFunctionEnd = patchedCore.indexOf(socksFunctionEndNeedle, socksFunctionStart);
+if (socksFunctionStart === -1 || socksFunctionEnd === -1) {
+  throw new Error("PATCH5 FAIL: 找不到 SOCKS5 函数边界");
+}
+let socksFunctionBlock = patchedCore.slice(socksFunctionStart, socksFunctionEnd);
+if (
+  socksFunctionBlock.split(socksFunctionNeedle).length !== 2 ||
+  socksFunctionBlock.split(socksCredentialNeedle).length !== 2
+) {
   throw new Error("PATCH5 FAIL: 找不到 SOCKS5 函数或凭据读取");
 }
-patchedCore = patchedCore.replace(
+socksFunctionBlock = socksFunctionBlock.replace(
   socksFunctionNeedle,
   "async function socks5Connect(targetHost, targetPort, initialData, TCP连接, OPUS8_proxyAddress = null) {",
 );
-patchedCore = patchedCore.replace(
+socksFunctionBlock = socksFunctionBlock.replace(
   socksCredentialNeedle,
   "\tconst { username, password, hostname, port } = OPUS8_proxyAddress || parsedSocks5Address;",
 );
+if (
+  !socksFunctionBlock.includes("OPUS8_proxyAddress || parsedSocks5Address") ||
+  socksFunctionBlock.includes(socksFunctionNeedle) ||
+  socksFunctionBlock.includes(socksCredentialNeedle)
+) {
+  throw new Error("PATCH5 FAIL: 动态落地凭据未正确挂载到 SOCKS5 函数");
+}
+patchedCore =
+  patchedCore.slice(0, socksFunctionStart) +
+  socksFunctionBlock +
+  patchedCore.slice(socksFunctionEnd);
+
+const dynamicCredentialReads = patchedCore.match(/OPUS8_proxyAddress \|\| parsedSocks5Address/g) || [];
+if (dynamicCredentialReads.length !== 1) {
+  throw new Error(`PATCH5 FAIL: 动态落地凭据读取命中 ${dynamicCredentialReads.length} 次，预期 1 次`);
+}
 
 // --- 补丁6：VLESS WebSocket 准入与双向字节计量。 ---
 const wsCallNeedle = "return await 处理WS请求(request, activeUUIDs, url);";
