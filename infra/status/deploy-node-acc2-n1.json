@@ -1,12 +1,12 @@
 {
   "node": "acc2-n1",
-  "result": "cancelled",
-  "nodeUrl": "",
+  "result": "success",
+  "nodeUrl": "https://acc2-n1.openal.uk",
   "markers": [
     "STEP compliance-gate",
     "OK compliance-gate",
     "STEP resolve-registered-transport",
-    "INFO transport path=/ws/cd1848676213389eaa88ff87 previous=/ws/cd1848676213389eaa88ff87 mode=canary legacy=/ legacyUntil=1785653371851",
+    "INFO transport path=/ws/cd1848676213389eaa88ff87 previous=/ws/cd1848676213389eaa88ff87 mode=canary legacy=/ legacyUntil=1785653621719",
     "STEP build",
     "OK built (OK build: dist/index.js (311979 bytes), patch replaced 961 chars)",
     "OK policy-test",
@@ -20,7 +20,26 @@
     "OK secrets-bulk hmac+uuid+socks5",
     "STEP wait-deployed-version",
     "OK deployed-version-active custom=1 workers=1",
-    "STEP register"
+    "STEP register",
+    "OK registered host=acc2-n1.openal.uk transport=/ws/cd1848676213389eaa88ff87",
+    "STEP wait-custom-domain",
+    "OK custom-domain-ready",
+    "STEP edge-gateway-regression",
+    "OK edge-gateway-legacy-routes-closed",
+    "STEP verify",
+    "OK node-tls-http=200",
+    "OK uuids-endpoint-count=1",
+    "OK landing-bundle-encrypted",
+    "STEP canary-user",
+    "OK maintenance-canary-uses-node-fallback",
+    "STEP policy-status",
+    "INFO policy-status={\"invalidatedVersion\":1785335755784,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785394463100,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785335755784,\"liveUuidCount\":1,\"liveContainsUuid\":false,\"liveError\":\"\"}",
+    "STEP vless-smoke",
+    "OK vless-ws-auth-egress vantage=github-runner",
+    "STEP transport-legacy-canary",
+    "OK transport-legacy-grace",
+    "OK unlock=on(AI域名走落地)",
+    "DONE url=https://acc2-n1.openal.uk"
   ],
-  "finishedAt": "2026-07-30T06:50:12Z"
+  "finishedAt": "2026-07-30T06:54:27Z"
 }
