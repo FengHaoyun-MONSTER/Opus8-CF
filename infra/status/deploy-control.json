@@ -1,6 +1,6 @@
 {
-  "result": "failure",
-  "controlUrl": "",
+  "result": "success",
+  "controlUrl": "https://api.thinderbox.com",
   "markers": [
     "STEP compliance-policy",
     "OK compliance-policy provisioning=1 enforcement=observe-only policy=cloudflare-data-plane-v1",
@@ -14,6 +14,7 @@
     "OK key-rotation-test",
     "OK d1-backup-test",
     "OK subscription-rate-limit-test",
+    "OK device-credentials-test",
     "OK compliance-test",
     "OK resource-audit-test",
     "OK transport-path-test",
@@ -48,23 +49,37 @@
     "OK smoke-landings count=3",
     "OK smoke-landing-socks5",
     "OK smoke-unlock-hosts count=62",
+    "OK smoke-cleaned-orphans",
     "OK smoke-create-user(D1-write)",
     "STEP hmac-v2-regression",
-    "OK hmac-v2-method-path-body-identity-bound"
+    "OK hmac-v2-method-path-body-identity-bound",
+    "OK smoke-active-ip-limit",
+    "OK smoke-idempotent-usage",
+    "OK smoke-operations-overview",
+    "OK smoke-alert-history-d1-kv-writes=0",
+    "OK smoke-node-health-overview",
+    "OK smoke-user-activity",
+    "OK smoke-subscription",
+    "OK smoke-subscription-rate-limit-binding",
+    "OK smoke-subscription-usage",
+    "OK smoke-sub-has-node",
+    "OK smoke-sub-optimized-ip-safe count=8",
+    "OK smoke-cleanup",
+    "DONE url=https://api.thinderbox.com"
   ],
   "tail": [
-    "OK smoke-compliance-state provisioning=1",
-    "OK <redacted> unreadable=0",
-    "STEP cors-regression",
-    "OK cors-admin-only",
-    "STEP ensure-default-landing",
-    "OK smoke-landings count=3",
-    "OK smoke-landing-socks5",
-    "OK smoke-unlock-hosts count=62",
-    "OK smoke-create-user(D1-write)",
-    "STEP hmac-v2-regression",
+    "OK smoke-idempotent-usage",
     "OK <redacted>",
-    "curl: (22) The requested URL returned error: 400"
+    "OK <redacted>=0",
+    "OK <redacted>",
+    "OK smoke-user-activity",
+    "OK smoke-subscription",
+    "OK <redacted>",
+    "OK <redacted>",
+    "OK smoke-sub-has-node",
+    "OK <redacted> count=8",
+    "OK smoke-cleanup",
+    "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-07-30T12:31:00Z"
+  "finishedAt": "2026-07-30T12:37:20Z"
 }
