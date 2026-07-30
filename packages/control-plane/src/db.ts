@@ -30,6 +30,7 @@ export interface Env {
   SUB_RATE_LIMIT_REQUIRED?: string;
   COMPLIANCE_PROXY_ALLOWED?: string;
   COMPLIANCE_POLICY_ID?: string;
+  COMPLIANCE_MAINTENANCE_NODE_IDS?: string;
   SUB_SOURCE_RATE_LIMITER?: RateLimit;
   SUB_TOKEN_RATE_LIMITER?: RateLimit;
 }
@@ -111,6 +112,17 @@ export async function listNodes(env: Env): Promise<NodeRecord[]> {
      ORDER BY n.created_at DESC`,
   ).all<NodeRecord>();
   return results ?? [];
+}
+
+export async function getNode(
+  env: Env,
+  id: string,
+): Promise<NodeRecord | null> {
+  return (
+    (await env.DB.prepare("SELECT * FROM nodes WHERE id=?1")
+      .bind(id)
+      .first<NodeRecord>()) ?? null
+  );
 }
 
 export async function upsertNode(env: Env, n: NodeRecord): Promise<void> {

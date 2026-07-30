@@ -19,6 +19,7 @@ import {
 import {
   type Env,
   listNodes,
+  getNode,
   upsertNode,
   touchNode,
   listUsers,
@@ -76,6 +77,7 @@ import {
 import {
   complianceStatus,
   domainScopeIncreases,
+  maintenanceNodeAllowed,
   proxyProvisioningAllowed,
   trafficLimitIncreases,
 } from "./compliance";
@@ -639,15 +641,39 @@ export default {
       if (p === "/api/nodes/register" && m === "POST") {
         const body = await req.text();
         const auth = await verifyNodeSig(req, env, body);
-        if (auth && !proxyProvisioningAllowed(env)) {
-          return err(
-            "Edge node registration is locked pending documented Cloudflare authorization",
-            403,
-          );
-        }
         if (!auth) return err("签名校验失败", 401);
         const b = JSON.parse(body) as RegisterRequest;
         if (b.nodeId !== auth.nodeId) return err("节点身份不匹配", 401);
+        if (
+          typeof b.accountAlias !== "string" ||
+          !b.accountAlias ||
+          typeof b.hostname !== "string" ||
+          !b.hostname.trim()
+        ) {
+          return err("节点账号或域名无效", 400);
+        }
+        if (!proxyProvisioningAllowed(env)) {
+          const existing = await getNode(env, auth.nodeId);
+          const requestedHostname = b.hostname
+            .trim()
+            .toLowerCase()
+            .replace(/\.$/, "");
+          const existingHostname = existing?.hostname
+            .trim()
+            .toLowerCase()
+            .replace(/\.$/, "");
+          if (
+            !maintenanceNodeAllowed(env, auth.nodeId) ||
+            !existing ||
+            existing.account_alias !== b.accountAlias ||
+            existingHostname !== requestedHostname
+          ) {
+            return err(
+              "Only exact in-place maintenance of an existing edge node is allowed while provisioning is locked",
+              403,
+            );
+          }
+        }
         let transportPath: string | null = null;
         if (b.transportPath !== undefined) {
           transportPath = normalizeTransportPath(b.transportPath);

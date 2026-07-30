@@ -46,8 +46,8 @@
    `HMAC_V1_ACCEPT_UNTIL` 和 `HMAC_V1_NODE_IDS`，部署不会自动延长兼容期；
 2. v1 仅允许白名单中的四个存量节点调用心跳、UUID 拉取、准入和用量接口，不能注册节点，
    不能访问带查询参数或其他路径；控制面也只向这些节点发送 v1/v2 双签名的缓存失效通知；
-3. 取得 Cloudflare 对当前数据面形态的明确书面许可并通过门禁后，再运行 `deploy-nodes`，
-   逐台把存量节点升级到 v2；
+3. 手动运行 `deploy-nodes` 并选择 `operation=maintenance`，逐台把身份不变的存量节点升级到 v2；
+   新增节点则必须取得覆盖当前数据面形态的明确书面许可，并选择 `operation=provision`；
 4. 全部节点完成升级后应提前删除 v1 兼容；最迟在策略中的 2027-07-29 截止时间自动失效。
    不得通过重新部署或修改脚本静默顺延。
 
@@ -122,15 +122,20 @@ Wrangler 4.36+，仓库和 CI 已固定到 4.115.0。
 
 ### Cloudflare 数据面合规门禁
 
-节点部署不再由控制面发布自动触发，只能手动运行 `deploy-nodes`。脚本在构建、登录控制面或调用
-Cloudflare 写 API 之前读取 `infra/compliance-policy.json`；许可未批准、已过期、Secret 摘要不匹配、
-账号/节点不在许可范围或策略复核过期时都会停止。
+节点部署不再由控制面发布自动触发，只能手动运行 `deploy-nodes`，并明确选择操作类型：
+
+- `operation=maintenance`：只维护已有节点。策略清单中的 node ID、账号别名和 Worker 名称必须精确匹配，
+  且控制面 D1 必须已有相同 node ID、账号别名和域名；不依赖扩容许可，但策略复核过期仍会停止。
+- `operation=provision`：只创建尚未登记的新节点。脚本在任何 Cloudflare 写 API 之前校验书面许可状态、
+  有效期、Secret 摘要、完整账号/节点范围和声明拓扑；任一条件不满足都会停止。
+
+两种操作不能互相代替：已有节点选择 `provision` 会失败，未登记节点选择 `maintenance` 也会失败。
 
 控制面部署本身仍可执行安全修复，但会把门禁结果写入 `COMPLIANCE_PROXY_ALLOWED`。当结果为 `0` 时，
 管理 API 拒绝新增放量，生产 smoke test 改为验证拒绝逻辑，不会创建临时代理用户。完整启用和应急流程见
 [`P6.8-CLOUDFLARE-COMPLIANCE.md`](P6.8-CLOUDFLARE-COMPLIANCE.md)。
-由于这是全局开关，书面许可必须覆盖策略声明的两个账号和四个现有节点；只覆盖单个节点的许可不会开启
-控制面放量，也不会允许节点部署。
+由于这是全局扩容开关，书面许可必须覆盖策略声明的全部账号和节点；只覆盖部分节点的许可不会开启
+控制面放量，也不会允许 `provision`。它不会阻止身份完全不变的 `maintenance` 安全更新。
 
 每周 `compliance-audit` 只读查询两个账号的 Worker 清单和 GraphQL Workers 指标。现有 API Token
 还需要 `Account Analytics: Read`；该工作流不写 KV/D1，也不发送外部通知。
@@ -149,8 +154,8 @@ Cloudflare 写 API 之前读取 `infra/compliance-policy.json`；许可未批准
 - SOCKS5 全局开关。
 - 使用 `NODE_HMAC_SECRET` 加密的多落地机运行时配置包。
 
-修改默认清单并推送 `main` 会触发 `deploy-control`；只有合规门禁通过后，才可再手动触发
-`deploy-nodes`。
+修改默认清单并推送 `main` 会触发 `deploy-control`。已有节点如需代码更新，可再手动触发
+`deploy-nodes` 并选择 `maintenance`；新增节点必须选择 `provision` 并通过扩容门禁。
 
 ## 多落地机
 

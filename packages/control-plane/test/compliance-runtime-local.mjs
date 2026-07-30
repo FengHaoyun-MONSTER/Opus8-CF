@@ -42,6 +42,10 @@ function seedDatabase() {
   ]);
   const now = Date.now();
   const sql = `
+    INSERT INTO nodes
+      (id,account_alias,hostname,region,capabilities,preferred_ip,transport_path,health,enabled,last_seen,created_at)
+    VALUES
+      ('acc1-n1','acc1','acc1-n1.example.com','test','["vless","ws"]',NULL,'/','healthy',1,${now},${now});
     INSERT INTO users
       (id,username,uuid,plan_id,node_group,unlock,sub_token,expire_at,enabled,created_at)
     VALUES
@@ -96,7 +100,7 @@ async function waitUntilReady(base, worker, logs) {
   throw new Error(`local worker did not become ready:\n${logs.join("")}`);
 }
 
-function signedRegister(base, nodeId) {
+function signedRegister(base, nodeId, overrides = {}) {
   const body = JSON.stringify({
     nodeId,
     accountAlias: "acc1",
@@ -104,6 +108,7 @@ function signedRegister(base, nodeId) {
     region: "test",
     capabilities: ["vless", "ws"],
     transportPath: "/ws/compliance-runtime",
+    ...overrides,
   });
   const timestamp = String(Date.now());
   const signature = crypto
@@ -159,6 +164,8 @@ const worker = spawn(
     "COMPLIANCE_PROXY_ALLOWED:0",
     "--var",
     "COMPLIANCE_POLICY_ID:cloudflare-data-plane-v1",
+    "--var",
+    "COMPLIANCE_MAINTENANCE_NODE_IDS:acc1-n1",
   ],
   {
     cwd: controlRoot,
@@ -229,8 +236,35 @@ try {
   });
   assert(decrease.ok, "capacity reduction must remain available");
 
-  const register = await signedRegister(base, "acc1-n1");
-  assert(register.status === 403, "new node registration must be blocked");
+  const registerNew = await signedRegister(base, "acc1-n2");
+  assert(registerNew.status === 403, "new node registration must be blocked");
+
+  const maintainExisting = await signedRegister(base, "acc1-n1");
+  assert(
+    maintainExisting.ok,
+    "exact in-place registration of an existing node must remain available",
+  );
+  const maintained = await maintainExisting.json();
+  assert(
+    maintained.transportPath === "/ws/compliance-runtime",
+    "maintenance registration must update the transport path",
+  );
+
+  const changeAccount = await signedRegister(base, "acc1-n1", {
+    accountAlias: "acc2",
+  });
+  assert(
+    changeAccount.status === 403,
+    "maintenance registration must not move an existing node to another account",
+  );
+
+  const changeHostname = await signedRegister(base, "acc1-n1", {
+    hostname: "replacement.example.com",
+  });
+  assert(
+    changeHostname.status === 403,
+    "maintenance registration must not change an existing node hostname",
+  );
 
   const optimized = await fetch(`${base}/api/optimized-ips`, {
     method: "POST",

@@ -1,6 +1,7 @@
 export interface ComplianceEnv {
   COMPLIANCE_PROXY_ALLOWED?: string;
   COMPLIANCE_POLICY_ID?: string;
+  COMPLIANCE_MAINTENANCE_NODE_IDS?: string;
 }
 
 export interface ComplianceStatus {
@@ -25,6 +26,17 @@ export function complianceStatus(env: ComplianceEnv): ComplianceStatus {
 
 export function proxyProvisioningAllowed(env: ComplianceEnv): boolean {
   return complianceStatus(env).proxyProvisioningAllowed;
+}
+
+export function maintenanceNodeAllowed(
+  env: ComplianceEnv,
+  nodeId: string,
+): boolean {
+  return (env.COMPLIANCE_MAINTENANCE_NODE_IDS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .includes(nodeId);
 }
 
 export function trafficLimitIncreases(

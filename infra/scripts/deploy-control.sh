@@ -10,12 +10,16 @@ COMPLIANCE_PROXY_ALLOWED="$(printf '%s\n' "$COMPLIANCE_ENV" \
   | sed -n 's/^COMPLIANCE_PROXY_ALLOWED=//p')"
 COMPLIANCE_POLICY_ID="$(printf '%s\n' "$COMPLIANCE_ENV" \
   | sed -n 's/^COMPLIANCE_POLICY_ID=//p')"
+COMPLIANCE_MAINTENANCE_NODE_IDS="$(printf '%s\n' "$COMPLIANCE_ENV" \
+  | sed -n 's/^COMPLIANCE_MAINTENANCE_NODE_IDS=//p')"
 HMAC_V1_ACCEPT_UNTIL="$(printf '%s\n' "$COMPLIANCE_ENV" \
   | sed -n 's/^HMAC_V1_ACCEPT_UNTIL=//p')"
 HMAC_V1_NODE_IDS="$(printf '%s\n' "$COMPLIANCE_ENV" \
   | sed -n 's/^HMAC_V1_NODE_IDS=//p')"
 if ! printf '%s' "$COMPLIANCE_PROXY_ALLOWED" | grep -Eq '^[01]$' \
   || ! printf '%s' "$COMPLIANCE_POLICY_ID" | grep -Eq '^[a-z0-9-]+$' \
+  || ! printf '%s' "$COMPLIANCE_MAINTENANCE_NODE_IDS" \
+    | grep -Eq '^[A-Za-z0-9._:-]+(,[A-Za-z0-9._:-]+)*$' \
   || ! printf '%s' "$HMAC_V1_ACCEPT_UNTIL" | grep -Eq '^[0-9]{13}$' \
   || ! printf '%s' "$HMAC_V1_NODE_IDS" \
     | grep -Eq '^[A-Za-z0-9._:-]+(,[A-Za-z0-9._:-]+)*$'; then
@@ -23,6 +27,7 @@ if ! printf '%s' "$COMPLIANCE_PROXY_ALLOWED" | grep -Eq '^[01]$' \
   exit 9
 fi
 export COMPLIANCE_PROXY_ALLOWED COMPLIANCE_POLICY_ID
+export COMPLIANCE_MAINTENANCE_NODE_IDS
 export HMAC_V1_ACCEPT_UNTIL HMAC_V1_NODE_IDS
 echo "OK compliance-policy provisioning=$COMPLIANCE_PROXY_ALLOWED policy=$COMPLIANCE_POLICY_ID"
 cd packages/control-plane
@@ -126,6 +131,7 @@ HMAC_V1_NODE_IDS = "$HMAC_V1_NODE_IDS"
 SUB_RATE_LIMIT_REQUIRED = "1"
 COMPLIANCE_PROXY_ALLOWED = "$COMPLIANCE_PROXY_ALLOWED"
 COMPLIANCE_POLICY_ID = "$COMPLIANCE_POLICY_ID"
+COMPLIANCE_MAINTENANCE_NODE_IDS = "$COMPLIANCE_MAINTENANCE_NODE_IDS"
 
 [[ratelimits]]
 name = "SUB_SOURCE_RATE_LIMITER"

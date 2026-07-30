@@ -4,6 +4,7 @@
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
 #   CONTROL_ROOT_DOMAIN / ROOT_DOMAIN / NODE_HMAC_SECRET / NODE_ID / NODE_ACCOUNT_ALIAS / NODE_REGION
 #   NODE_DEPLOY_SUFFIX  (可选，例如 -v2，用于无损替换异常 Worker 槽位)
+#   NODE_DEPLOY_OPERATION=maintenance|provision（缺省 maintenance）
 #   NODE_TRANSPORT_PATH (可选；缺省时按节点稳定派生)
 #   TRANSPORT_MIGRATION_MODE=canary|strict（缺省 canary，上一条路径保留 72 小时）
 #   SERVICES_IP / SOCKS_USER / SOCKS_PASSWORD  (SOCKS5，可缺省 -> 纯 CF 出口)
@@ -32,9 +33,15 @@ CUSTOM_HOST="${NODE_ID}${NODE_DEPLOY_SUFFIX}.${ROOT_DOMAIN}"
 CUSTOM_URL="https://${CUSTOM_HOST}"
 WORKER_NAME="opus8cf-node-${NODE_ID}${NODE_DEPLOY_SUFFIX}"
 OPUS8_BUILD_ID="${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
+NODE_DEPLOY_OPERATION="${NODE_DEPLOY_OPERATION:-maintenance}"
+case "$NODE_DEPLOY_OPERATION" in
+  maintenance) COMPLIANCE_GATE_MODE=node-maintenance ;;
+  provision) COMPLIANCE_GATE_MODE=node-provision ;;
+  *) echo "ERROR invalid-node-deploy-operation"; exit 9 ;;
+esac
 echo "STEP compliance-gate"
 node "$REPO_ROOT/infra/scripts/compliance-gate.mjs" \
-  --mode node-deploy \
+  --mode "$COMPLIANCE_GATE_MODE" \
   --node-id "$NODE_ID" \
   --account-alias "$NODE_ACCOUNT_ALIAS" \
   --worker-name "$WORKER_NAME"
@@ -77,15 +84,30 @@ CONTROL_ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
 echo "::add-mask::$CONTROL_ADMIN_TOKEN"
 REGISTERED_NODES=$(curl -fsS --max-time 20 "$CONTROL_PLANE_URL/api/nodes" \
   -H "authorization: Bearer $CONTROL_ADMIN_TOKEN")
-PREVIOUS_TRANSPORT_PATH=$(printf '%s' "$REGISTERED_NODES" \
-  | NODE_ID="$NODE_ID" node -e '
+if ! PREVIOUS_TRANSPORT_PATH=$(printf '%s' "$REGISTERED_NODES" \
+  | NODE_ID="$NODE_ID" NODE_ACCOUNT_ALIAS="$NODE_ACCOUNT_ALIAS" \
+    CUSTOM_HOST="$CUSTOM_HOST" NODE_DEPLOY_OPERATION="$NODE_DEPLOY_OPERATION" \
+    node -e '
       let s="";
       process.stdin.on("data",d=>s+=d).on("end",()=>{
         const nodes=JSON.parse(s).nodes||[];
         const node=nodes.find(x=>x.id===process.env.NODE_ID);
+        if(process.env.NODE_DEPLOY_OPERATION==="maintenance"){
+          const normalize=x=>String(x||"").trim().toLowerCase().replace(/\.$/,"");
+          if(!node||
+            node.account_alias!==process.env.NODE_ACCOUNT_ALIAS||
+            normalize(node.hostname)!==normalize(process.env.CUSTOM_HOST)){
+            process.exit(2);
+          }
+        }else if(node){
+          process.exit(3);
+        }
         process.stdout.write(String(node?.transport_path||"/"));
       });
-    ')
+    '); then
+  echo "ERROR node-operation-state-mismatch operation=$NODE_DEPLOY_OPERATION"
+  exit 9
+fi
 if ! PREVIOUS_TRANSPORT_PATH=$(normalize_transport_path "$PREVIOUS_TRANSPORT_PATH"); then
   echo "ERROR invalid-registered-transport-path"
   exit 9

@@ -6,7 +6,21 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const defaultPolicyPath = resolve(here, "..", "compliance-policy.json");
-const DATA_PLANE_MODES = new Set(["node-deploy", "data-plane-test"]);
+const NODE_SCOPED_MODES = new Set([
+  "node-maintenance",
+  "node-provision",
+  "node-deploy",
+  "data-plane-test",
+]);
+const PERMISSION_GATED_MODES = new Set([
+  "node-provision",
+  "node-deploy",
+  "data-plane-test",
+]);
+const EXIT_GATED_MODES = new Set([
+  "node-maintenance",
+  ...PERMISSION_GATED_MODES,
+]);
 const LEGACY_ALLOWED_TARGETS = [
   "POST /api/nodes/heartbeat",
   "POST /api/nodes/admission",
@@ -191,6 +205,12 @@ function topologyNode(policy, nodeId) {
   return null;
 }
 
+function topologyNodeIds(policy) {
+  return Object.values(policy.currentTopology.accounts).flatMap((account) =>
+    account.nodes.map((node) => node.id),
+  );
+}
+
 export function evaluateCompliance(
   policy,
   {
@@ -204,7 +224,13 @@ export function evaluateCompliance(
   } = {},
 ) {
   validatePolicy(policy);
-  if (!["audit", "control-maintenance", ...DATA_PLANE_MODES].includes(mode)) {
+  if (
+    ![
+      "audit",
+      "control-maintenance",
+      ...NODE_SCOPED_MODES,
+    ].includes(mode)
+  ) {
     fail(`unsupported gate mode: ${mode}`);
   }
   const nowMs = now instanceof Date ? now.getTime() : Date.parse(String(now));
@@ -212,81 +238,132 @@ export function evaluateCompliance(
 
   const reviewedAt = Date.parse(policy.reviewedAt);
   const reviewAgeDays = Math.floor((nowMs - reviewedAt) / 86_400_000);
-  const reasons = [];
+  const policyReasons = [];
   if (reviewAgeDays < 0 || reviewAgeDays > policy.reviewMaxAgeDays) {
-    reasons.push("policy_review_stale");
+    policyReasons.push("policy_review_stale");
   }
 
   const permission = policy.writtenPermission;
+  const permissionReasons = [];
   if (permission.status !== "approved") {
-    reasons.push(`written_permission_${permission.status}`);
+    permissionReasons.push(`written_permission_${permission.status}`);
   } else {
     if (!/^[a-f0-9]{64}$/.test(permission.referenceSha256 || "")) {
-      reasons.push("permission_reference_hash_missing");
+      permissionReasons.push("permission_reference_hash_missing");
     } else if (
       !permissionReference ||
       sha256(permissionReference) !== permission.referenceSha256
     ) {
-      reasons.push("permission_reference_mismatch");
+      permissionReasons.push("permission_reference_mismatch");
     }
     const approvedAt = Date.parse(permission.approvedAt || "");
     const expiresAt = Date.parse(permission.expiresAt || "");
     if (!Number.isFinite(approvedAt) || approvedAt > nowMs) {
-      reasons.push("permission_approval_date_invalid");
+      permissionReasons.push("permission_approval_date_invalid");
     }
     if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) {
-      reasons.push("permission_expired");
+      permissionReasons.push("permission_expired");
     }
   }
 
-  if (mode === "control-maintenance" || DATA_PLANE_MODES.has(mode)) {
-    const topologyAliases = Object.keys(policy.currentTopology.accounts);
-    const topologyNodes = topologyAliases.flatMap((alias) =>
-      policy.currentTopology.accounts[alias].nodes.map((node) => node.id),
-    );
-    if (
-      topologyAliases.some(
-        (alias) => !permission.accountAliases.includes(alias),
-      ) ||
-      topologyNodes.some((id) => !permission.nodeIds.includes(id))
-    ) {
-      reasons.push("permission_scope_does_not_cover_current_topology");
-    }
-    if (DATA_PLANE_MODES.has(mode) && !allCurrentNodes) {
-      const registered = topologyNode(policy, nodeId);
-      if (!registered) {
-        reasons.push("node_not_in_declared_topology");
-      } else {
+  const topologyAliases = Object.keys(policy.currentTopology.accounts);
+  const topologyNodes = topologyAliases.flatMap((alias) =>
+    policy.currentTopology.accounts[alias].nodes.map((node) => node.id),
+  );
+  if (
+    topologyAliases.some(
+      (alias) => !permission.accountAliases.includes(alias),
+    ) ||
+    topologyNodes.some((id) => !permission.nodeIds.includes(id))
+  ) {
+    permissionReasons.push("permission_scope_does_not_cover_current_topology");
+  }
+
+  const nodeReasons = [];
+  if (NODE_SCOPED_MODES.has(mode)) {
+    if (allCurrentNodes) {
+      if (mode === "node-maintenance") {
+        nodeReasons.push("maintenance_requires_single_declared_node");
+      }
+    } else {
+      const strictIdentityMode =
+        mode === "node-maintenance" ||
+        mode === "node-provision" ||
+        mode === "node-deploy";
+      if (!nodeId) nodeReasons.push("node_id_required");
+      if (strictIdentityMode && !accountAlias) {
+        nodeReasons.push("node_account_alias_required");
+      }
+      if (strictIdentityMode && !workerName) {
+        nodeReasons.push("node_worker_name_required");
+      }
+      const registered = nodeId ? topologyNode(policy, nodeId) : null;
+      if (nodeId && !registered) {
+        nodeReasons.push("node_not_in_declared_topology");
+      } else if (registered) {
         if (accountAlias && registered.accountAlias !== accountAlias) {
-          reasons.push("node_account_mismatch");
+          nodeReasons.push("node_account_mismatch");
         }
         if (workerName && registered.workerName !== workerName) {
-          reasons.push("node_worker_name_mismatch");
+          nodeReasons.push("node_worker_name_mismatch");
         }
-        if (!permission.accountAliases.includes(registered.accountAlias)) {
-          reasons.push("account_outside_permission_scope");
+        if (
+          PERMISSION_GATED_MODES.has(mode) &&
+          !permission.accountAliases.includes(registered.accountAlias)
+        ) {
+          nodeReasons.push("account_outside_permission_scope");
         }
-        if (!permission.nodeIds.includes(registered.id)) {
-          reasons.push("node_outside_permission_scope");
+        if (
+          PERMISSION_GATED_MODES.has(mode) &&
+          !permission.nodeIds.includes(registered.id)
+        ) {
+          nodeReasons.push("node_outside_permission_scope");
         }
       }
     }
   }
 
-  const allowed = reasons.length === 0;
+  const proxyProvisioningReasons = [
+    ...policyReasons,
+    ...permissionReasons,
+  ];
+  const proxyProvisioningAllowed = proxyProvisioningReasons.length === 0;
+  let reasons;
+  let warnings = [];
+  let operationAllowed;
+  if (mode === "node-maintenance") {
+    reasons = [...policyReasons, ...nodeReasons];
+    warnings = [...permissionReasons];
+    operationAllowed = reasons.length === 0;
+  } else if (mode === "control-maintenance") {
+    reasons = [];
+    warnings = [...proxyProvisioningReasons];
+    operationAllowed = true;
+  } else if (mode === "audit") {
+    reasons = [...proxyProvisioningReasons];
+    operationAllowed = proxyProvisioningAllowed;
+  } else {
+    reasons = [
+      ...proxyProvisioningReasons,
+      ...nodeReasons,
+    ];
+    operationAllowed = reasons.length === 0;
+  }
   return {
     schemaVersion: policy.schemaVersion,
     policyId: policy.policyId,
     reviewedAt: policy.reviewedAt,
     reviewAgeDays,
     permissionStatus: permission.status,
-    proxyProvisioningAllowed: allowed,
+    operationAllowed,
+    proxyProvisioningAllowed,
     legacyNodeCompatibilityUntil: Date.parse(
       policy.legacyNodeCompatibility.expiresAt,
     ),
     legacyNodeIds: [...policy.legacyNodeCompatibility.nodeIds],
     mode,
     reasons: [...new Set(reasons)],
+    warnings: [...new Set(warnings)],
   };
 }
 
@@ -340,19 +417,22 @@ async function main() {
     process.stdout.write(
       `COMPLIANCE_PROXY_ALLOWED=${result.proxyProvisioningAllowed ? "1" : "0"}\n` +
         `COMPLIANCE_POLICY_ID=${result.policyId}\n` +
+        `COMPLIANCE_MAINTENANCE_NODE_IDS=${topologyNodeIds(policy).join(",")}\n` +
         `HMAC_V1_ACCEPT_UNTIL=${result.legacyNodeCompatibilityUntil}\n` +
         `HMAC_V1_NODE_IDS=${result.legacyNodeIds.join(",")}\n`,
     );
   } else {
-    const label = result.proxyProvisioningAllowed ? "ALLOW" : "BLOCK";
+    const label = result.operationAllowed ? "ALLOW" : "BLOCK";
     process.stdout.write(
       `${label} compliance mode=${result.mode} permission=${result.permissionStatus}` +
-        ` reasons=${result.reasons.join(",") || "none"}\n`,
+        ` provisioning=${result.proxyProvisioningAllowed ? "1" : "0"}` +
+        ` reasons=${result.reasons.join(",") || "none"}` +
+        ` warnings=${result.warnings.join(",") || "none"}\n`,
     );
   }
   if (
-    DATA_PLANE_MODES.has(options.mode) &&
-    !result.proxyProvisioningAllowed
+    EXIT_GATED_MODES.has(options.mode) &&
+    !result.operationAllowed
   ) {
     process.exitCode = 3;
   }
