@@ -312,30 +312,75 @@ if [ "$DOMAIN_OK" != "1" ]; then echo "ERROR node-custom-domain-unreachable"; ex
 echo "OK custom-domain-ready"
 
 echo "STEP edge-gateway-regression"
-ROOT_CODE=$(curl -sS -o /tmp/edge-root.body -D /tmp/edge-root.headers \
-  -w '%{http_code}' --max-time 15 "$URL/" || true)
-if [ "$ROOT_CODE" != "200" ] \
+gateway_build_id() {
+  sed -n 's/^x-opus8-build-id:[[:space:]]*//Ip' "$1" \
+    | tr -d '\r' | tail -n1
+}
+ROOT_CODE=000
+ROOT_BUILD=""
+for n in $(seq 1 12); do
+  ROOT_CODE=$(curl -sS -o /tmp/edge-root.body -D /tmp/edge-root.headers \
+    -w '%{http_code}' --max-time 15 \
+    -H 'cache-control: no-cache' -H 'pragma: no-cache' \
+    "$URL/?__opus8_build=${OPUS8_BUILD_ID}-${n}" || true)
+  ROOT_BUILD=$(gateway_build_id /tmp/edge-root.headers)
+  if [ "$ROOT_CODE" = "200" ] \
+    && [ "$ROOT_BUILD" = "$OPUS8_BUILD_ID" ] \
+    && grep -qi '^x-content-type-options:[[:space:]]*nosniff' /tmp/edge-root.headers \
+    && grep -qi '^content-security-policy:' /tmp/edge-root.headers \
+    && grep -q 'Service available' /tmp/edge-root.body; then
+    break
+  fi
+  sleep 3
+done
+if [ "$ROOT_CODE" != "200" ] || [ "$ROOT_BUILD" != "$OPUS8_BUILD_ID" ] \
   || ! grep -qi '^x-content-type-options:[[:space:]]*nosniff' /tmp/edge-root.headers \
-  || ! grep -qi '^content-security-policy:' /tmp/edge-root.headers; then
+  || ! grep -qi '^content-security-policy:' /tmp/edge-root.headers \
+  || ! grep -q 'Service available' /tmp/edge-root.body; then
   echo "ERROR edge-root-gateway http=$ROOT_CODE"
   exit 14
 fi
 for route in login admin admin/config.json admin/sub-links sub version locations; do
   for method in GET POST; do
-    GATEWAY_CODE=$(curl -sS -X "$method" -o /tmp/edge-gateway.body \
-      -D /tmp/edge-gateway.headers -w '%{http_code}' --max-time 15 \
-      "$URL/$route" || true)
+    GATEWAY_CODE=000
+    GATEWAY_BUILD=""
+    for n in $(seq 1 12); do
+      GATEWAY_CODE=$(curl -sS -X "$method" -o /tmp/edge-gateway.body \
+        -D /tmp/edge-gateway.headers -w '%{http_code}' --max-time 15 \
+        -H 'cache-control: no-cache' -H 'pragma: no-cache' \
+        "$URL/$route?__opus8_build=${OPUS8_BUILD_ID}-${n}" || true)
+      GATEWAY_BUILD=$(gateway_build_id /tmp/edge-gateway.headers)
+      if [ "$GATEWAY_CODE" = "404" ] \
+        && [ "$GATEWAY_BUILD" = "$OPUS8_BUILD_ID" ] \
+        && ! grep -qi '^set-cookie:' /tmp/edge-gateway.headers; then
+        break
+      fi
+      sleep 3
+    done
     if [ "$GATEWAY_CODE" != "404" ] \
+      || [ "$GATEWAY_BUILD" != "$OPUS8_BUILD_ID" ] \
       || grep -qi '^set-cookie:' /tmp/edge-gateway.headers; then
-      echo "ERROR legacy-edge-route-open method=$method route=/$route http=$GATEWAY_CODE"
+      echo "ERROR legacy-edge-route-open method=$method route=/$route http=$GATEWAY_CODE active-build=$([ "$GATEWAY_BUILD" = "$OPUS8_BUILD_ID" ] && echo yes || echo no)"
       exit 14
     fi
   done
 done
-UPGRADE_CODE=$(curl -sS --http1.1 -o /tmp/edge-upgrade.body \
-  -D /tmp/edge-upgrade.headers -w '%{http_code}' --max-time 15 \
-  -H 'Connection: Upgrade' -H 'Upgrade: websocket' "$URL/admin" || true)
-if [ "$UPGRADE_CODE" != "404" ]; then
+UPGRADE_CODE=000
+UPGRADE_BUILD=""
+for n in $(seq 1 12); do
+  UPGRADE_CODE=$(curl -sS --http1.1 -o /tmp/edge-upgrade.body \
+    -D /tmp/edge-upgrade.headers -w '%{http_code}' --max-time 15 \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'cache-control: no-cache' -H 'pragma: no-cache' \
+    "$URL/admin?__opus8_build=${OPUS8_BUILD_ID}-${n}" || true)
+  UPGRADE_BUILD=$(gateway_build_id /tmp/edge-upgrade.headers)
+  if [ "$UPGRADE_CODE" = "404" ] \
+    && [ "$UPGRADE_BUILD" = "$OPUS8_BUILD_ID" ]; then
+    break
+  fi
+  sleep 3
+done
+if [ "$UPGRADE_CODE" != "404" ] || [ "$UPGRADE_BUILD" != "$OPUS8_BUILD_ID" ]; then
   echo "ERROR wrong-path-websocket-open http=$UPGRADE_CODE"
   exit 14
 fi
@@ -359,29 +404,35 @@ if [ "$HAS_LANDING_BUNDLE" = "1" ]; then echo "OK landing-bundle-encrypted"; els
 
 echo "STEP canary-user"
 ADMIN_TOKEN="$CONTROL_ADMIN_TOKEN"
-CANARY_NAME="opus8-node-canary-${NODE_ID}-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
-CREATE_BODY=$(CANARY_NAME="$CANARY_NAME" NODE_ID="$NODE_ID" node -e 'process.stdout.write(JSON.stringify({username:process.env.CANARY_NAME,nodeGroup:[process.env.NODE_ID],unlock:false,durationDays:1,deviceLimit:4,ipLimit24h:10,trafficLimitBytes:0}))')
-CANARY_USER=$(curl -fsS --max-time 20 -X POST "$CONTROL_PLANE_URL/api/users" \
-  -H "authorization: Bearer $ADMIN_TOKEN" \
-  -H 'content-type: application/json' -d "$CREATE_BODY")
-CANARY_USER_ID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.id)process.exit(1);process.stdout.write(j.user.id)})')
-TEST_UUID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.uuid)process.exit(1);process.stdout.write(j.user.uuid)})')
-echo "::add-mask::$CANARY_USER_ID"
-echo "::add-mask::$TEST_UUID"
-INVALIDATION_ACKS=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(String(j.cacheInvalidation?.acknowledged||0))})')
-TARGET_INVALIDATED=$(printf '%s' "$CANARY_USER" | NODE_ID="$NODE_ID" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write((j.cacheInvalidation?.acknowledgedNodes||[]).includes(process.env.NODE_ID)?"1":"0")})')
-cleanup_canary_user() {
-  curl -fsS --max-time 20 -X DELETE "$CONTROL_PLANE_URL/api/users/$CANARY_USER_ID" \
-    -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null 2>&1 || true
-}
-trap cleanup_canary_user EXIT
-echo "OK canary-user-created"
-echo "INFO edge-policy-invalidation acknowledged=$INVALIDATION_ACKS target=$TARGET_INVALIDATED"
-if [ "$TARGET_INVALIDATED" = "1" ]; then
-  sleep 3
+if [ "$NODE_DEPLOY_OPERATION" = "maintenance" ]; then
+  TEST_UUID="$NODE_UUID"
+  echo "::add-mask::$TEST_UUID"
+  echo "OK maintenance-canary-uses-node-fallback"
 else
-  echo "WARN target-node-did-not-acknowledge-active-invalidation; using-ttl-fallback"
-  sleep 16
+  CANARY_NAME="opus8-node-canary-${NODE_ID}-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
+  CREATE_BODY=$(CANARY_NAME="$CANARY_NAME" NODE_ID="$NODE_ID" node -e 'process.stdout.write(JSON.stringify({username:process.env.CANARY_NAME,nodeGroup:[process.env.NODE_ID],unlock:false,durationDays:1,deviceLimit:4,ipLimit24h:10,trafficLimitBytes:0}))')
+  CANARY_USER=$(curl -fsS --max-time 20 -X POST "$CONTROL_PLANE_URL/api/users" \
+    -H "authorization: Bearer $ADMIN_TOKEN" \
+    -H 'content-type: application/json' -d "$CREATE_BODY")
+  CANARY_USER_ID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.id)process.exit(1);process.stdout.write(j.user.id)})')
+  TEST_UUID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.uuid)process.exit(1);process.stdout.write(j.user.uuid)})')
+  echo "::add-mask::$CANARY_USER_ID"
+  echo "::add-mask::$TEST_UUID"
+  INVALIDATION_ACKS=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(String(j.cacheInvalidation?.acknowledged||0))})')
+  TARGET_INVALIDATED=$(printf '%s' "$CANARY_USER" | NODE_ID="$NODE_ID" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write((j.cacheInvalidation?.acknowledgedNodes||[]).includes(process.env.NODE_ID)?"1":"0")})')
+  cleanup_canary_user() {
+    curl -fsS --max-time 20 -X DELETE "$CONTROL_PLANE_URL/api/users/$CANARY_USER_ID" \
+      -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null 2>&1 || true
+  }
+  trap cleanup_canary_user EXIT
+  echo "OK canary-user-created"
+  echo "INFO edge-policy-invalidation acknowledged=$INVALIDATION_ACKS target=$TARGET_INVALIDATED"
+  if [ "$TARGET_INVALIDATED" = "1" ]; then
+    sleep 3
+  else
+    echo "WARN target-node-did-not-acknowledge-active-invalidation; using-ttl-fallback"
+    sleep 16
+  fi
 fi
 
 echo "STEP policy-status"

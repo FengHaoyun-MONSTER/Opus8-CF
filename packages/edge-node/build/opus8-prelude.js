@@ -104,8 +104,12 @@ function OPUS8_transportPaths(env, now = Date.now()) {
   return paths;
 }
 
-function OPUS8_gatewayHeaders(contentType, cacheControl = "no-store") {
-  return {
+function OPUS8_gatewayHeaders(
+  contentType,
+  cacheControl = "no-store",
+  buildId = "",
+) {
+  const headers = {
     "content-type": contentType,
     "cache-control": cacheControl,
     "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
@@ -114,12 +118,26 @@ function OPUS8_gatewayHeaders(contentType, cacheControl = "no-store") {
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
   };
+  const normalizedBuildId = String(buildId || "").trim().slice(0, 160);
+  if (normalizedBuildId) headers["x-opus8-build-id"] = normalizedBuildId;
+  return headers;
 }
 
-function OPUS8_gatewayResponse(request, status, body, contentType, cacheControl) {
+function OPUS8_gatewayResponse(
+  request,
+  status,
+  body,
+  contentType,
+  cacheControl,
+  env,
+) {
   return new Response(request.method === "HEAD" ? null : body, {
     status,
-    headers: OPUS8_gatewayHeaders(contentType, cacheControl),
+    headers: OPUS8_gatewayHeaders(
+      contentType,
+      cacheControl,
+      env?.OPUS8_BUILD_ID,
+    ),
   });
 }
 
@@ -150,7 +168,8 @@ function OPUS8_handleEdgeGateway(request, env) {
       200,
       html,
       "text/html; charset=utf-8",
-      "public, max-age=300",
+      "no-store",
+      env,
     );
   }
 
@@ -165,6 +184,7 @@ function OPUS8_handleEdgeGateway(request, env) {
       "User-agent: *\nDisallow: /\n",
       "text/plain; charset=utf-8",
       "public, max-age=3600",
+      env,
     );
   }
 
@@ -175,7 +195,11 @@ function OPUS8_handleEdgeGateway(request, env) {
   ) {
     return new Response(null, {
       status: 204,
-      headers: OPUS8_gatewayHeaders("image/x-icon", "public, max-age=86400"),
+      headers: OPUS8_gatewayHeaders(
+        "image/x-icon",
+        "public, max-age=86400",
+        env?.OPUS8_BUILD_ID,
+      ),
     });
   }
 
@@ -185,6 +209,7 @@ function OPUS8_handleEdgeGateway(request, env) {
     "Not Found\n",
     "text/plain; charset=utf-8",
     "no-store",
+    env,
   );
 }
 

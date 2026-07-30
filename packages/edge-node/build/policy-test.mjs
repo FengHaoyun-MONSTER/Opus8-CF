@@ -28,6 +28,13 @@ if (
 ) {
   throw new Error("ordinary root requests must receive the local hardened status page");
 }
+const stampedResponse = OPUS8_handleEdgeGateway(
+  gatewayRequest("/login"),
+  { OPUS8_BUILD_ID: "test-build-id" },
+);
+if (stampedResponse.headers.get("x-opus8-build-id") !== "test-build-id") {
+  throw new Error("gateway responses must identify the active edge build");
+}
 const headResponse = OPUS8_handleEdgeGateway(gatewayRequest("/", { method: "HEAD" }), {});
 if (headResponse.status !== 200 || (await headResponse.text()) !== "") {
   throw new Error("HEAD status requests must not include a response body");
