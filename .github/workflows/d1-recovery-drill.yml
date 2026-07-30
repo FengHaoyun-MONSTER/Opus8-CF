@@ -16,6 +16,16 @@ on:
         description: Type restore:<recovery_database>
         required: true
         type: string
+      replace_existing_recovery_database:
+        description: Delete and recreate this recovery-only target first
+        required: true
+        default: false
+        type: boolean
+      retain_recovery_database:
+        description: Keep the isolated database after a successful drill
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -36,6 +46,7 @@ jobs:
       BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
       RECOVERY_DATABASE: ${{ inputs.recovery_database }}
       RESTORE_CONFIRMATION: ${{ inputs.confirmation }}
+      REPLACE_EXISTING_RECOVERY_DATABASE: ${{ inputs.replace_existing_recovery_database }}
     steps:
       - name: Checkout pinned repository revision
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -89,7 +100,15 @@ jobs:
                   });
                 '; then
             wrangler d1 create "$RECOVERY_DATABASE" >/dev/null
+            echo "RECOVERY_DB_CREATED=1" >>"$GITHUB_ENV"
             echo "OK recovery-database-created name=$RECOVERY_DATABASE"
+          elif [ "$REPLACE_EXISTING_RECOVERY_DATABASE" = "true" ]; then
+            wrangler d1 delete "$RECOVERY_DATABASE" --skip-confirmation >/dev/null
+            wrangler d1 create "$RECOVERY_DATABASE" >/dev/null
+            echo "RECOVERY_DB_CREATED=1" >>"$GITHUB_ENV"
+            echo "OK recovery-database-recreated name=$RECOVERY_DATABASE"
+          else
+            echo "RECOVERY_DB_CREATED=0" >>"$GITHUB_ENV"
           fi
           OPUS8_RESTORE_CONFIRM="$RESTORE_CONFIRMATION" \
             bash infra/scripts/d1-backup.sh restore \
@@ -100,4 +119,19 @@ jobs:
             echo "- Result: isolated restore completed"
             echo "- Target: \`$RECOVERY_DATABASE\`"
             echo "- Production database was not a valid restore target"
+          } >>"$GITHUB_STEP_SUMMARY"
+      - name: Remove newly created target after failed drill
+        if: ${{ failure() && env.RECOVERY_DB_CREATED == '1' }}
+        run: |
+          set -euo pipefail
+          wrangler d1 delete "$RECOVERY_DATABASE" --skip-confirmation >/dev/null
+          echo "OK failed-recovery-database-removed name=$RECOVERY_DATABASE"
+      - name: Remove isolated target after successful drill
+        if: ${{ success() && inputs.retain_recovery_database == false }}
+        run: |
+          set -euo pipefail
+          wrangler d1 delete "$RECOVERY_DATABASE" --skip-confirmation >/dev/null
+          {
+            echo
+            echo "- Cleanup: isolated recovery database removed"
           } >>"$GITHUB_STEP_SUMMARY"

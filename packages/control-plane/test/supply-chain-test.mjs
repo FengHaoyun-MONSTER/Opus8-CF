@@ -70,6 +70,16 @@ assert.match(
   /wrangler d1 list --json 2>\/dev\/null \| D1_LOOKUP_NAME="\$name" node/,
   "the D1 list parser must receive the requested database name",
 );
+assert.match(
+  backupScript,
+  /wrangler d1 export BACKUP_DB --remote[\s\S]*--no-schema/,
+  "backup export must use repository schema before importing D1 data",
+);
+assert.match(
+  backupScript,
+  /cat packages\/control-plane\/schema\.sql[\s\S]*cat "\$temp_dir\/data\.sql"/,
+  "backup bundle must place the authoritative schema before data",
+);
 
 const backupWorkflow = await readFile(
   join(repoRoot, ".github", "workflows", "d1-backup.yml"),
@@ -119,6 +129,16 @@ assert.match(
   recoveryWorkflow,
   /OPUS8_RESTORE_CONFIRM="\$RESTORE_CONFIRMATION"/,
   "recovery workflow must pass the exact manual confirmation to the restore guard",
+);
+assert.match(
+  recoveryWorkflow,
+  /failure\(\) && env\.RECOVERY_DB_CREATED == '1'/,
+  "a failed drill must remove a database created by that run",
+);
+assert.match(
+  recoveryWorkflow,
+  /inputs\.retain_recovery_database == false/,
+  "successful drills must clean up their isolated database by default",
 );
 assert.doesNotMatch(
   recoveryWorkflow,

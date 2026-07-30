@@ -86,7 +86,14 @@ case "$operation" in
     echo "STEP export-d1"
     wrangler d1 export BACKUP_DB --remote \
       --config "$temp_dir/wrangler.toml" \
-      --output "$temp_dir/export.sql" >/dev/null
+      --no-schema \
+      --output "$temp_dir/data.sql" >/dev/null
+    {
+      printf '%s\n' '-- Opus8 D1 recovery bundle: authoritative schema followed by exported data.'
+      cat packages/control-plane/schema.sql
+      printf '\n%s\n' 'PRAGMA defer_foreign_keys = true;'
+      cat "$temp_dir/data.sql"
+    } >"$temp_dir/export.sql"
     [ -s "$temp_dir/export.sql" ] || {
       echo "ERROR D1 export is empty" >&2
       exit 5
@@ -162,6 +169,33 @@ case "$operation" in
     wrangler d1 execute RECOVERY_DB --remote \
       --config "$temp_dir/wrangler.toml" \
       --file "$temp_dir/restore.sql" >/dev/null
+    validation_json="$(wrangler d1 execute RECOVERY_DB --remote \
+      --config "$temp_dir/wrangler.toml" \
+      --command "SELECT
+        (SELECT COUNT(*) FROM users) AS users,
+        (SELECT COUNT(*) FROM nodes) AS nodes,
+        (SELECT COUNT(*) FROM landings) AS landings,
+        (SELECT COUNT(*) FROM plans) AS plans,
+        (SELECT COUNT(*) FROM usage) AS usage_rows;" \
+      --json)"
+    validation_summary="$(printf '%s' "$validation_json" | node -e '
+      let input="";
+      process.stdin.on("data", chunk => input += chunk).on("end", () => {
+        try {
+          const rows=JSON.parse(input).flatMap(item => item.results || []);
+          const row=rows[0];
+          const keys=["users","nodes","landings","plans","usage_rows"];
+          if (!row || keys.some(key => !Number.isInteger(Number(row[key])))) process.exit(1);
+          process.stdout.write(keys.map(key => `${key}=${Number(row[key])}`).join(" "));
+        } catch {
+          process.exit(1);
+        }
+      });
+    ')" || {
+      echo "ERROR recovery validation query failed" >&2
+      exit 7
+    }
+    echo "OK recovery-data-validated $validation_summary"
     echo "OK recovery-database-restored name=$target"
     ;;
   *)
