@@ -6,7 +6,7 @@
     "STEP compliance-gate",
     "OK compliance-gate",
     "STEP resolve-registered-transport",
-    "INFO transport path=/ws/4317be980edfa4f64e061f2f previous=/ws/4317be980edfa4f64e061f2f mode=canary legacy=/ legacyUntil=1785653557643",
+    "INFO transport path=/ws/4317be980edfa4f64e061f2f previous=/ws/4317be980edfa4f64e061f2f mode=canary legacy=/ legacyUntil=1785663544326",
     "STEP build",
     "OK built (OK build: dist/index.js (311979 bytes), patch replaced 961 chars)",
     "OK policy-test",
@@ -33,7 +33,7 @@
     "STEP canary-user",
     "OK maintenance-canary-uses-node-fallback",
     "STEP policy-status",
-    "INFO policy-status={\"invalidatedVersion\":1785335755784,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785394404357,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785335755784,\"liveUuidCount\":1,\"liveContainsUuid\":false,\"liveError\":\"\"}",
+    "INFO policy-status={\"invalidatedVersion\":1785403586683,\"cachedVersion\":0,\"cachedUuidCount\":0,\"cachedContainsUuid\":false,\"cachedExpiresInMs\":-1785404387588,\"liveOk\":true,\"liveStatus\":200,\"liveVersion\":1785403586683,\"liveUuidCount\":1,\"liveContainsUuid\":false,\"liveError\":\"\"}",
     "STEP vless-smoke",
     "OK vless-ws-auth-egress vantage=github-runner",
     "STEP transport-legacy-canary",
@@ -41,5 +41,5 @@
     "OK unlock=on(AI域名走落地)",
     "DONE url=https://acc1-n2.thinderbox.com"
   ],
-  "finishedAt": "2026-07-30T06:53:27Z"
+  "finishedAt": "2026-07-30T09:39:50Z"
 }
