@@ -371,6 +371,8 @@ for n in $(seq 1 12); do
   UPGRADE_CODE=$(curl -sS --http1.1 -o /tmp/edge-upgrade.body \
     -D /tmp/edge-upgrade.headers -w '%{http_code}' --max-time 15 \
     -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' \
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
     -H 'cache-control: no-cache' -H 'pragma: no-cache' \
     "$URL/admin?__opus8_build=${OPUS8_BUILD_ID}-${n}" || true)
   UPGRADE_BUILD=$(gateway_build_id /tmp/edge-upgrade.headers)
