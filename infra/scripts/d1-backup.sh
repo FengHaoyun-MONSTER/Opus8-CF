@@ -29,7 +29,7 @@ require_runtime() {
 
 resolve_database_id() {
   local name="$1"
-  D1_LOOKUP_NAME="$name" wrangler d1 list --json 2>/dev/null | node -e '
+  wrangler d1 list --json 2>/dev/null | D1_LOOKUP_NAME="$name" node -e '
     let input="";
     process.stdin.on("data", chunk => input += chunk).on("end", () => {
       try {

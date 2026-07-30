@@ -61,6 +61,16 @@ for (const relativePath of [
   );
 }
 
+const backupScript = await readFile(
+  join(repoRoot, "infra", "scripts", "d1-backup.sh"),
+  "utf8",
+);
+assert.match(
+  backupScript,
+  /wrangler d1 list --json 2>\/dev\/null \| D1_LOOKUP_NAME="\$name" node/,
+  "the D1 list parser must receive the requested database name",
+);
+
 const backupWorkflow = await readFile(
   join(repoRoot, ".github", "workflows", "d1-backup.yml"),
   "utf8",
