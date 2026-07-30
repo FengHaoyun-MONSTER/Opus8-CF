@@ -16,10 +16,13 @@ PRAGMA foreign_keys=OFF;
 CREATE TABLE "notes" ("id" TEXT PRIMARY KEY, "body" TEXT);
 INSERT INTO "notes" VALUES('one','line one;
 line two');
+CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "plan_id" TEXT REFERENCES "plans"("id"));
+INSERT INTO "users" VALUES('user-one','plan-one');
+CREATE TABLE "plans" ("id" TEXT PRIMARY KEY);
+INSERT INTO "plans" VALUES('plan-one');
 /* schema separator */
 CREATE INDEX "idx_notes" ON "notes" ("id");
 INSERT INTO "notes" VALUES('two','quote '' and ; semicolon');
-COMMIT;
 `;
 
 try {
@@ -30,11 +33,15 @@ try {
   });
   assert.equal(result.status, 0, result.stderr);
   const extracted = await readFile(output, "utf8");
-  assert.match(extracted, /^BEGIN TRANSACTION;$/m);
   assert.match(extracted, /INSERT INTO "notes" VALUES\('one','line one;\nline two'\);/);
   assert.match(extracted, /INSERT INTO "notes" VALUES\('two','quote '' and ; semicolon'\);/);
   assert.doesNotMatch(extracted, /CREATE TABLE|CREATE INDEX|PRAGMA foreign_keys/);
-  assert.match(extracted, /^COMMIT;$/m);
+  assert.doesNotMatch(extracted, /BEGIN TRANSACTION|COMMIT;/);
+  assert.ok(
+    extracted.indexOf('INSERT INTO "plans"') <
+      extracted.indexOf('INSERT INTO "users"'),
+    "parent table data must precede child table data",
+  );
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }
