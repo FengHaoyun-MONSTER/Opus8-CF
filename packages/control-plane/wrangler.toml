@@ -7,7 +7,8 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 USE_OPTIMIZED_IPS = "1"
 SUB_RATE_LIMIT_REQUIRED = "1"
-COMPLIANCE_PROXY_ALLOWED = "0"
+COMPLIANCE_PROXY_ALLOWED = "1"
+COMPLIANCE_ENFORCEMENT_MODE = "observe-only"
 COMPLIANCE_POLICY_ID = "cloudflare-data-plane-v1"
 COMPLIANCE_MAINTENANCE_NODE_IDS = "acc1-n1,acc1-n2,acc2-n1,acc2-n2"
 HMAC_V1_ACCEPT_UNTIL = "0"

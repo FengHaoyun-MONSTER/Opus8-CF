@@ -163,6 +163,8 @@ const worker = spawn(
     "--var",
     "COMPLIANCE_PROXY_ALLOWED:0",
     "--var",
+    "COMPLIANCE_ENFORCEMENT_MODE:enforce",
+    "--var",
     "COMPLIANCE_POLICY_ID:cloudflare-data-plane-v1",
     "--var",
     "COMPLIANCE_MAINTENANCE_NODE_IDS:acc1-n1",

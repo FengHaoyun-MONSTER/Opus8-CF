@@ -98,6 +98,8 @@ const worker = spawn(
     "--var",
     "COMPLIANCE_PROXY_ALLOWED:1",
     "--var",
+    "COMPLIANCE_ENFORCEMENT_MODE:enforce",
+    "--var",
     "COMPLIANCE_POLICY_ID:cloudflare-data-plane-v1",
   ],
   {

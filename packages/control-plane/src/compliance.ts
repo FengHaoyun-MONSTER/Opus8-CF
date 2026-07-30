@@ -1,24 +1,32 @@
 export interface ComplianceEnv {
   COMPLIANCE_PROXY_ALLOWED?: string;
+  COMPLIANCE_ENFORCEMENT_MODE?: string;
   COMPLIANCE_POLICY_ID?: string;
   COMPLIANCE_MAINTENANCE_NODE_IDS?: string;
 }
 
 export interface ComplianceStatus {
   proxyProvisioningAllowed: boolean;
-  enforcement: "fail-closed";
+  enforcement: "fail-closed" | "observe-only";
   policyId: string;
-  reason: "documented_authorization_verified" | "documented_authorization_required";
+  reason:
+    | "operator_override"
+    | "documented_authorization_verified"
+    | "documented_authorization_required";
 }
 
 export function complianceStatus(env: ComplianceEnv): ComplianceStatus {
   const proxyProvisioningAllowed =
     env.COMPLIANCE_PROXY_ALLOWED === "1";
+  const observeOnly =
+    env.COMPLIANCE_ENFORCEMENT_MODE === "observe-only";
   return {
     proxyProvisioningAllowed,
-    enforcement: "fail-closed",
+    enforcement: observeOnly ? "observe-only" : "fail-closed",
     policyId: env.COMPLIANCE_POLICY_ID || "cloudflare-data-plane-v1",
-    reason: proxyProvisioningAllowed
+    reason: observeOnly
+      ? "operator_override"
+      : proxyProvisioningAllowed
       ? "documented_authorization_verified"
       : "documented_authorization_required",
   };

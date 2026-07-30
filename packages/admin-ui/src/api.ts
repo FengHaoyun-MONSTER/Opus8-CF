@@ -224,9 +224,10 @@ export interface OperationsOverview {
 
 export interface ComplianceStatus {
   proxyProvisioningAllowed: boolean;
-  enforcement: "fail-closed";
+  enforcement: "fail-closed" | "observe-only";
   policyId: string;
   reason:
+    | "operator_override"
     | "documented_authorization_verified"
     | "documented_authorization_required";
 }

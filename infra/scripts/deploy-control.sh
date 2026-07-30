@@ -8,6 +8,8 @@ COMPLIANCE_ENV="$(node "$REPO_ROOT/infra/scripts/compliance-gate.mjs" \
   --mode control-maintenance --format env)"
 COMPLIANCE_PROXY_ALLOWED="$(printf '%s\n' "$COMPLIANCE_ENV" \
   | sed -n 's/^COMPLIANCE_PROXY_ALLOWED=//p')"
+COMPLIANCE_ENFORCEMENT_MODE="$(printf '%s\n' "$COMPLIANCE_ENV" \
+  | sed -n 's/^COMPLIANCE_ENFORCEMENT_MODE=//p')"
 COMPLIANCE_POLICY_ID="$(printf '%s\n' "$COMPLIANCE_ENV" \
   | sed -n 's/^COMPLIANCE_POLICY_ID=//p')"
 COMPLIANCE_MAINTENANCE_NODE_IDS="$(printf '%s\n' "$COMPLIANCE_ENV" \
@@ -17,6 +19,8 @@ HMAC_V1_ACCEPT_UNTIL="$(printf '%s\n' "$COMPLIANCE_ENV" \
 HMAC_V1_NODE_IDS="$(printf '%s\n' "$COMPLIANCE_ENV" \
   | sed -n 's/^HMAC_V1_NODE_IDS=//p')"
 if ! printf '%s' "$COMPLIANCE_PROXY_ALLOWED" | grep -Eq '^[01]$' \
+  || ! printf '%s' "$COMPLIANCE_ENFORCEMENT_MODE" \
+    | grep -Eq '^(enforce|observe-only)$' \
   || ! printf '%s' "$COMPLIANCE_POLICY_ID" | grep -Eq '^[a-z0-9-]+$' \
   || ! printf '%s' "$COMPLIANCE_MAINTENANCE_NODE_IDS" \
     | grep -Eq '^[A-Za-z0-9._:-]+(,[A-Za-z0-9._:-]+)*$' \
@@ -26,10 +30,11 @@ if ! printf '%s' "$COMPLIANCE_PROXY_ALLOWED" | grep -Eq '^[01]$' \
   echo "ERROR invalid-compliance-gate-output"
   exit 9
 fi
-export COMPLIANCE_PROXY_ALLOWED COMPLIANCE_POLICY_ID
+export COMPLIANCE_PROXY_ALLOWED COMPLIANCE_ENFORCEMENT_MODE
+export COMPLIANCE_POLICY_ID
 export COMPLIANCE_MAINTENANCE_NODE_IDS
 export HMAC_V1_ACCEPT_UNTIL HMAC_V1_NODE_IDS
-echo "OK compliance-policy provisioning=$COMPLIANCE_PROXY_ALLOWED policy=$COMPLIANCE_POLICY_ID"
+echo "OK compliance-policy provisioning=$COMPLIANCE_PROXY_ALLOWED enforcement=$COMPLIANCE_ENFORCEMENT_MODE policy=$COMPLIANCE_POLICY_ID"
 cd packages/control-plane
 
 : "${ROOT_DOMAIN:?ROOT_DOMAIN is required for production custom domains}"
@@ -130,6 +135,7 @@ HMAC_V1_ACCEPT_UNTIL = "$HMAC_V1_ACCEPT_UNTIL"
 HMAC_V1_NODE_IDS = "$HMAC_V1_NODE_IDS"
 SUB_RATE_LIMIT_REQUIRED = "1"
 COMPLIANCE_PROXY_ALLOWED = "$COMPLIANCE_PROXY_ALLOWED"
+COMPLIANCE_ENFORCEMENT_MODE = "$COMPLIANCE_ENFORCEMENT_MODE"
 COMPLIANCE_POLICY_ID = "$COMPLIANCE_POLICY_ID"
 COMPLIANCE_MAINTENANCE_NODE_IDS = "$COMPLIANCE_MAINTENANCE_NODE_IDS"
 
@@ -375,8 +381,8 @@ REMOTE_COMPLIANCE=$(curl -fsS --max-time 15 \
   "$API_URL/api/operations/compliance" \
   -H "authorization: Bearer $TOK")
 if ! printf '%s' "$REMOTE_COMPLIANCE" \
-  | EXPECTED_ALLOWED="$COMPLIANCE_PROXY_ALLOWED" EXPECTED_POLICY="$COMPLIANCE_POLICY_ID" \
-    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);const expected=process.env.EXPECTED_ALLOWED==="1";process.exit(x.proxyProvisioningAllowed===expected&&x.enforcement==="fail-closed"&&x.policyId===process.env.EXPECTED_POLICY?0:1)})'; then
+  | EXPECTED_ALLOWED="$COMPLIANCE_PROXY_ALLOWED" EXPECTED_ENFORCEMENT="$COMPLIANCE_ENFORCEMENT_MODE" EXPECTED_POLICY="$COMPLIANCE_POLICY_ID" \
+    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const x=JSON.parse(s);const expected=process.env.EXPECTED_ALLOWED==="1";process.exit(x.proxyProvisioningAllowed===expected&&x.enforcement===process.env.EXPECTED_ENFORCEMENT&&x.policyId===process.env.EXPECTED_POLICY?0:1)})'; then
   echo "ERROR smoke-compliance-state"
   exit 16
 fi

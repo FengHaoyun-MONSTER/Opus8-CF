@@ -34,7 +34,22 @@ assert.throws(
   () => validatePolicy(widenedLegacyPolicy),
   /fixed runtime allowlist/,
 );
-const blocked = evaluateCompliance(policy, {
+const observeOnly = evaluateCompliance(policy, {
+  mode: "node-provision",
+  now: new Date("2026-07-29T12:00:00.000Z"),
+  nodeId: "acc1-n1",
+  accountAlias: "acc1",
+  workerName: "opus8cf-node-acc1-n1-v2",
+});
+assert.equal(observeOnly.operationAllowed, true);
+assert.equal(observeOnly.proxyProvisioningAllowed, true);
+assert.equal(observeOnly.enforcementMode, "observe-only");
+assert(observeOnly.warnings.includes("written_permission_pending"));
+assert.deepEqual(observeOnly.reasons, []);
+
+const enforcedPolicy = structuredClone(policy);
+enforcedPolicy.enforcement.mode = "enforce";
+const blocked = evaluateCompliance(enforcedPolicy, {
   mode: "node-provision",
   now: new Date("2026-07-29T12:00:00.000Z"),
   nodeId: "acc1-n1",
@@ -57,7 +72,7 @@ const maintenance = evaluateCompliance(policy, {
   workerName: "opus8cf-node-acc1-n1-v2",
 });
 assert.equal(maintenance.operationAllowed, true);
-assert.equal(maintenance.proxyProvisioningAllowed, false);
+assert.equal(maintenance.proxyProvisioningAllowed, true);
 assert.deepEqual(maintenance.reasons, []);
 assert(maintenance.warnings.includes("written_permission_pending"));
 assert(
@@ -93,7 +108,7 @@ assert(
   bulkMaintenance.reasons.includes("maintenance_requires_single_declared_node"),
 );
 
-const approved = structuredClone(policy);
+const approved = structuredClone(enforcedPolicy);
 const permissionReference = "CF-SUPPORT-CASE-EXAMPLE";
 approved.writtenPermission = {
   status: "approved",
@@ -163,6 +178,18 @@ const {
 assert.equal(proxyProvisioningAllowed({}), false);
 assert.equal(complianceStatus({ COMPLIANCE_PROXY_ALLOWED: "0" }).enforcement, "fail-closed");
 assert.equal(proxyProvisioningAllowed({ COMPLIANCE_PROXY_ALLOWED: "1" }), true);
+assert.deepEqual(
+  complianceStatus({
+    COMPLIANCE_PROXY_ALLOWED: "1",
+    COMPLIANCE_ENFORCEMENT_MODE: "observe-only",
+  }),
+  {
+    proxyProvisioningAllowed: true,
+    enforcement: "observe-only",
+    policyId: "cloudflare-data-plane-v1",
+    reason: "operator_override",
+  },
+);
 assert.equal(maintenanceNodeAllowed({}, "acc1-n1"), false);
 assert.equal(
   maintenanceNodeAllowed(

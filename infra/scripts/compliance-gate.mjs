@@ -70,6 +70,14 @@ export function validatePolicy(policy) {
   }
   requireIsoDate(policy.reviewedAt, "reviewedAt");
   requirePositiveNumber(policy.reviewMaxAgeDays, "reviewMaxAgeDays");
+  if (
+    !isRecord(policy.enforcement) ||
+    !["enforce", "observe-only"].includes(policy.enforcement.mode) ||
+    policy.enforcement.reason !== "operator_decision"
+  ) {
+    fail("enforcement policy is invalid");
+  }
+  requireIsoDate(policy.enforcement.changedAt, "enforcement.changedAt");
 
   const sources = policy.sources;
   if (
@@ -235,6 +243,7 @@ export function evaluateCompliance(
   }
   const nowMs = now instanceof Date ? now.getTime() : Date.parse(String(now));
   if (!Number.isFinite(nowMs)) fail("invalid evaluation time");
+  const observeOnly = policy.enforcement.mode === "observe-only";
 
   const reviewedAt = Date.parse(policy.reviewedAt);
   const reviewAgeDays = Math.floor((nowMs - reviewedAt) / 86_400_000);
@@ -308,12 +317,14 @@ export function evaluateCompliance(
           nodeReasons.push("node_worker_name_mismatch");
         }
         if (
+          !observeOnly &&
           PERMISSION_GATED_MODES.has(mode) &&
           !permission.accountAliases.includes(registered.accountAlias)
         ) {
           nodeReasons.push("account_outside_permission_scope");
         }
         if (
+          !observeOnly &&
           PERMISSION_GATED_MODES.has(mode) &&
           !permission.nodeIds.includes(registered.id)
         ) {
@@ -327,7 +338,8 @@ export function evaluateCompliance(
     ...policyReasons,
     ...permissionReasons,
   ];
-  const proxyProvisioningAllowed = proxyProvisioningReasons.length === 0;
+  const proxyProvisioningAllowed =
+    observeOnly || proxyProvisioningReasons.length === 0;
   let reasons;
   let warnings = [];
   let operationAllowed;
@@ -340,13 +352,15 @@ export function evaluateCompliance(
     warnings = [...proxyProvisioningReasons];
     operationAllowed = true;
   } else if (mode === "audit") {
-    reasons = [...proxyProvisioningReasons];
-    operationAllowed = proxyProvisioningAllowed;
+    reasons = observeOnly ? [] : [...proxyProvisioningReasons];
+    warnings = observeOnly ? [...proxyProvisioningReasons] : [];
+    operationAllowed = reasons.length === 0;
   } else {
     reasons = [
-      ...proxyProvisioningReasons,
+      ...(observeOnly ? [] : proxyProvisioningReasons),
       ...nodeReasons,
     ];
+    warnings = observeOnly ? [...proxyProvisioningReasons] : [];
     operationAllowed = reasons.length === 0;
   }
   return {
@@ -355,6 +369,7 @@ export function evaluateCompliance(
     reviewedAt: policy.reviewedAt,
     reviewAgeDays,
     permissionStatus: permission.status,
+    enforcementMode: policy.enforcement.mode,
     operationAllowed,
     proxyProvisioningAllowed,
     legacyNodeCompatibilityUntil: Date.parse(
@@ -416,6 +431,7 @@ async function main() {
   } else if (options.format === "env") {
     process.stdout.write(
       `COMPLIANCE_PROXY_ALLOWED=${result.proxyProvisioningAllowed ? "1" : "0"}\n` +
+        `COMPLIANCE_ENFORCEMENT_MODE=${result.enforcementMode}\n` +
         `COMPLIANCE_POLICY_ID=${result.policyId}\n` +
         `COMPLIANCE_MAINTENANCE_NODE_IDS=${topologyNodeIds(policy).join(",")}\n` +
         `HMAC_V1_ACCEPT_UNTIL=${result.legacyNodeCompatibilityUntil}\n` +

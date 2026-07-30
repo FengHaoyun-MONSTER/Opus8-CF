@@ -173,7 +173,11 @@ export function Dashboard() {
 
       {error && <div className="err">{error}</div>}
       {compliance &&
-        (compliance.proxyProvisioningAllowed ? (
+        (compliance.enforcement === "observe-only" ? (
+          <div className="ok">
+            运营门禁已按管理员决定完全放开；合规审计继续以只读告警方式运行。
+          </div>
+        ) : compliance.proxyProvisioningAllowed ? (
           <div className="ok">
             Cloudflare 书面许可门禁已通过；新增用户与受控节点部署可用。
           </div>
