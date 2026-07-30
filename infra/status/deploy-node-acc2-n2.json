@@ -3,7 +3,29 @@
   "result": "failure",
   "nodeUrl": "",
   "markers": [
-    "STEP compliance-gate"
+    "STEP compliance-gate",
+    "OK compliance-gate",
+    "STEP resolve-registered-transport",
+    "INFO transport path=/ws/85845ad29845b9720308ec96 previous=/ mode=canary legacy=/ legacyUntil=1785652733561",
+    "STEP build",
+    "OK built (OK build: dist/index.js (311643 bytes), patch replaced 961 chars)",
+    "OK policy-test",
+    "STEP probe-landing",
+    "OK landing-port=40008 type=socks5(auth,fast) exit=104.28.156.180",
+    "STEP kv",
+    "OK kv=f634843a…",
+    "STEP deploy",
+    "OK deployed workers=https://opus8cf-node-acc2-n2.fengy2020212122.workers.dev custom=https://acc2-n2.openal.uk",
+    "STEP secrets",
+    "OK secrets-bulk hmac+uuid+socks5",
+    "STEP wait-deployed-version",
+    "OK deployed-version-active custom=1 workers=1",
+    "STEP register",
+    "OK registered host=acc2-n2.openal.uk transport=/ws/85845ad29845b9720308ec96",
+    "STEP wait-custom-domain",
+    "OK custom-domain-ready",
+    "STEP edge-gateway-regression",
+    "ERROR legacy-edge-route-open method=GET route=/login http=200"
   ],
-  "finishedAt": "2026-07-30T06:06:39Z"
+  "finishedAt": "2026-07-30T06:39:19Z"
 }
