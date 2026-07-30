@@ -1,5 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, type User, type UserActivity } from "../api";
+import {
+  api,
+  type HwidMode,
+  type User,
+  type UserActivity,
+  type UserDevice,
+} from "../api";
 import {
   copy,
   fmtBytes,
@@ -49,6 +55,8 @@ export function Users() {
   const [detailUser, setDetailUser] = useState<User | null>(null);
   const [activity, setActivity] = useState<UserActivity | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [devices, setDevices] = useState<UserDevice[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
 
   const [username, setUsername] = useState("");
   const [durationDays, setDurationDays] = useState("30");
@@ -57,6 +65,7 @@ export function Users() {
   const [deviceLimit, setDeviceLimit] = useState("2");
   const [ipLimit24h, setIpLimit24h] = useState("5");
   const [trafficLimitGb, setTrafficLimitGb] = useState("0");
+  const [hwidMode, setHwidMode] = useState<HwidMode>("off");
   const [creating, setCreating] = useState(false);
 
   async function refresh() {
@@ -109,6 +118,7 @@ export function Users() {
         deviceLimit: devices,
         ipLimit24h: dailyIps,
         trafficLimitBytes: Math.round(quotaGb * GIB),
+        hwidMode,
       });
       setUsername("");
       setNodeGroup("");
@@ -210,7 +220,10 @@ export function Users() {
   }
 
   async function copySub(user: User) {
-    await copy(subUrlFor(user.sub_token));
+    const firstDevice = (await api.listUserDevices(user.id)).devices.find(
+      (device) => device.enabled === 1,
+    );
+    await copy(firstDevice?.sub_url || subUrlFor(user.sub_token));
     setCopied(user.id);
     setTimeout(() => setCopied(""), 1500);
   }
@@ -218,14 +231,116 @@ export function Users() {
   async function openActivity(user: User) {
     setDetailUser(user);
     setActivity(null);
+    setDevices([]);
     setActivityLoading(true);
+    setDevicesLoading(true);
     try {
-      setActivity(await api.userActivity(user.id));
+      const [activityResult, deviceResult] = await Promise.all([
+        api.userActivity(user.id),
+        api.listUserDevices(user.id),
+      ]);
+      setActivity(activityResult);
+      setDevices(deviceResult.devices);
     } catch (e) {
       setError((e as Error).message);
       setDetailUser(null);
     } finally {
       setActivityLoading(false);
+      setDevicesLoading(false);
+    }
+  }
+
+  async function refreshDevices(userId: string) {
+    setDevicesLoading(true);
+    try {
+      setDevices((await api.listUserDevices(userId)).devices);
+    } finally {
+      setDevicesLoading(false);
+    }
+  }
+
+  async function addDevice(user: User) {
+    const name = prompt("设备名称", `设备 ${devices.length + 1}`);
+    if (name === null) return;
+    const mode = prompt(
+      "HWID 模式：off（关闭）、optional（软绑定）、required（强制）",
+      "off",
+    ) as HwidMode | null;
+    if (mode === null) return;
+    if (!["off", "optional", "required"].includes(mode)) {
+      setError("HWID 模式必须是 off、optional 或 required");
+      return;
+    }
+    try {
+      await api.createUserDevice(user.id, { name, hwidMode: mode });
+      await refreshDevices(user.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function toggleDevice(user: User, device: UserDevice) {
+    try {
+      await api.updateUserDevice(user.id, device.id, {
+        enabled: device.enabled !== 1,
+      });
+      await refreshDevices(user.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function changeDeviceHwid(user: User, device: UserDevice) {
+    const mode = prompt(
+      "HWID 模式：off（关闭）、optional（软绑定）、required（强制）",
+      device.hwid_mode,
+    ) as HwidMode | null;
+    if (mode === null) return;
+    if (!["off", "optional", "required"].includes(mode)) {
+      setError("HWID 模式必须是 off、optional 或 required");
+      return;
+    }
+    try {
+      await api.updateUserDevice(user.id, device.id, { hwidMode: mode });
+      await refreshDevices(user.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function resetDeviceHwid(user: User, device: UserDevice) {
+    if (!confirm(`清除 ${device.name} 当前绑定的 HWID？`)) return;
+    try {
+      await api.resetUserDeviceHwid(user.id, device.id);
+      await refreshDevices(user.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function rotateDevice(user: User, device: UserDevice) {
+    if (
+      !confirm(
+        `轮换 ${device.name} 的订阅令牌和连接凭证？旧订阅与旧节点配置会立即失效。`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.rotateUserDevice(user.id, device.id);
+      await refreshDevices(user.id);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function removeDevice(user: User, device: UserDevice) {
+    if (!confirm(`删除设备 ${device.name}？`)) return;
+    try {
+      await api.deleteUserDevice(user.id, device.id);
+      await refreshDevices(user.id);
+    } catch (e) {
+      setError((e as Error).message);
     }
   }
 
@@ -247,7 +362,7 @@ export function Users() {
         <div>
           <h2>用户与防分享</h2>
           <div className="muted">
-            按 UUID 统计流量，并限制同时在线及 24 小时公网 IP 数。
+            独立设备凭证、可选 HWID，并限制同时在线及 24 小时公网 IP 数。
           </div>
         </div>
         <button
@@ -306,6 +421,15 @@ export function Users() {
           value={nodeGroup}
           onChange={(e) => setNodeGroup(e.target.value)}
         />
+        <select
+          value={hwidMode}
+          onChange={(event) => setHwidMode(event.target.value as HwidMode)}
+          title="默认设备的 HWID 绑定模式"
+        >
+          <option value="off">HWID 关闭</option>
+          <option value="optional">HWID 软绑定</option>
+          <option value="required">HWID 强制</option>
+        </select>
         <label className="chk">
           <input
             type="checkbox"
@@ -322,6 +446,7 @@ export function Users() {
         <span>在线 IP</span>
         <span>24h IP</span>
         <span>流量 GB（0=不限）</span>
+        <span>不限量用户不启用精确字节计量</span>
       </div>
 
       {error && <div className="err">{error}</div>}
@@ -406,9 +531,11 @@ export function Users() {
                     <td
                       title={`上行 ${fmtBytes(user.bytes_up)} / 下行 ${fmtBytes(user.bytes_down)}`}
                     >
-                      {fmtBytes(used)} / {quota ? fmtBytes(quota) : "不限"}
+                      {quota
+                        ? `${fmtBytes(used)} / ${fmtBytes(quota)}`
+                        : "不限量 · 不计量"}
                     </td>
-                    <td>{user.connections}</td>
+                    <td>{quota ? user.connections : "—"}</td>
                     <td>
                       <label className="switch-label">
                         <input
@@ -527,11 +654,19 @@ export function Users() {
                   <div className="activity-summary">
                     <div>
                       <span>累计流量</span>
-                      <strong>{fmtBytes(activity.user.usedBytes)}</strong>
+                      <strong>
+                        {detailUser.traffic_limit_bytes
+                          ? fmtBytes(activity.user.usedBytes)
+                          : "未启用"}
+                      </strong>
                     </div>
                     <div>
                       <span>连接次数</span>
-                      <strong>{activity.user.connections}</strong>
+                      <strong>
+                        {detailUser.traffic_limit_bytes
+                          ? activity.user.connections
+                          : "—"}
+                      </strong>
                     </div>
                     <div>
                       <span>在线 IP</span>
@@ -546,6 +681,98 @@ export function Users() {
                       </strong>
                     </div>
                   </div>
+
+                  <section className="drawer-section">
+                    <div className="drawer-section-title">
+                      <h3>设备凭证</h3>
+                      <button
+                        className="btn-mini"
+                        onClick={() => void addDevice(detailUser)}
+                      >
+                        + 新增设备
+                      </button>
+                    </div>
+                    {devicesLoading ? (
+                      <div className="empty-inline">正在读取设备…</div>
+                    ) : (
+                      <div className="activity-list">
+                        {devices.map((device) => (
+                          <div className="activity-row" key={device.id}>
+                            <div>
+                              <strong>{device.name}</strong>
+                              <span>
+                                {device.credential_mode === "rotating"
+                                  ? "动态 UUID"
+                                  : "静态兼容"}
+                                {" · "}
+                                HWID {device.hwid_mode}
+                                {device.hwid_bound ? "（已绑定）" : "（未绑定）"}
+                                {" · "}
+                                {device.enabled ? "已启用" : "已停用"}
+                              </span>
+                            </div>
+                            <div className="user-actions">
+                              <button
+                                className="btn-mini"
+                                onClick={() => {
+                                  void copy(device.sub_url).then(() => {
+                                    setCopied(device.id);
+                                    setTimeout(() => setCopied(""), 1500);
+                                  });
+                                }}
+                              >
+                                {copied === device.id ? "已复制" : "复制订阅"}
+                              </button>
+                              <button
+                                className="btn-mini"
+                                onClick={() =>
+                                  void toggleDevice(detailUser, device)
+                                }
+                              >
+                                {device.enabled ? "停用" : "启用"}
+                              </button>
+                              <button
+                                className="btn-mini"
+                                onClick={() =>
+                                  void changeDeviceHwid(detailUser, device)
+                                }
+                              >
+                                HWID 模式
+                              </button>
+                              {device.hwid_bound && (
+                                <button
+                                  className="btn-mini"
+                                  onClick={() =>
+                                    void resetDeviceHwid(detailUser, device)
+                                  }
+                                >
+                                  重置 HWID
+                                </button>
+                              )}
+                              <button
+                                className="btn-mini"
+                                onClick={() =>
+                                  void rotateDevice(detailUser, device)
+                                }
+                              >
+                                轮换凭证
+                              </button>
+                              {!device.id.startsWith("legacy-") && (
+                                <button
+                                  className="btn-danger"
+                                  onClick={() =>
+                                    void removeDevice(detailUser, device)
+                                  }
+                                >
+                                  删除
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
 
                   <section className="drawer-section">
                     <div className="drawer-section-title">

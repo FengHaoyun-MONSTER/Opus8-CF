@@ -78,6 +78,42 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid);
 CREATE INDEX IF NOT EXISTS idx_users_subtoken ON users(sub_token);
 
+-- Each device has its own subscription token and connection credential.
+-- Existing users are backfilled as static credentials so upgrades do not break clients.
+CREATE TABLE IF NOT EXISTS user_devices (
+  id              TEXT PRIMARY KEY,
+  user_id         TEXT NOT NULL,
+  name            TEXT NOT NULL,
+  base_uuid       TEXT UNIQUE NOT NULL,
+  sub_token       TEXT UNIQUE NOT NULL,
+  credential_mode TEXT NOT NULL DEFAULT 'rotating'
+    CHECK (credential_mode IN ('static', 'rotating')),
+  hwid_mode       TEXT NOT NULL DEFAULT 'off'
+    CHECK (hwid_mode IN ('off', 'optional', 'required')),
+  hwid_hash       TEXT,
+  hwid_bound_at   INTEGER,
+  enabled         INTEGER NOT NULL DEFAULT 1,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_devices_user
+  ON user_devices(user_id, enabled, created_at);
+CREATE INDEX IF NOT EXISTS idx_user_devices_subtoken
+  ON user_devices(sub_token);
+CREATE INDEX IF NOT EXISTS idx_user_devices_uuid
+  ON user_devices(base_uuid);
+
+-- Idempotent compatibility migration. New users insert their rotating device in-app.
+INSERT OR IGNORE INTO user_devices
+  (id, user_id, name, base_uuid, sub_token, credential_mode, hwid_mode,
+   hwid_hash, hwid_bound_at, enabled, created_at, updated_at)
+SELECT
+  'legacy-' || id, id, 'Default device', uuid, sub_token, 'static', 'off',
+  NULL, NULL, enabled, created_at, created_at
+FROM users;
+
 -- SOCKS5 落地机注册表：凭据使用 LANDING_CONFIG_KEY 做 AES-GCM 加密。
 CREATE TABLE IF NOT EXISTS landings (
   id             TEXT PRIMARY KEY,

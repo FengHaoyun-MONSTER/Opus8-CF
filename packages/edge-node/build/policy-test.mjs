@@ -161,7 +161,8 @@ const unlocked = await OPUS8_normalizeState({
   unlockUuids: ["user-a"],
   accessPolicies: [{
     userId: "account-a", uuid: "user-a", deviceLimit: 2,
-    ipLimit24h: 5, trafficLimitBytes: 1073741824, usedBytes: 1024,
+    ipHashKey: "user:account-a", ipLimit24h: 5,
+    trafficLimitBytes: 1073741824, usedBytes: 1024, meteringEnabled: true,
   }],
   unlockHosts: ["openai.com", "claude.ai"],
   socks5Enabled: true,
@@ -233,6 +234,7 @@ OPUS8_setRequestPolicy(streamRequest, unlocked);
 const streamRuntime = OPUS8_bindUsageStream(
   streamRequest, { NODE_ID: "test" }, {}, presentedUuids, "xhttp",
 );
+streamRuntime.meteringEnabled = true;
 streamRuntime.lastAdmission = Date.now();
 const bridge = {
   readyState: 1,
@@ -249,6 +251,32 @@ if (
   streamRuntime.bytesDown !== 13
 ) {
   throw new Error("stream transport byte accounting is incorrect");
+}
+const unlimitedRequest = {};
+OPUS8_setRequestPolicy(unlimitedRequest, await OPUS8_normalizeState({
+  uuids: ["unlimited-user"],
+  unlockUuids: [],
+  accessPolicies: [{
+    userId: "account-unlimited", uuid: "unlimited-user",
+    ipHashKey: "user:account-unlimited", deviceLimit: 2, ipLimit24h: 5,
+    trafficLimitBytes: 0, usedBytes: 0, meteringEnabled: false,
+  }],
+}, "local-admin", true));
+const unlimitedUuid = ["unlimited-user"];
+Object.defineProperty(unlimitedUuid, "OPUS8_authenticated", {
+  value: "unlimited-user", configurable: true,
+});
+const unlimitedRuntime = OPUS8_bindUsageStream(
+  unlimitedRequest, { NODE_ID: "test" }, {}, unlimitedUuid, "xhttp",
+);
+unlimitedRuntime.admitted = true;
+unlimitedRuntime.meteringEnabled = false;
+OPUS8_noteUplink(unlimitedRequest, new Uint8Array(1024));
+if (
+  unlimitedRuntime.bytesUp !== 0
+  || unlimitedRuntime.queuedEvents.length !== 0
+) {
+  throw new Error("unlimited users must bypass byte accounting and usage events");
 }
 bridge.close();
 if (!streamRuntime.closed || bridge.readyState !== 3) {

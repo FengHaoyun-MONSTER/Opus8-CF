@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 
 const base = process.env.OPUS8_TEST_BASE || "http://127.0.0.1:8787";
 const adminPassword = process.env.OPUS8_TEST_ADMIN || "test-admin";
-const nodeSecret = process.env.OPUS8_TEST_NODE_SECRET || "test-node-hmac";
+const nodeSecret =
+  process.env.OPUS8_TEST_NODE_SECRET || "test-node-hmac-secret-32-bytes!!";
 const nodeId = `test-node-${process.pid}-${Date.now()}`;
 const nodeHost = `${nodeId}.example.com`;
 const transportPath = `/ws/integration-${process.pid}`;
@@ -42,6 +43,28 @@ async function signedPost(path, payload, timestamp = String(Date.now())) {
       "x-opus8-sign-v2": signature,
     },
     body,
+  });
+}
+
+async function signedGet(path, timestamp = String(Date.now())) {
+  const target = new URL(path, base).pathname + new URL(path, base).search;
+  const signature = crypto
+    .createHmac("sha256", nodeSecret)
+    .update([
+      "opus8-hmac-v2",
+      timestamp,
+      nodeId,
+      "GET",
+      target,
+      "",
+    ].join("\n"))
+    .digest("hex");
+  return fetch(base + path, {
+    headers: {
+      "x-opus8-ts": timestamp,
+      "x-opus8-node": nodeId,
+      "x-opus8-sign-v2": signature,
+    },
   });
 }
 
@@ -213,6 +236,7 @@ for (const landing of initialLandings.landings.filter(
 }
 
 let userId = "";
+let unlimitedUserId = "";
 let landingId = "";
 try {
   const created = await jsonResponse(
@@ -225,6 +249,7 @@ try {
         deviceLimit: 1,
         ipLimit24h: 2,
         trafficLimitBytes: 1_048_576,
+        hwidMode: "optional",
       }),
     }),
   );
@@ -237,10 +262,107 @@ try {
       Array.isArray(created.cacheInvalidation?.failedNodes),
     `user mutation must publish an observable policy version: ${JSON.stringify(created)}`,
   );
+  const initialDevices = await jsonResponse(
+    await fetch(`${base}/api/users/${userId}/devices`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    initialDevices.devices.length === 1
+      && initialDevices.devices[0].credential_mode === "rotating"
+      && initialDevices.devices[0].hwid_mode === "optional"
+      && initialDevices.devices[0].sub_url === created.subUrl,
+    `new users must receive one rotating default device: ${JSON.stringify(initialDevices)}`,
+  );
+  const rotatingPolicy = await jsonResponse(
+    await signedGet(`/api/nodes/${nodeId}/uuids`),
+  );
+  const userPolicies = rotatingPolicy.accessPolicies.filter(
+    (policy) => policy.userId === userId,
+  );
+  assert(
+    userPolicies.length === 2
+      && userPolicies.every(
+        (policy) =>
+          policy.uuid !== userUuid
+          && policy.meteringEnabled === true
+          && policy.ipHashKey === `user:${userId}`,
+      ),
+    `edge policy must accept current/previous dynamic UUIDs with stable IP scope: ${JSON.stringify(userPolicies)}`,
+  );
+  const requiredDeviceResult = await jsonResponse(
+    await fetch(`${base}/api/users/${userId}/devices`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        name: "integration-required",
+        hwidMode: "required",
+      }),
+    }),
+  );
+  const requiredDevice = requiredDeviceResult.device;
+  assert(
+    (await fetch(requiredDevice.sub_url)).status === 403,
+    "required HWID subscriptions must reject clients without a device identifier",
+  );
+  assert(
+    (await fetch(requiredDevice.sub_url, {
+      headers: { "x-hwid": "integration-device-a" },
+    })).status === 200,
+    "the first valid HWID must bind and download the subscription",
+  );
+  assert(
+    (await fetch(requiredDevice.sub_url, {
+      headers: { "x-hwid": "integration-device-b" },
+    })).status === 403,
+    "a different HWID must be rejected after first binding",
+  );
+  await jsonResponse(
+    await fetch(
+      `${base}/api/users/${userId}/devices/${requiredDevice.id}/hwid/reset`,
+      { method: "POST", headers: adminHeaders },
+    ),
+  );
+  assert(
+    (await fetch(requiredDevice.sub_url, {
+      headers: { "x-hwid": "integration-device-b" },
+    })).status === 200,
+    "an administrator reset must allow a replacement device to bind",
+  );
+  const rotatedDeviceResult = await jsonResponse(
+    await fetch(
+      `${base}/api/users/${userId}/devices/${requiredDevice.id}/rotate`,
+      { method: "POST", headers: adminHeaders },
+    ),
+  );
+  assert(
+    (await fetch(requiredDevice.sub_url)).status === 404,
+    "rotating a device must revoke its old subscription token",
+  );
+  assert(
+    (await fetch(rotatedDeviceResult.device.sub_url, {
+      headers: { "x-hwid": "integration-device-c" },
+    })).status === 200,
+    "the rotated required device must accept a fresh HWID binding",
+  );
+  await jsonResponse(
+    await fetch(
+      `${base}/api/users/${userId}/devices/${requiredDevice.id}`,
+      { method: "DELETE", headers: adminHeaders },
+    ),
+  );
+  assert(
+    (await fetch(
+      `${base}/api/users/${userId}/devices/${initialDevices.devices[0].id}`,
+      { method: "DELETE", headers: adminHeaders },
+    )).status === 409,
+    "the migration anchor device must not be deleted and resurrected by a later schema run",
+  );
 
   const admit = (ipHash, leaseId) =>
     signedPost("/api/nodes/admission", {
       nodeId,
+      userId,
       uuid: userUuid,
       leaseId,
       ipHash,
@@ -256,6 +378,7 @@ try {
 
   const event = {
     id: `${nodeId}:event-1`,
+    userId,
     uuid: userUuid,
     connections: 1,
     bytesUp: 100,
@@ -268,6 +391,53 @@ try {
   await jsonResponse(
     await signedPost("/api/nodes/usage", { nodeId, events: [event] }),
   );
+  const unlimitedCreated = await jsonResponse(
+    await fetch(`${base}/api/users`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        username: `${username}-unlimited`,
+        durationDays: 1,
+        deviceLimit: 1,
+        ipLimit24h: 2,
+        trafficLimitBytes: 0,
+      }),
+    }),
+  );
+  unlimitedUserId = unlimitedCreated.user.id;
+  const policyWithUnlimited = await jsonResponse(
+    await signedGet(`/api/nodes/${nodeId}/uuids`),
+  );
+  const unlimitedPolicies = policyWithUnlimited.accessPolicies.filter(
+    (policy) => policy.userId === unlimitedUserId,
+  );
+  assert(
+    unlimitedPolicies.length === 2
+      && unlimitedPolicies.every(
+        (policy) =>
+          policy.meteringEnabled === false
+          && policy.trafficLimitBytes === 0,
+      ),
+    "unlimited edge policies must keep admission but disable metering",
+  );
+  const unlimitedUsage = await jsonResponse(
+    await signedPost("/api/nodes/usage", {
+      nodeId,
+      events: [{
+        id: `${nodeId}:unlimited-event-1`,
+        userId: unlimitedUserId,
+        uuid: unlimitedCreated.user.uuid,
+        connections: 1,
+        bytesUp: 999,
+        bytesDown: 999,
+        tsBucket: Math.floor(Date.now() / 3_600_000) * 3_600_000,
+      }],
+    }),
+  );
+  assert(
+    unlimitedUsage.accepted === 0,
+    "unlimited users must not create precise usage rows",
+  );
 
   const users = await jsonResponse(
     await fetch(`${base}/api/users`, { headers: adminHeaders }),
@@ -276,6 +446,15 @@ try {
   assert(
     row?.bytes_up === 100 && row?.bytes_down === 200 && row?.connections === 1,
     `usage event must be idempotent: ${JSON.stringify(row)}`,
+  );
+  const unlimitedRow = users.users.find(
+    (item) => item.id === unlimitedUserId,
+  );
+  assert(
+    unlimitedRow?.bytes_up === 0
+      && unlimitedRow?.bytes_down === 0
+      && unlimitedRow?.connections === 0,
+    `unlimited users must remain unmetered: ${JSON.stringify(unlimitedRow)}`,
   );
   assert(
     row?.access_state === "active_ip_limit_reached" &&
@@ -601,10 +780,10 @@ try {
   ).toString("utf8");
   const usageHeader = subscription.headers.get("subscription-userinfo") || "";
   assert(
-    subscription.headers.get("x-opus8-subscription-protection") ===
-      "rate-limit-v1" &&
+    (subscription.headers.get("x-opus8-subscription-protection") || "")
+      .startsWith("device-token-v1;") &&
       (subscription.headers.get("cache-control") || "").includes("no-store"),
-    "subscription responses must confirm native rate limiting and disable caching",
+    "subscription responses must confirm device credentials and disable caching",
   );
   const base64Node = new URL(
     base64Subscription.split(/\r?\n/).find(Boolean),
@@ -612,6 +791,11 @@ try {
   assert(
     base64Node.searchParams.get("path") === `${transportPath}?ed=2560`,
     `base64/Xray subscription must use the registered path: ${base64Subscription}`,
+  );
+  assert(
+    base64Node.username !== userUuid
+      && /^[0-9a-f-]{36}$/.test(base64Node.username),
+    "new subscriptions must render a rotating per-device UUID",
   );
   const clashSubscription = await (
     await fetch(`${created.subUrl}?format=clash`)
@@ -718,6 +902,12 @@ try {
   }
   if (userId) {
     await fetch(`${base}/api/users/${userId}`, {
+      method: "DELETE",
+      headers: adminHeaders,
+    });
+  }
+  if (unlimitedUserId) {
+    await fetch(`${base}/api/users/${unlimitedUserId}`, {
       method: "DELETE",
       headers: adminHeaders,
     });

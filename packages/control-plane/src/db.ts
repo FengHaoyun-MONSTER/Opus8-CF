@@ -1,6 +1,9 @@
 import type {
+  DeviceCredentialMode,
+  HwidMode,
   NodeRecord,
   UserAccessPolicy,
+  UserDeviceRecord,
   UserRecord,
 } from "@opus8-cf/shared";
 import {
@@ -8,6 +11,7 @@ import {
   type AccessSeverity,
   type AccessState,
 } from "./access-status";
+import { deviceCredentialUuids } from "./device-credentials";
 
 export interface Env {
   DB: D1Database;
@@ -115,6 +119,12 @@ export async function listNodes(env: Env): Promise<NodeRecord[]> {
   return results ?? [];
 }
 
+export interface SubscriptionPrincipal {
+  user: UserRecord;
+  device: UserDeviceRecord;
+  trafficLimitBytes: number;
+}
+
 export async function getNode(
   env: Env,
   id: string,
@@ -216,19 +226,74 @@ export async function listUsers(env: Env): Promise<AdminUserRecord[]> {
   });
 }
 
-export async function getUserByToken(
+export async function getSubscriptionPrincipal(
   env: Env,
   token: string,
-): Promise<UserRecord | null> {
-  return env.DB.prepare("SELECT * FROM users WHERE sub_token=?1")
+): Promise<SubscriptionPrincipal | null> {
+  const row = await env.DB.prepare(
+    `SELECT u.*,
+       d.id AS device_id,
+       d.user_id AS device_user_id,
+       d.name AS device_name,
+       d.base_uuid AS device_base_uuid,
+       d.sub_token AS device_sub_token,
+       d.credential_mode AS device_credential_mode,
+       d.hwid_mode AS device_hwid_mode,
+       d.hwid_hash AS device_hwid_hash,
+       d.hwid_bound_at AS device_hwid_bound_at,
+       d.enabled AS device_enabled,
+       d.created_at AS device_created_at,
+       d.updated_at AS device_updated_at,
+       COALESCE(l.traffic_limit_bytes,0) AS device_traffic_limit_bytes
+     FROM user_devices d
+     JOIN users u ON u.id=d.user_id
+     LEFT JOIN user_limits l ON l.user_id=u.id
+     WHERE d.sub_token=?1`,
+  )
     .bind(token)
-    .first<UserRecord>();
+    .first<
+      UserRecord & {
+        device_id: string;
+        device_user_id: string;
+        device_name: string;
+        device_base_uuid: string;
+        device_sub_token: string;
+        device_credential_mode: DeviceCredentialMode;
+        device_hwid_mode: HwidMode;
+        device_hwid_hash: string | null;
+        device_hwid_bound_at: number | null;
+        device_enabled: number;
+        device_created_at: number;
+        device_updated_at: number;
+        device_traffic_limit_bytes: number;
+      }
+    >();
+  if (!row) return null;
+  return {
+    user: row,
+    device: {
+      id: row.device_id,
+      user_id: row.device_user_id,
+      name: row.device_name,
+      base_uuid: row.device_base_uuid,
+      sub_token: row.device_sub_token,
+      credential_mode: row.device_credential_mode,
+      hwid_mode: row.device_hwid_mode,
+      hwid_hash: row.device_hwid_hash,
+      hwid_bound_at: row.device_hwid_bound_at,
+      enabled: row.device_enabled,
+      created_at: row.device_created_at,
+      updated_at: row.device_updated_at,
+    },
+    trafficLimitBytes: Number(row.device_traffic_limit_bytes || 0),
+  };
 }
 
 export async function insertUser(
   env: Env,
   u: UserRecord,
   limits: Required<UserLimitInput>,
+  device: UserDeviceRecord,
 ): Promise<void> {
   await env.DB.batch([
     env.DB.prepare(
@@ -246,6 +311,21 @@ export async function insertUser(
       u.created_at,
     ),
     env.DB.prepare(
+      `INSERT INTO user_devices
+       (id,user_id,name,base_uuid,sub_token,credential_mode,hwid_mode,
+        hwid_hash,hwid_bound_at,enabled,created_at,updated_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,NULL,NULL,1,?8,?8)`,
+    ).bind(
+      device.id,
+      device.user_id,
+      device.name,
+      device.base_uuid,
+      device.sub_token,
+      device.credential_mode,
+      device.hwid_mode,
+      device.created_at,
+    ),
+    env.DB.prepare(
       `INSERT INTO user_limits
        (user_id, device_limit, ip_limit_24h, traffic_limit_bytes, updated_at)
        VALUES (?1,?2,?3,?4,?5)`,
@@ -257,6 +337,136 @@ export async function insertUser(
       u.created_at,
     ),
   ]);
+}
+
+export async function listUserDevices(
+  env: Env,
+  userId: string,
+): Promise<UserDeviceRecord[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM user_devices WHERE user_id=?1 ORDER BY created_at ASC`,
+  )
+    .bind(userId)
+    .all<UserDeviceRecord>();
+  return results ?? [];
+}
+
+export async function createUserDevice(
+  env: Env,
+  device: UserDeviceRecord,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO user_devices
+     (id,user_id,name,base_uuid,sub_token,credential_mode,hwid_mode,
+      hwid_hash,hwid_bound_at,enabled,created_at,updated_at)
+     SELECT ?1,u.id,?3,?4,?5,?6,?7,NULL,NULL,1,?8,?8
+     FROM users u
+     WHERE u.id=?2
+       AND (SELECT COUNT(*) FROM user_devices d WHERE d.user_id=u.id)<20`,
+  )
+    .bind(
+      device.id,
+      device.user_id,
+      device.name,
+      device.base_uuid,
+      device.sub_token,
+      device.credential_mode,
+      device.hwid_mode,
+      device.created_at,
+    )
+    .run();
+}
+
+export async function updateUserDevice(
+  env: Env,
+  userId: string,
+  deviceId: string,
+  changes: { name?: string; enabled?: boolean; hwidMode?: HwidMode },
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE user_devices SET
+       name=COALESCE(?3,name),
+       enabled=COALESCE(?4,enabled),
+       hwid_mode=COALESCE(?5,hwid_mode),
+       hwid_hash=CASE WHEN ?5='off' THEN NULL ELSE hwid_hash END,
+       hwid_bound_at=CASE WHEN ?5='off' THEN NULL ELSE hwid_bound_at END,
+       updated_at=?6
+     WHERE id=?1 AND user_id=?2`,
+  )
+    .bind(
+      deviceId,
+      userId,
+      changes.name ?? null,
+      changes.enabled === undefined ? null : changes.enabled ? 1 : 0,
+      changes.hwidMode ?? null,
+      Date.now(),
+    )
+    .run();
+}
+
+export async function resetUserDeviceHwid(
+  env: Env,
+  userId: string,
+  deviceId: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE user_devices
+     SET hwid_hash=NULL,hwid_bound_at=NULL,updated_at=?3
+     WHERE id=?1 AND user_id=?2`,
+  )
+    .bind(deviceId, userId, Date.now())
+    .run();
+}
+
+export async function rotateUserDeviceCredential(
+  env: Env,
+  userId: string,
+  deviceId: string,
+  baseUuid: string,
+  subToken: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE user_devices
+     SET base_uuid=?3,sub_token=?4,credential_mode='rotating',
+         hwid_hash=NULL,hwid_bound_at=NULL,updated_at=?5
+     WHERE id=?1 AND user_id=?2`,
+  )
+    .bind(deviceId, userId, baseUuid, subToken, Date.now())
+    .run();
+}
+
+export async function deleteUserDevice(
+  env: Env,
+  userId: string,
+  deviceId: string,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `DELETE FROM user_devices
+     WHERE id=?1 AND user_id=?2
+       AND id NOT LIKE 'legacy-%'
+       AND (SELECT COUNT(*) FROM user_devices WHERE user_id=?2)>1`,
+  )
+    .bind(deviceId, userId)
+    .run();
+  return Number(result.meta.changes || 0) > 0;
+}
+
+export async function bindUserDeviceHwid(
+  env: Env,
+  deviceId: string,
+  hwidHash: string,
+): Promise<UserDeviceRecord | null> {
+  const now = Date.now();
+  await env.DB.prepare(
+    `UPDATE user_devices
+     SET hwid_hash=?2,hwid_bound_at=?3,updated_at=?3
+     WHERE id=?1 AND enabled=1 AND hwid_hash IS NULL`,
+  )
+    .bind(deviceId, hwidHash, now)
+    .run();
+  return env.DB.prepare("SELECT * FROM user_devices WHERE id=?1")
+    .bind(deviceId)
+    .first<UserDeviceRecord>();
 }
 
 export async function deleteUser(env: Env, id: string): Promise<void> {
@@ -317,19 +527,21 @@ export async function activeUserPolicy(env: Env): Promise<{
 }> {
   const now = Date.now();
   const { results } = await env.DB.prepare(
-    `SELECT u.id, u.uuid, u.unlock,
+    `SELECT u.id, u.unlock, d.base_uuid, d.credential_mode,
        COALESCE(l.device_limit,2) AS device_limit,
        COALESCE(l.ip_limit_24h,5) AS ip_limit_24h,
        COALESCE(l.traffic_limit_bytes,0) AS traffic_limit_bytes,
        COALESCE((SELECT SUM(x.bytes_up+x.bytes_down) FROM usage x WHERE x.user_id=u.id),0) AS used_bytes
      FROM users u
+     JOIN user_devices d ON d.user_id=u.id AND d.enabled=1
      LEFT JOIN user_limits l ON l.user_id=u.id
      WHERE u.enabled=1 AND (u.expire_at IS NULL OR u.expire_at>?1)`,
   )
     .bind(now)
     .all<{
       id: string;
-      uuid: string;
+      base_uuid: string;
+      credential_mode: DeviceCredentialMode;
       unlock: number;
       device_limit: number;
       ip_limit_24h: number;
@@ -337,16 +549,34 @@ export async function activeUserPolicy(env: Env): Promise<{
       used_bytes: number;
     }>();
   const active = results ?? [];
+  const credentials = (
+    await Promise.all(
+      active.map(async (row) => ({
+        row,
+        uuids: await deviceCredentialUuids(
+          env.NODE_HMAC_SECRET,
+          row.base_uuid,
+          row.credential_mode,
+          now,
+        ),
+      })),
+    )
+  ).flatMap(({ row, uuids }) => uuids.map((uuid) => ({ row, uuid })));
   return {
-    uuids: active.map((r) => r.uuid),
-    unlockUuids: active.filter((r) => r.unlock === 1).map((r) => r.uuid),
-    accessPolicies: active.map((r) => ({
-      userId: r.id,
-      uuid: r.uuid,
-      deviceLimit: r.device_limit,
-      ipLimit24h: r.ip_limit_24h,
-      trafficLimitBytes: r.traffic_limit_bytes,
-      usedBytes: r.used_bytes,
+    uuids: credentials.map(({ uuid }) => uuid),
+    unlockUuids: credentials
+      .filter(({ row }) => row.unlock === 1)
+      .map(({ uuid }) => uuid),
+    accessPolicies: credentials.map(({ row, uuid }) => ({
+      userId: row.id,
+      uuid,
+      ipHashKey:
+        row.credential_mode === "static" ? uuid : `user:${row.id}`,
+      deviceLimit: row.device_limit,
+      ipLimit24h: row.ip_limit_24h,
+      trafficLimitBytes: row.traffic_limit_bytes,
+      usedBytes: row.used_bytes,
+      meteringEnabled: row.traffic_limit_bytes > 0,
     })),
   };
 }

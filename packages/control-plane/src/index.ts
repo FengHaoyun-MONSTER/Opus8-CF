@@ -11,7 +11,9 @@ import {
   randomToken,
   normalizeTransportPath,
   type ActiveUuidsResponse,
+  type HwidMode,
   type NodeRecord,
+  type UserDeviceRecord,
   type UserRecord,
   type RegisterRequest,
   type HeartbeatRequest,
@@ -25,13 +27,20 @@ import {
   listUsers,
   insertUser,
   deleteUser,
-  getUserByToken,
+  getSubscriptionPrincipal,
   activeUserPolicy,
   updateUserPolicy,
   getUserUsage,
   resetUserUsage,
   clearUserLeases,
   getUserLimits,
+  listUserDevices,
+  createUserDevice,
+  updateUserDevice,
+  resetUserDeviceHwid,
+  rotateUserDeviceCredential,
+  deleteUserDevice,
+  bindUserDeviceHwid,
 } from "./db";
 import {
   nodesForUser,
@@ -81,6 +90,11 @@ import {
   proxyProvisioningAllowed,
   trafficLimitIncreases,
 } from "./compliance";
+import {
+  deriveDeviceUuid,
+  hashDeviceHwid,
+  normalizeHwid,
+} from "./device-credentials";
 import {
   previousSecretConfigured,
   verifyJwtWithRotation,
@@ -303,6 +317,7 @@ export default {
           deviceLimit?: number;
           ipLimit24h?: number;
           trafficLimitBytes?: number;
+          hwidMode?: HwidMode;
         };
         let deviceLimit: number;
         let ipLimit24h: number;
@@ -324,36 +339,205 @@ export default {
         } catch (error) {
           return err((error as Error).message, 400);
         }
+        const hwidMode = parseHwidMode(b.hwidMode);
+        if (!hwidMode) return err("HWID mode must be off, optional, or required", 400);
         const now = Date.now();
+        const userId = randomHex(8);
+        const baseUuid = randomUuid();
+        const subToken = randomToken();
         const user: UserRecord = {
-          id: randomHex(8),
+          id: userId,
           username: b.username ?? null,
-          uuid: randomUuid(),
+          uuid: baseUuid,
           plan_id: b.planId ?? null,
           node_group: b.nodeGroup ? JSON.stringify(b.nodeGroup) : null,
           unlock: b.unlock ? 1 : 0,
-          sub_token: randomToken(),
+          sub_token: subToken,
           expire_at: b.durationDays ? now + b.durationDays * 86400_000 : null,
           enabled: 1,
           created_at: now,
+        };
+        const device: UserDeviceRecord = {
+          id: `legacy-${userId}`,
+          user_id: userId,
+          name: "Default device",
+          base_uuid: baseUuid,
+          sub_token: subToken,
+          credential_mode: "rotating",
+          hwid_mode: hwidMode,
+          hwid_hash: null,
+          hwid_bound_at: null,
+          enabled: 1,
+          created_at: now,
+          updated_at: now,
         };
         await insertUser(env, user, {
           deviceLimit,
           ipLimit24h,
           trafficLimitBytes,
-        });
+        }, device);
         const policy = await publishEdgePolicyChange(env);
         // 订阅链接用 worker 实际访问源（workers.dev）；接入自定义域名后可改为 SUB_BASE。
         const base = env.SUB_BASE || url.origin;
         return json(
           {
             user,
-            subUrl: `${base}/sub/${user.sub_token}`,
+            subUrl: `${base}/sub/${device.sub_token}`,
             policyVersion: policy.version,
             cacheInvalidation: policy.invalidation,
           },
           201,
         );
+      }
+      const userDevicesMatch = p.match(/^\/api\/users\/([^/]+)\/devices$/);
+      if (userDevicesMatch && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        if (!(await getUserLimits(env, userDevicesMatch[1])))
+          return err("用户不存在", 404);
+        const base = env.SUB_BASE || url.origin;
+        return json({
+          devices: (await listUserDevices(env, userDevicesMatch[1])).map(
+            (device) => adminDeviceView(device, base),
+          ),
+        });
+      }
+      if (userDevicesMatch && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const userId = userDevicesMatch[1];
+        if (!(await getUserLimits(env, userId))) return err("用户不存在", 404);
+        const existing = await listUserDevices(env, userId);
+        if (existing.length >= 20) return err("每个用户最多创建 20 台设备", 409);
+        const body = (await req.json().catch(() => ({}))) as {
+          name?: unknown;
+          hwidMode?: unknown;
+        };
+        const name =
+          typeof body.name === "string" && body.name.trim()
+            ? body.name.trim().slice(0, 64)
+            : `Device ${existing.length + 1}`;
+        const hwidMode = parseHwidMode(body.hwidMode);
+        if (!hwidMode)
+          return err("HWID mode must be off, optional, or required", 400);
+        const now = Date.now();
+        const device: UserDeviceRecord = {
+          id: `dev-${randomHex(8)}`,
+          user_id: userId,
+          name,
+          base_uuid: randomUuid(),
+          sub_token: randomToken(),
+          credential_mode: "rotating",
+          hwid_mode: hwidMode,
+          hwid_hash: null,
+          hwid_bound_at: null,
+          enabled: 1,
+          created_at: now,
+          updated_at: now,
+        };
+        await createUserDevice(env, device);
+        const policy = await publishEdgePolicyChange(env);
+        const base = env.SUB_BASE || url.origin;
+        return json(
+          {
+            device: adminDeviceView(device, base),
+            policyVersion: policy.version,
+            cacheInvalidation: policy.invalidation,
+          },
+          201,
+        );
+      }
+      const deviceHwidResetMatch = p.match(
+        /^\/api\/users\/([^/]+)\/devices\/([^/]+)\/hwid\/reset$/,
+      );
+      if (deviceHwidResetMatch && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        await resetUserDeviceHwid(
+          env,
+          deviceHwidResetMatch[1],
+          deviceHwidResetMatch[2],
+        );
+        return json({ ok: true });
+      }
+      const deviceRotateMatch = p.match(
+        /^\/api\/users\/([^/]+)\/devices\/([^/]+)\/rotate$/,
+      );
+      if (deviceRotateMatch && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        await rotateUserDeviceCredential(
+          env,
+          deviceRotateMatch[1],
+          deviceRotateMatch[2],
+          randomUuid(),
+          randomToken(),
+        );
+        const devices = await listUserDevices(env, deviceRotateMatch[1]);
+        const device = devices.find((item) => item.id === deviceRotateMatch[2]);
+        if (!device) return err("设备不存在", 404);
+        const policy = await publishEdgePolicyChange(env);
+        const base = env.SUB_BASE || url.origin;
+        return json({
+          device: adminDeviceView(device, base),
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
+      }
+      const userDeviceMatch = p.match(
+        /^\/api\/users\/([^/]+)\/devices\/([^/]+)$/,
+      );
+      if (userDeviceMatch && m === "PATCH") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const body = (await req.json().catch(() => ({}))) as {
+          name?: unknown;
+          enabled?: unknown;
+          hwidMode?: unknown;
+        };
+        if (
+          body.name !== undefined
+          && (typeof body.name !== "string"
+            || body.name.trim().length < 1
+            || body.name.trim().length > 64)
+        ) {
+          return err("设备名称长度必须为 1 到 64 个字符", 400);
+        }
+        if (body.enabled !== undefined && typeof body.enabled !== "boolean")
+          return err("enabled 必须是布尔值", 400);
+        const hwidMode =
+          body.hwidMode === undefined ? undefined : parseHwidMode(body.hwidMode);
+        if (body.hwidMode !== undefined && !hwidMode)
+          return err("HWID mode must be off, optional, or required", 400);
+        if (
+          body.name === undefined
+          && body.enabled === undefined
+          && body.hwidMode === undefined
+        ) {
+          return err("没有可更新的字段", 400);
+        }
+        await updateUserDevice(env, userDeviceMatch[1], userDeviceMatch[2], {
+          name:
+            typeof body.name === "string" ? body.name.trim() : undefined,
+          enabled: body.enabled as boolean | undefined,
+          hwidMode: hwidMode || undefined,
+        });
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          ok: true,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
+      }
+      if (userDeviceMatch && m === "DELETE") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const removed = await deleteUserDevice(
+          env,
+          userDeviceMatch[1],
+          userDeviceMatch[2],
+        );
+        if (!removed) return err("设备不存在，或不能删除最后一台设备", 409);
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          ok: true,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
       }
       const userMatch = p.match(/^\/api\/users\/([^/]+)$/);
       if (userMatch && m === "PATCH") {
@@ -862,11 +1046,51 @@ export default {
             rateLimit.retryAfterSeconds,
           );
         }
-        const user = await getUserByToken(env, subscriptionToken);
-        if (!user || user.enabled !== 1)
+        const principal = await getSubscriptionPrincipal(
+          env,
+          subscriptionToken,
+        );
+        if (
+          !principal
+          || principal.user.enabled !== 1
+          || principal.device.enabled !== 1
+        )
           return subscriptionError("订阅无效", 404);
+        const { user, device } = principal;
         if (user.expire_at && user.expire_at < Date.now())
           return subscriptionError("订阅已过期", 403);
+        const rawHwid =
+          req.headers.get("x-hwid")
+          || req.headers.get("x-hwid-device-id");
+        const normalizedHwid = normalizeHwid(rawHwid);
+        if (rawHwid !== null && normalizedHwid === null)
+          return subscriptionError("HWID 格式无效", 400);
+        if (device.hwid_mode === "required" && !normalizedHwid)
+          return subscriptionError("此设备订阅需要 HWID", 403);
+        if (device.hwid_mode !== "off" && normalizedHwid) {
+          const hwidHash = await hashDeviceHwid(
+            env.NODE_HMAC_SECRET,
+            device.id,
+            normalizedHwid,
+          );
+          const bound = device.hwid_hash
+            ? device
+            : await bindUserDeviceHwid(env, device.id, hwidHash);
+          if (
+            !bound
+            || !bound.hwid_hash
+            || !timingSafeEqual(bound.hwid_hash, hwidHash)
+          ) {
+            return subscriptionError("HWID 与已绑定设备不匹配", 403);
+          }
+        }
+        const credentialUuid =
+          device.credential_mode === "static"
+            ? device.base_uuid
+            : await deriveDeviceUuid(
+                env.NODE_HMAC_SECRET,
+                device.base_uuid,
+              );
         const nodes = nodesForUser(user, await listNodes(env));
         const fmt = pickFormat(
           req.headers.get("user-agent") || "",
@@ -880,16 +1104,31 @@ export default {
             : {};
         const [{ body, contentType }, usage] = await Promise.all([
           Promise.resolve(
-            renderSubscription(fmt, user, nodes, optIpsByNode),
+            renderSubscription(
+              fmt,
+              user,
+              nodes,
+              optIpsByNode,
+              credentialUuid,
+            ),
           ),
-          getUserUsage(env, user.id),
+          principal.trafficLimitBytes > 0
+            ? getUserUsage(env, user.id)
+            : Promise.resolve({
+                bytesUp: 0,
+                bytesDown: 0,
+                connections: 0,
+                total: 0,
+                trafficLimitBytes: 0,
+              }),
         ]);
         return new Response(body, {
           headers: {
             "content-type": contentType,
             "cache-control": "private, no-store",
-            "x-opus8-subscription-protection": "rate-limit-v1",
-            "profile-update-interval": "12",
+            "x-opus8-subscription-protection": `device-token-v1; hwid=${device.hwid_mode}; credential=${device.credential_mode}`,
+            "profile-update-interval":
+              device.credential_mode === "rotating" ? "6" : "12",
             "subscription-userinfo": subUserInfo(
               user,
               usage.bytesUp,
@@ -1073,6 +1312,29 @@ function subUserInfo(
 ): string {
   const expire = user.expire_at ? Math.floor(user.expire_at / 1000) : 0;
   return `upload=${upload}; download=${download}; total=${total}; expire=${expire}`;
+}
+
+function parseHwidMode(value: unknown): HwidMode | null {
+  if (value === undefined || value === null || value === "") return "off";
+  return value === "off" || value === "optional" || value === "required"
+    ? value
+    : null;
+}
+
+function adminDeviceView(device: UserDeviceRecord, base: string) {
+  return {
+    id: device.id,
+    user_id: device.user_id,
+    name: device.name,
+    credential_mode: device.credential_mode,
+    hwid_mode: device.hwid_mode,
+    hwid_bound: Boolean(device.hwid_hash),
+    hwid_bound_at: device.hwid_bound_at,
+    enabled: device.enabled,
+    created_at: device.created_at,
+    updated_at: device.updated_at,
+    sub_url: `${base}/sub/${device.sub_token}`,
+  };
 }
 
 function boundedInteger(

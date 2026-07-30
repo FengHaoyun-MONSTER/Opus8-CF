@@ -90,7 +90,7 @@ const worker = spawn(
     "--var",
     "JWT_SECRET:test-jwt-secret",
     "--var",
-    "NODE_HMAC_SECRET:test-node-hmac",
+    "NODE_HMAC_SECRET:test-node-hmac-secret-32-bytes!!",
     "--var",
     "LANDING_CONFIG_KEY:test-landing-config-key-32-bytes",
     "--var",
@@ -115,7 +115,7 @@ try {
   await waitUntilReady(base, worker, logs);
   process.env.OPUS8_TEST_BASE = base;
   process.env.OPUS8_TEST_ADMIN = "test-admin";
-  process.env.OPUS8_TEST_NODE_SECRET = "test-node-hmac";
+  process.env.OPUS8_TEST_NODE_SECRET = "test-node-hmac-secret-32-bytes!!";
   process.env.OPUS8_TEST_RATE_LIMIT = "1";
   await import(`./integration.mjs?local=${Date.now()}`);
 } finally {

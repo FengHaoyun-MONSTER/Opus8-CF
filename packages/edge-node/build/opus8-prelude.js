@@ -275,10 +275,14 @@ function OPUS8_normalizeAccessPolicies(input) {
     policies[uuid] = {
       userId: String(item?.userId || ""),
       uuid,
+      ipHashKey: String(item?.ipHashKey || uuid),
       deviceLimit: Math.max(1, Number(item?.deviceLimit) || 2),
       ipLimit24h: Math.max(1, Number(item?.ipLimit24h) || 5),
       trafficLimitBytes: Math.max(0, Number(item?.trafficLimitBytes) || 0),
       usedBytes: Math.max(0, Number(item?.usedBytes) || 0),
+      meteringEnabled:
+        item?.meteringEnabled === true
+        || Math.max(0, Number(item?.trafficLimitBytes) || 0) > 0,
     };
   }
   return policies;
@@ -735,6 +739,9 @@ function OPUS8_createUsageRuntime(request, env, ctx, uuidRef, transport, socket 
     transport,
     uuidRef,
     uuid: "",
+    userId: "",
+    ipHashKey: "",
+    meteringEnabled: false,
     leaseId: crypto.randomUUID(),
     seq: 0,
     bytesUp: 0,
@@ -770,6 +777,7 @@ function OPUS8_bindUsageSocket(webSocket, request, env, ctx, uuidRef) {
   OPUS8_socketUsage.set(webSocket, runtime);
   webSocket.addEventListener("message", (event) => {
     OPUS8_maybeRenewAdmission(runtime);
+    if (!runtime.meteringEnabled) return;
     const size = OPUS8_dataSize(event.data);
     runtime.bytesUp += size;
     runtime.sessionBytes += size;
@@ -806,6 +814,7 @@ function OPUS8_noteUplink(request, payload) {
   const runtime = OPUS8_usageRuntime(request);
   if (!runtime || runtime.closed) return;
   OPUS8_maybeRenewAdmission(runtime);
+  if (!runtime.meteringEnabled) return;
   const size = OPUS8_dataSize(payload);
   runtime.bytesUp += size;
   runtime.sessionBytes += size;
@@ -817,6 +826,7 @@ function OPUS8_noteDownlink(webSocket, payload) {
   const runtime = OPUS8_socketUsage.get(webSocket);
   if (!runtime || runtime.closed) return;
   OPUS8_maybeRenewAdmission(runtime);
+  if (!runtime.meteringEnabled) return;
   const size = OPUS8_dataSize(payload);
   runtime.bytesDown += size;
   runtime.sessionBytes += size;
@@ -855,7 +865,7 @@ async function OPUS8_ipHash(runtime) {
     || "unknown";
   return OPUS8_hmac(
     runtime.env.NODE_HMAC_SECRET,
-    "ip:v1:" + runtime.uuid + ":" + rawIp,
+    "ip:v1:" + (runtime.ipHashKey || runtime.uuid) + ":" + rawIp,
   );
 }
 
@@ -882,6 +892,10 @@ async function OPUS8_requireAdmission(request, uuidRef, force = false) {
   const state = OPUS8_requestPolicies.get(request);
   const policy = state?.accessPolicies?.[uuid];
   if (!policy) return true;
+  runtime.userId = String(policy.userId || "");
+  runtime.ipHashKey = String(policy.ipHashKey || uuid);
+  runtime.meteringEnabled = policy.meteringEnabled === true
+    && Number(policy.trafficLimitBytes || 0) > 0;
   runtime.usedBytesAtStart = Number(policy.usedBytes || 0);
   runtime.trafficLimitBytes = Number(policy.trafficLimitBytes || 0);
   if (runtime.admissionPromise) return runtime.admissionPromise;
@@ -901,6 +915,7 @@ async function OPUS8_requireAdmission(request, uuidRef, force = false) {
 
     const body = JSON.stringify({
       nodeId: runtime.env.NODE_ID,
+      userId: runtime.userId,
       uuid,
       leaseId: runtime.leaseId,
       ipHash,
@@ -945,7 +960,9 @@ async function OPUS8_requireAdmission(request, uuidRef, force = false) {
     runtime.admissionPromise = null;
   });
   const admitted = await runtime.admissionPromise;
-  if (runtime.admitted) OPUS8_scheduleInitialStreamUsage(runtime);
+  if (runtime.admitted && runtime.meteringEnabled) {
+    OPUS8_scheduleInitialStreamUsage(runtime);
+  }
   return admitted;
 }
 
@@ -953,7 +970,11 @@ function OPUS8_queueUsageEvent(runtime) {
   const uuid = runtime.uuid || OPUS8_authenticatedUuid(runtime.uuidRef);
   if (!uuid) return;
   const state = OPUS8_requestPolicies.get(runtime.request);
-  if (!runtime.admitted || !state?.accessPolicies?.[uuid]) return;
+  if (
+    !runtime.admitted
+    || !runtime.meteringEnabled
+    || !state?.accessPolicies?.[uuid]
+  ) return;
   if (
     runtime.bytesUp === 0 &&
     runtime.bytesDown === 0 &&
@@ -961,6 +982,7 @@ function OPUS8_queueUsageEvent(runtime) {
   ) return;
   const event = {
     id: runtime.env.NODE_ID + ":" + runtime.leaseId + ":" + runtime.seq,
+    userId: runtime.userId,
     uuid,
     connections: runtime.connectionReported ? 0 : 1,
     bytesUp: runtime.bytesUp,

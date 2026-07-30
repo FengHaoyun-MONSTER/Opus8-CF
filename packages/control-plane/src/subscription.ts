@@ -80,11 +80,19 @@ function utf8ToBase64(str: string): string {
   return btoa(bin);
 }
 
-export function buildBase64(user: UserRecord, entries: Entry[]): string {
-  return utf8ToBase64(entries.map((e) => vlessLink(user.uuid, e)).join("\n"));
+export function buildBase64(
+  user: UserRecord,
+  entries: Entry[],
+  credentialUuid = user.uuid,
+): string {
+  return utf8ToBase64(entries.map((e) => vlessLink(credentialUuid, e)).join("\n"));
 }
 
-export function buildClash(user: UserRecord, entries: Entry[]): string {
+export function buildClash(
+  user: UserRecord,
+  entries: Entry[],
+  credentialUuid = user.uuid,
+): string {
   const names: string[] = [];
   const proxies = entries.map((e) => {
     names.push(e.name);
@@ -95,7 +103,7 @@ export function buildClash(user: UserRecord, entries: Entry[]): string {
       `    type: vless`,
       `    server: ${e.address}`,
       `    port: 443`,
-      `    uuid: ${user.uuid}`,
+      `    uuid: ${credentialUuid}`,
       `    network: ws`,
       `    tls: true`,
       `    udp: true`,
@@ -125,7 +133,11 @@ export function buildClash(user: UserRecord, entries: Entry[]): string {
   ].join("\n");
 }
 
-export function buildSingbox(user: UserRecord, entries: Entry[]): string {
+export function buildSingbox(
+  user: UserRecord,
+  entries: Entry[],
+  credentialUuid = user.uuid,
+): string {
   const outbounds = entries.map((e) => {
     const path = nodeTransportPath(e.node.transport_path);
     if (!path) throw new Error(`节点 ${e.node.id} 的传输路径无效`);
@@ -134,7 +146,7 @@ export function buildSingbox(user: UserRecord, entries: Entry[]): string {
       tag: e.name,
       server: e.address,
       server_port: 443,
-      uuid: user.uuid,
+      uuid: credentialUuid,
       // sing-box 官方已明确不建议依赖 uTLS 做指纹抵抗；保留系统 TLS 与严格证书校验。
       tls: { enabled: true, server_name: e.node.hostname, insecure: false },
       transport: {
@@ -154,13 +166,23 @@ export function renderSubscription(
   user: UserRecord,
   nodes: NodeRecord[],
   optIpsByNode: OptimizedIpsByNode = {},
+  credentialUuid = user.uuid,
 ): { body: string; contentType: string } {
   const entries = expand(nodes, optIpsByNode);
   if (format === "clash")
-    return { body: buildClash(user, entries), contentType: "text/yaml; charset=utf-8" };
+    return {
+      body: buildClash(user, entries, credentialUuid),
+      contentType: "text/yaml; charset=utf-8",
+    };
   if (format === "singbox")
-    return { body: buildSingbox(user, entries), contentType: "application/json; charset=utf-8" };
-  return { body: buildBase64(user, entries), contentType: "text/plain; charset=utf-8" };
+    return {
+      body: buildSingbox(user, entries, credentialUuid),
+      contentType: "application/json; charset=utf-8",
+    };
+  return {
+    body: buildBase64(user, entries, credentialUuid),
+    contentType: "text/plain; charset=utf-8",
+  };
 }
 
 export function pickFormat(ua: string, override?: string | null): SubFormat {

@@ -18,6 +18,8 @@ INSERT INTO "notes" VALUES('one','line one;
 line two');
 CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "plan_id" TEXT REFERENCES "plans"("id"));
 INSERT INTO "users" VALUES('user-one','plan-one');
+CREATE TABLE "user_devices" ("id" TEXT PRIMARY KEY, "user_id" TEXT REFERENCES "users"("id"));
+INSERT INTO "user_devices" VALUES('device-one','user-one');
 CREATE TABLE "plans" ("id" TEXT PRIMARY KEY);
 INSERT INTO "plans" VALUES('plan-one');
 /* schema separator */
@@ -41,6 +43,11 @@ try {
     extracted.indexOf('INSERT INTO "plans"') <
       extracted.indexOf('INSERT INTO "users"'),
     "parent table data must precede child table data",
+  );
+  assert.ok(
+    extracted.indexOf('INSERT INTO "users"') <
+      extracted.indexOf('INSERT INTO "user_devices"'),
+    "user data must precede device credential data",
   );
 } finally {
   await rm(temporary, { recursive: true, force: true });

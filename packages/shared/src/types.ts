@@ -41,10 +41,30 @@ export interface UserRecord {
 export interface UserAccessPolicy {
   userId: string;
   uuid: string;
+  ipHashKey: string;
   deviceLimit: number;
   ipLimit24h: number;
   trafficLimitBytes: number;
   usedBytes: number;
+  meteringEnabled: boolean;
+}
+
+export type HwidMode = "off" | "optional" | "required";
+export type DeviceCredentialMode = "static" | "rotating";
+
+export interface UserDeviceRecord {
+  id: string;
+  user_id: string;
+  name: string;
+  base_uuid: string;
+  sub_token: string;
+  credential_mode: DeviceCredentialMode;
+  hwid_mode: HwidMode;
+  hwid_hash: string | null;
+  hwid_bound_at: number | null;
+  enabled: number;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface PlanRecord {

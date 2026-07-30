@@ -32,6 +32,22 @@ export interface User {
   access_reason: string;
 }
 
+export type HwidMode = "off" | "optional" | "required";
+
+export interface UserDevice {
+  id: string;
+  user_id: string;
+  name: string;
+  credential_mode: "static" | "rotating";
+  hwid_mode: HwidMode;
+  hwid_bound: boolean;
+  hwid_bound_at: number | null;
+  enabled: number;
+  created_at: number;
+  updated_at: number;
+  sub_url: string;
+}
+
 export interface NodeRow {
   id: string;
   account_alias: string;
@@ -84,6 +100,7 @@ export interface CreateUserInput {
   deviceLimit?: number;
   ipLimit24h?: number;
   trafficLimitBytes?: number;
+  hwidMode?: HwidMode;
 }
 
 export interface UnlockHostsConfig {
@@ -345,6 +362,39 @@ export const api = {
     req<{ user: User; subUrl: string }>("/api/users", {
       method: "POST",
       body: JSON.stringify(input),
+    }),
+  listUserDevices: (userId: string) =>
+    req<{ devices: UserDevice[] }>(`/api/users/${userId}/devices`),
+  createUserDevice: (
+    userId: string,
+    input: { name?: string; hwidMode?: HwidMode },
+  ) =>
+    req<{ device: UserDevice }>(`/api/users/${userId}/devices`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateUserDevice: (
+    userId: string,
+    deviceId: string,
+    input: { name?: string; enabled?: boolean; hwidMode?: HwidMode },
+  ) =>
+    req<{ ok: boolean }>(`/api/users/${userId}/devices/${deviceId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+  resetUserDeviceHwid: (userId: string, deviceId: string) =>
+    req<{ ok: boolean }>(
+      `/api/users/${userId}/devices/${deviceId}/hwid/reset`,
+      { method: "POST" },
+    ),
+  rotateUserDevice: (userId: string, deviceId: string) =>
+    req<{ device: UserDevice }>(
+      `/api/users/${userId}/devices/${deviceId}/rotate`,
+      { method: "POST" },
+    ),
+  deleteUserDevice: (userId: string, deviceId: string) =>
+    req<{ ok: boolean }>(`/api/users/${userId}/devices/${deviceId}`, {
+      method: "DELETE",
     }),
   updateUser: (
     id: string,

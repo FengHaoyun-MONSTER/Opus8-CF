@@ -62,6 +62,17 @@ try {
   if (before.some((row) => row.name === "transport_path")) {
     throw new Error("CREATE TABLE IF NOT EXISTS must not hide the legacy migration case");
   }
+  const migratedDevices = executeJson(
+    "SELECT id,user_id,credential_mode,sub_token FROM user_devices WHERE user_id='legacy-user';",
+  );
+  if (
+    migratedDevices.length !== 1
+    || migratedDevices[0]?.id !== "legacy-legacy-user"
+    || migratedDevices[0]?.credential_mode !== "static"
+    || migratedDevices[0]?.sub_token !== "legacy-subscription-token-000001"
+  ) {
+    throw new Error("legacy users must be backfilled as static compatibility devices");
+  }
   wrangler([
     "d1",
     "execute",
@@ -78,7 +89,7 @@ try {
   if (after[0]?.transport_path !== "/") {
     throw new Error("legacy rows must receive the root compatibility default");
   }
-  console.log("OK transport path D1 migration test");
+  console.log("OK transport path and device credential D1 migration test");
 } finally {
   rmSync(persistAbsolute, {
     recursive: true,

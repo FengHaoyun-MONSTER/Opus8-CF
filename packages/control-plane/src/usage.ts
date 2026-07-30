@@ -6,6 +6,7 @@ const MAX_EVENT_BYTES = 1024 * 1024 * 1024;
 
 export interface AdmissionInput {
   nodeId: string;
+  userId?: string;
   uuid: string;
   leaseId: string;
   ipHash: string;
@@ -13,6 +14,7 @@ export interface AdmissionInput {
 
 export interface UsageEventInput {
   id: string;
+  userId?: string;
   uuid: string;
   connections: number;
   bytesUp: number;
@@ -39,6 +41,7 @@ export async function admitConnection(
 ) {
   if (
     !validToken(input.nodeId, 80)
+    || (input.userId !== undefined && !validToken(input.userId, 80))
     || !validToken(input.uuid, 64)
     || !validToken(input.leaseId, 128)
     || !validToken(input.ipHash, 128)
@@ -52,43 +55,55 @@ export async function admitConnection(
   const now = signedAt;
   const dayAgo = now - DAY_MS;
   const expiresAt = now + LEASE_TTL_MS;
+  const userId =
+    input.userId
+    || (
+      await env.DB.prepare(
+        `SELECT u.id FROM users u
+         JOIN user_devices d ON d.user_id=u.id
+         WHERE d.base_uuid=?1 AND d.credential_mode='static' LIMIT 1`,
+      )
+        .bind(input.uuid)
+        .first<{ id: string }>()
+    )?.id;
+  if (!userId) throw new Error("unknown credential owner");
   const results = await env.DB.batch([
     env.DB.prepare(
       `DELETE FROM active_leases
-       WHERE user_id=(SELECT id FROM users WHERE uuid=?1) AND expires_at<=?2`,
-    ).bind(input.uuid, now),
+       WHERE user_id=?1 AND expires_at<=?2`,
+    ).bind(userId, now),
     env.DB.prepare(
       `DELETE FROM ip_history
-       WHERE user_id=(SELECT id FROM users WHERE uuid=?1) AND last_seen<=?2`,
-    ).bind(input.uuid, dayAgo),
+       WHERE user_id=?1 AND last_seen<=?2`,
+    ).bind(userId, dayAgo),
     env.DB.prepare(
       `INSERT INTO active_leases
        (user_id, uuid, node_id, ip_hash, lease_id, first_seen, last_seen, expires_at)
-       SELECT u.id, u.uuid, ?2, ?3, ?4, ?5, ?5, ?6
+       SELECT u.id, ?2, ?3, ?4, ?5, ?6, ?6, ?7
        FROM users u
        LEFT JOIN user_limits l ON l.user_id=u.id
-       WHERE u.uuid=?1
-         AND u.enabled=1
-         AND (u.expire_at IS NULL OR u.expire_at>?5)
-         AND (
-           COALESCE(l.traffic_limit_bytes,0)=0 OR
-           COALESCE((SELECT SUM(x.bytes_up+x.bytes_down) FROM usage x WHERE x.user_id=u.id),0)
+       WHERE u.id=?1
+          AND u.enabled=1
+          AND (u.expire_at IS NULL OR u.expire_at>?6)
+          AND (
+            COALESCE(l.traffic_limit_bytes,0)=0 OR
+            COALESCE((SELECT SUM(x.bytes_up+x.bytes_down) FROM usage x WHERE x.user_id=u.id),0)
              < l.traffic_limit_bytes
-         )
-         AND (
-           EXISTS(SELECT 1 FROM active_leases a
-                  WHERE a.user_id=u.id AND a.ip_hash=?3 AND a.expires_at>?5)
-           OR (
-             (SELECT COUNT(*) FROM active_leases a
-              WHERE a.user_id=u.id AND a.expires_at>?5)
-               < COALESCE(l.device_limit,2)
-             AND (
-               EXISTS(SELECT 1 FROM ip_history h
-                      WHERE h.user_id=u.id AND h.ip_hash=?3 AND h.last_seen>?7)
-               OR (SELECT COUNT(*) FROM ip_history h
-                   WHERE h.user_id=u.id AND h.last_seen>?7)
-                    < COALESCE(l.ip_limit_24h,5)
-             )
+          )
+          AND (
+            EXISTS(SELECT 1 FROM active_leases a
+                   WHERE a.user_id=u.id AND a.ip_hash=?4 AND a.expires_at>?6)
+            OR (
+              (SELECT COUNT(*) FROM active_leases a
+               WHERE a.user_id=u.id AND a.expires_at>?6)
+                < COALESCE(l.device_limit,2)
+              AND (
+                EXISTS(SELECT 1 FROM ip_history h
+                       WHERE h.user_id=u.id AND h.ip_hash=?4 AND h.last_seen>?8)
+                OR (SELECT COUNT(*) FROM ip_history h
+                    WHERE h.user_id=u.id AND h.last_seen>?8)
+                     < COALESCE(l.ip_limit_24h,5)
+              )
            )
          )
        ON CONFLICT(user_id,ip_hash) DO UPDATE SET
@@ -99,6 +114,7 @@ export async function admitConnection(
          last_seen=MAX(active_leases.last_seen,excluded.last_seen),
          expires_at=MAX(active_leases.expires_at,excluded.expires_at)`,
     ).bind(
+      userId,
       input.uuid,
       input.nodeId,
       input.ipHash,
@@ -110,10 +126,10 @@ export async function admitConnection(
     env.DB.prepare(
       `INSERT INTO ip_history (user_id, ip_hash, first_seen, last_seen)
        SELECT user_id, ip_hash, ?2, ?2
-       FROM active_leases WHERE uuid=?1 AND ip_hash=?3
+       FROM active_leases WHERE user_id=?1 AND ip_hash=?3
        ON CONFLICT(user_id,ip_hash) DO UPDATE SET
          last_seen=MAX(ip_history.last_seen,excluded.last_seen)`,
-    ).bind(input.uuid, now, input.ipHash),
+    ).bind(userId, now, input.ipHash),
     env.DB.prepare(
       `SELECT u.id,
          u.enabled,
@@ -127,8 +143,8 @@ export async function admitConnection(
          COALESCE((SELECT COUNT(*) FROM ip_history h
                    WHERE h.user_id=u.id AND h.last_seen>?3),0) AS recent_ips
        FROM users u LEFT JOIN user_limits l ON l.user_id=u.id
-       WHERE u.uuid=?1`,
-    ).bind(input.uuid, now, dayAgo),
+       WHERE u.id=?1`,
+    ).bind(userId, now, dayAgo),
   ]);
 
   const allowed = Number(results[2]?.meta?.changes || 0) > 0;
@@ -187,6 +203,7 @@ export async function recordUsage(
     const tsBucket = boundedInt(item.tsBucket, Number.MAX_SAFE_INTEGER);
     if (
       !validToken(item.id, 128)
+      || (item.userId !== undefined && !validToken(item.userId, 80))
       || !validToken(item.uuid, 64)
       || connections === null
       || bytesUp === null
@@ -197,6 +214,7 @@ export async function recordUsage(
     }
     events.push({
       id: item.id,
+      userId: item.userId,
       uuid: item.uuid.toLowerCase(),
       connections,
       bytesUp,
@@ -212,7 +230,22 @@ export async function recordUsage(
       env.DB.prepare(
         `INSERT INTO usage_events
          (event_id,user_id,node_id,ts_bucket,connections,bytes_up,bytes_down,applied,created_at)
-         SELECT ?1,u.id,?2,?3,?4,?5,?6,0,?7 FROM users u WHERE u.uuid=?8
+         SELECT ?1,u.id,?2,?3,?4,?5,?6,0,?7
+         FROM users u
+         JOIN user_limits l ON l.user_id=u.id
+         WHERE (
+           (?8<>'' AND u.id=?8)
+           OR (
+             ?8=''
+             AND EXISTS(
+               SELECT 1 FROM user_devices d
+               WHERE d.user_id=u.id
+                 AND d.base_uuid=?9
+                 AND d.credential_mode='static'
+             )
+           )
+         )
+           AND l.traffic_limit_bytes>0
          ON CONFLICT(event_id) DO NOTHING`,
       ).bind(
         event.id,
@@ -222,6 +255,7 @@ export async function recordUsage(
         event.bytesUp,
         event.bytesDown,
         now,
+        event.userId || "",
         event.uuid,
       ),
       env.DB.prepare(

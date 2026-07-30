@@ -59,6 +59,15 @@ assert(
   xray.searchParams.get("path") === "/ws/0123456789abcdef?ed=2560",
   "Xray URI must keep Early Data in its WebSocket path query",
 );
+const dynamicUuid = "22222222-2222-4222-8222-222222222222";
+const dynamicDecoded = Buffer.from(
+  buildBase64(user, entries, dynamicUuid),
+  "base64",
+).toString("utf8");
+assert(
+  dynamicDecoded.includes(`vless://${dynamicUuid}@`),
+  "subscription rendering must support a per-device dynamic credential",
+);
 
 const clash = buildClash(user, entries);
 assert(

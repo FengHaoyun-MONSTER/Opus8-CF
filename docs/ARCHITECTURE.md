@@ -77,10 +77,10 @@ Opus8‑CF 的五个「别人没有」的核心创新：
 ### 数据流关键路径
 
 1. **部署**：CI 用「多账号矩阵」把边缘节点 Worker 批量 `wrangler deploy` 到 N 个 CF 账号。部署前优先读取控制面已注册的节点路径；只有首次从 `/` 迁移时才按节点 ID 和 HMAC 密钥派生新路径。部署后向控制面 `POST /api/nodes/register`（带签名）自报身份（账号别名、域名、地区、能力、优选 IP、传输路径）。因此普通重部署和节点密钥轮换都不会隐式换路径。
-2. **鉴权同步**：边缘节点冷启动/定时向控制面 `GET /api/nodes/<id>/uuids`（HMAC v2 绑定节点、方法、路径/查询与正文）拉取「当前有效用户 UUID 集」，写入以节点 ID 隔离的 KV 缓存。控制面在用户新增、修改、停用或删除时推进策略版本，并向每个节点的内部端点发送同协议签名通知清理缓存；通知失败时最迟由 15 秒 TTL 重新拉取。
-3. **连接**：用户客户端用其专属 UUID 连边缘节点 → 节点校验 UUID ∈ 有效集 → 按域名决定走 CF 出口还是 SOCKS5 落地 → 出网。
-4. **订阅**：客户端定时拉 `GET /sub/<token>` → Workers 原生 Rate Limiting 先按 HMAC 后的来源和 token 执行 PoP 本地限流 → 控制面按该用户的节点组、节点 `transport_path` 和最新优选 IP 实时生成订阅 → 被封节点已被健康探测剔除，用户无感知愈合。Xray URI、Mihomo YAML 和 sing-box JSON 从同一节点记录生成，但按各客户端官方字段表达 Early Data。限流不写 KV/D1，Zone WAF 可在自定义订阅域名前再做一层粗粒度来源保护。
-5. **遥测**：节点按 UUID 汇总 WebSocket 连接数和上下行字节，以幂等事件批量回传控制面；控制面写入 D1 并用于流量额度判断。
+2. **鉴权同步**：边缘节点冷启动/定时向控制面 `GET /api/nodes/<id>/uuids`（HMAC v2 绑定节点、方法、路径/查询与正文）拉取「当前有效设备 UUID 集」，写入以节点 ID 隔离的 KV 缓存。动态设备同时下发当前与上一 24 小时时间窗 UUID；控制面在用户或设备变更时推进策略版本并主动清理节点缓存，通知失败时由 15 秒 TTL 兜底。
+3. **连接**：用户客户端用设备专属 UUID 连边缘节点 → 节点校验 UUID ∈ 有效集 → 以用户 ID 作为稳定 IP 限制主体 → 按域名决定走 CF 出口还是 SOCKS5 落地 → 出网。
+4. **订阅**：客户端定时拉 `GET /sub/<device-token>` → Workers 原生 Rate Limiting 先按 HMAC 后的来源和 token 执行 PoP 本地限流 → 可选执行 HWID 首次绑定 → 控制面生成包含当前动态 UUID 的订阅。旧用户通过静态兼容设备保持原链接和节点配置有效。Xray URI、Mihomo YAML 和 sing-box JSON 从同一节点记录生成，但按各客户端官方字段表达 Early Data。
+5. **计量**：IP 租约准入始终启用；只有配置正流量额度的用户才由节点汇总连接数和上下行字节，以幂等事件批量写入 D1。不限量用户跳过字节钩子和用量事件。
 
 ---
 
@@ -101,7 +101,7 @@ Opus8‑CF 的五个「别人没有」的核心创新：
 - **节点自注册与心跳**：部署后上报身份、定时心跳（域名、地区、优选IP、版本、健康）。
 - **分流策略下发**：解锁域名清单与多落地候选由控制面下发（而非硬编码），实现按域名选择、优先级和自动故障切换。
 - **签名校验**：与控制面之间所有拉取/上报使用 HMAC v2；签名覆盖时间戳、节点 ID、HTTP 方法、pathname+query 和原始正文。五分钟新鲜度窗口不承担业务幂等，节点状态/租约单调更新，用量事件按事件 ID 去重。
-- **尽力遥测**：连接计数、粗略流量回传。
+- **按需计量**：限额用户回传连接计数与粗略字节；不限量用户不产生精确用量写入。
 
 部署形态：Worker（`wrangler deploy`，便于多账号矩阵）。同时保留 Pages Functions 兼容（你要求用 GitHub 部署 Pages 时可用）。
 
@@ -110,7 +110,7 @@ Opus8‑CF 的五个「别人没有」的核心创新：
 单一中心服务（部署在你的一个主账号 + 一个域名），职责：
 
 - **① 节点注册表**（D1 `nodes`）：node_id、account_alias、hostname、region、capabilities、preferred_ip、health、last_seen。
-- **② 用户/UUID 注册表**（D1 `users`）：user_id、uuid、plan、node_group、expire_at、enabled、sub_token。
+- **② 用户/设备凭证注册表**（D1 `users` + `user_devices`）：用户策略与每设备独立 token、基础 UUID、动态/静态模式、HWID 模式和匿名绑定状态。
 - **③ 订阅生成器**：按用户节点组 + 实时优选IP 生成 Clash / sing‑box / v2rayN / base64 多格式（继承 cmliu‑SUB / WorkerVless2sub 思路，内建化）。
 - **④ UUID 同步总线**：提供有效 UUID 集拉取端点、单调策略版本和用户变更后的节点级主动失效。
 - **⑤ Admin API**：用户/节点/套餐/订阅 CRUD，JWT 鉴权。

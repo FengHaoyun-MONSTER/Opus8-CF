@@ -59,6 +59,7 @@ TABLE_PRIORITY = {
     "alert_incidents": 10,
     "orders": 10,
     "users": 20,
+    "user_devices": 30,
     "node_health_state": 20,
     "node_health_events": 30,
     "usage": 30,
