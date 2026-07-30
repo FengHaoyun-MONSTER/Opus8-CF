@@ -110,10 +110,15 @@ assert.match(
   /actions\/upload-artifact@[a-f0-9]{40}/,
   "backup artifact action must be pinned to a full commit SHA",
 );
-assert.doesNotMatch(
+assert.match(
   backupWorkflow,
-  /^\s*schedule:/m,
-  "scheduled backups must remain disabled until an offline key and restore drill exist",
+  /^\s*schedule:\s*\n\s*-\s*cron:\s*"23 3 \* \* \*"$/m,
+  "encrypted production backups must run daily after the successful restore drill",
+);
+assert.match(
+  backupWorkflow,
+  /^\s*workflow_dispatch:\s*$/m,
+  "encrypted production backups must remain manually triggerable",
 );
 assert.match(
   backupWorkflow,
