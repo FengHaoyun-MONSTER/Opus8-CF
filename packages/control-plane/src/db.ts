@@ -427,12 +427,28 @@ export async function rotateUserDeviceCredential(
 ): Promise<void> {
   await env.DB.prepare(
     `UPDATE user_devices
-     SET base_uuid=?3,sub_token=?4,credential_mode='rotating',
+     SET base_uuid=?3,sub_token=?4,credential_mode='static',
          hwid_hash=NULL,hwid_bound_at=NULL,updated_at=?5
      WHERE id=?1 AND user_id=?2`,
   )
     .bind(deviceId, userId, baseUuid, subToken, Date.now())
     .run();
+}
+
+export async function rotateUserDeviceConnectionCredential(
+  env: Env,
+  userId: string,
+  deviceId: string,
+  credentialUuid: string,
+): Promise<boolean> {
+  const result = await env.DB.prepare(
+    `UPDATE user_devices
+     SET base_uuid=?3,credential_mode='static',updated_at=?4
+     WHERE id=?1 AND user_id=?2`,
+  )
+    .bind(deviceId, userId, credentialUuid, Date.now())
+    .run();
+  return Number(result.meta.changes || 0) > 0;
 }
 
 export async function deleteUserDevice(
@@ -527,7 +543,7 @@ export async function activeUserPolicy(env: Env): Promise<{
 }> {
   const now = Date.now();
   const { results } = await env.DB.prepare(
-    `SELECT u.id, u.unlock, d.base_uuid, d.credential_mode,
+    `SELECT u.id, u.uuid AS user_uuid, u.unlock, d.base_uuid, d.credential_mode,
        COALESCE(l.device_limit,2) AS device_limit,
        COALESCE(l.ip_limit_24h,5) AS ip_limit_24h,
        COALESCE(l.traffic_limit_bytes,0) AS traffic_limit_bytes,
@@ -540,6 +556,7 @@ export async function activeUserPolicy(env: Env): Promise<{
     .bind(now)
     .all<{
       id: string;
+      user_uuid: string;
       base_uuid: string;
       credential_mode: DeviceCredentialMode;
       unlock: number;
@@ -571,7 +588,9 @@ export async function activeUserPolicy(env: Env): Promise<{
       userId: row.id,
       uuid,
       ipHashKey:
-        row.credential_mode === "static" ? uuid : `user:${row.id}`,
+        row.credential_mode === "static" && row.base_uuid === row.user_uuid
+          ? uuid
+          : `user:${row.id}`,
       deviceLimit: row.device_limit,
       ipLimit24h: row.ip_limit_24h,
       trafficLimitBytes: row.traffic_limit_bytes,

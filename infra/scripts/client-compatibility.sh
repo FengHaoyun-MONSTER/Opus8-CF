@@ -28,6 +28,7 @@ SUB_DIR="$WORK_DIR/subscriptions"
 CONFIG_DIR="$WORK_DIR/config"
 LOG_DIR="$WORK_DIR/logs"
 USER_ID=""
+USER_IDENTITY_UUID=""
 USER_UUID=""
 CANARY_USERNAME=""
 ADMIN_TOKEN=""
@@ -207,10 +208,12 @@ CREATE_RESPONSE="$(curl -fsS --max-time 30 -X POST \
       trafficLimitBytes:0
     }')")"
 USER_ID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.id')"
-USER_UUID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.uuid')"
+USER_IDENTITY_UUID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.uuid')"
+USER_UUID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.credential.uuid')"
 SUB_TOKEN="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.sub_token')"
 SUB_URL="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.subUrl')"
 echo "::add-mask::$USER_ID"
+echo "::add-mask::$USER_IDENTITY_UUID"
 echo "::add-mask::$USER_UUID"
 echo "::add-mask::$SUB_TOKEN"
 echo "::add-mask::$SUB_URL"
@@ -253,7 +256,8 @@ wait_for_port() {
   for attempt in $(seq 1 40); do
     if ! kill -0 "$pid" >/dev/null 2>&1; then
       echo "ERROR client=$client exited-before-listen"
-      sed "s/$USER_UUID/[masked-uuid]/g" "$LOG_DIR/$client.log" |
+      sed -e "s/$USER_IDENTITY_UUID/[masked-user-uuid]/g" \
+        -e "s/$USER_UUID/[masked-credential-uuid]/g" "$LOG_DIR/$client.log" |
         tail -n 20
       return 1
     fi

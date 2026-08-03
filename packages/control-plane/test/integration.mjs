@@ -255,12 +255,19 @@ try {
   );
   userId = created.user.id;
   const userUuid = created.user.uuid;
+  const activeCredentialUuid = created.credential?.uuid;
   assert(
     Number.isSafeInteger(created.policyVersion) &&
       created.policyVersion > 0 &&
       Array.isArray(created.cacheInvalidation?.acknowledgedNodes) &&
       Array.isArray(created.cacheInvalidation?.failedNodes),
     `user mutation must publish an observable policy version: ${JSON.stringify(created)}`,
+  );
+  assert(
+    created.credential?.mode === "static"
+      && typeof activeCredentialUuid === "string"
+      && activeCredentialUuid !== userUuid,
+    `user creation must expose the active device credential separately from the user identity: ${JSON.stringify(created)}`,
   );
   const initialDevices = await jsonResponse(
     await fetch(`${base}/api/users/${userId}/devices`, {
@@ -269,26 +276,27 @@ try {
   );
   assert(
     initialDevices.devices.length === 1
-      && initialDevices.devices[0].credential_mode === "rotating"
+      && initialDevices.devices[0].credential_mode === "static"
       && initialDevices.devices[0].hwid_mode === "optional"
       && initialDevices.devices[0].sub_url === created.subUrl,
-    `new users must receive one rotating default device: ${JSON.stringify(initialDevices)}`,
+    `new users must receive one event-driven static device credential: ${JSON.stringify(initialDevices)}`,
   );
-  const rotatingPolicy = await jsonResponse(
+  const devicePolicy = await jsonResponse(
     await signedGet(`/api/nodes/${nodeId}/uuids`),
   );
-  const userPolicies = rotatingPolicy.accessPolicies.filter(
+  const userPolicies = devicePolicy.accessPolicies.filter(
     (policy) => policy.userId === userId,
   );
   assert(
-    userPolicies.length === 2
+    userPolicies.length === 1
+      && userPolicies.some((policy) => policy.uuid === activeCredentialUuid)
       && userPolicies.every(
         (policy) =>
           policy.uuid !== userUuid
           && policy.meteringEnabled === true
           && policy.ipHashKey === `user:${userId}`,
       ),
-    `edge policy must accept current/previous dynamic UUIDs with stable IP scope: ${JSON.stringify(userPolicies)}`,
+    `edge policy must accept only the device credential with stable per-user IP scope: ${JSON.stringify(userPolicies)}`,
   );
   const requiredDeviceResult = await jsonResponse(
     await fetch(`${base}/api/users/${userId}/devices`, {
@@ -301,6 +309,11 @@ try {
     }),
   );
   const requiredDevice = requiredDeviceResult.device;
+  assert(
+    requiredDeviceResult.credential?.mode === "static"
+      && typeof requiredDeviceResult.credential?.uuid === "string",
+    `device creation must expose its active connection credential: ${JSON.stringify(requiredDeviceResult)}`,
+  );
   assert(
     (await fetch(requiredDevice.sub_url)).status === 403,
     "required HWID subscriptions must reject clients without a device identifier",
@@ -329,6 +342,67 @@ try {
     })).status === 200,
     "an administrator reset must allow a replacement device to bind",
   );
+  const boundDevicesBeforeRotation = await jsonResponse(
+    await fetch(`${base}/api/users/${userId}/devices`, {
+      headers: adminHeaders,
+    }),
+  );
+  const boundDeviceBeforeRotation = boundDevicesBeforeRotation.devices.find(
+    (device) => device.id === requiredDevice.id,
+  );
+  assert(
+    boundDeviceBeforeRotation?.hwid_bound === true
+      && Number.isSafeInteger(boundDeviceBeforeRotation.hwid_bound_at),
+    `the replacement HWID must be bound before credential rotation: ${JSON.stringify(boundDeviceBeforeRotation)}`,
+  );
+  const credentialBeforeRotation = new URL(
+    Buffer.from(
+      await (await fetch(requiredDevice.sub_url, {
+        headers: { "x-hwid": "integration-device-b" },
+      })).text(),
+      "base64",
+    ).toString("utf8").split(/\r?\n/).find(Boolean),
+  ).username;
+  const credentialRotationResult = await jsonResponse(
+    await fetch(
+      `${base}/api/users/${userId}/devices/${requiredDevice.id}/credential/rotate`,
+      { method: "POST", headers: adminHeaders },
+    ),
+  );
+  assert(
+    credentialRotationResult.device.sub_url === requiredDevice.sub_url
+      && credentialRotationResult.device.hwid_bound === true
+      && credentialRotationResult.device.hwid_bound_at
+        === boundDeviceBeforeRotation.hwid_bound_at
+      && credentialRotationResult.device.credential_mode === "static",
+    `connection credential rotation must preserve the subscription token and HWID binding: ${JSON.stringify(credentialRotationResult)}`,
+  );
+  assert(
+    (await fetch(requiredDevice.sub_url, {
+      headers: { "x-hwid": "integration-device-a" },
+    })).status === 403,
+    "connection credential rotation must not reset or replace the bound HWID",
+  );
+  const credentialAfterRotation = new URL(
+    Buffer.from(
+      await (await fetch(requiredDevice.sub_url, {
+        headers: { "x-hwid": "integration-device-b" },
+      })).text(),
+      "base64",
+    ).toString("utf8").split(/\r?\n/).find(Boolean),
+  ).username;
+  const policyAfterCredentialRotation = await jsonResponse(
+    await signedGet(`/api/nodes/${nodeId}/uuids`),
+  );
+  const credentialsAfterRotation = policyAfterCredentialRotation.accessPolicies
+    .filter((policy) => policy.userId === userId)
+    .map((policy) => policy.uuid);
+  assert(
+    credentialAfterRotation !== credentialBeforeRotation
+      && credentialsAfterRotation.includes(credentialAfterRotation)
+      && !credentialsAfterRotation.includes(credentialBeforeRotation),
+    `connection credential rotation must revoke the old node configuration immediately: ${JSON.stringify(credentialsAfterRotation)}`,
+  );
   const rotatedDeviceResult = await jsonResponse(
     await fetch(
       `${base}/api/users/${userId}/devices/${requiredDevice.id}/rotate`,
@@ -337,7 +411,11 @@ try {
   );
   assert(
     (await fetch(requiredDevice.sub_url)).status === 404,
-    "rotating a device must revoke its old subscription token",
+    "replacing a device must revoke its old subscription token",
+  );
+  assert(
+    rotatedDeviceResult.device.credential_mode === "static",
+    `replacement credentials must remain event-driven static credentials: ${JSON.stringify(rotatedDeviceResult)}`,
   );
   assert(
     (await fetch(rotatedDeviceResult.device.sub_url, {
@@ -412,7 +490,8 @@ try {
     (policy) => policy.userId === unlimitedUserId,
   );
   assert(
-    unlimitedPolicies.length === 2
+    unlimitedPolicies.length === 1
+      && unlimitedPolicies[0].uuid === unlimitedCreated.credential.uuid
       && unlimitedPolicies.every(
         (policy) =>
           policy.meteringEnabled === false
@@ -595,19 +674,20 @@ try {
   );
 
   const bannedSubscription = await fetch(created.subUrl);
-  const bannedBody = Buffer.from(
-    await bannedSubscription.text(),
-    "base64",
-  ).toString("utf8");
+  const bannedBody = await bannedSubscription.text();
   assert(
-    !bannedBody.includes(nodeHost),
-    `banned node must be removed from subscription: ${bannedBody}`,
+    bannedSubscription.status === 503
+      && bannedSubscription.headers.get("retry-after") === "60"
+      && bannedSubscription.headers.get("cache-control") === "private, no-store"
+      && bannedBody.includes("暂无可用节点"),
+    `an empty node set must return a retryable service error instead of an invalid profile: ${bannedSubscription.status} ${bannedBody}`,
   );
 
   const recoveredOnce = await reportNodeHealth(
     `${runPrefix}-recover-1`,
     true,
   );
+  const recoveringSubscription = await fetch(created.subUrl);
   const recoveredTwice = await reportNodeHealth(
     `${runPrefix}-recover-2`,
     true,
@@ -615,9 +695,19 @@ try {
   assert(
     recoveredOnce.nodes.find((item) => item.id === nodeId)?.health ===
       "banned" &&
+      recoveringSubscription.status === 503 &&
       recoveredTwice.nodes.find((item) => item.id === nodeId)?.health ===
         "healthy",
     "banned node must require two consecutive direct successes to recover",
+  );
+  const recoveredSubscription = await fetch(created.subUrl);
+  const recoveredBody = Buffer.from(
+    await recoveredSubscription.text(),
+    "base64",
+  ).toString("utf8");
+  assert(
+    recoveredSubscription.status === 200 && recoveredBody.includes(nodeHost),
+    `the subscription must recover after the node becomes healthy: ${recoveredSubscription.status} ${recoveredBody}`,
   );
 
   const landingFailure = await reportNodeHealth(
@@ -793,9 +883,9 @@ try {
     `base64/Xray subscription must use the registered path: ${base64Subscription}`,
   );
   assert(
-    base64Node.username !== userUuid
-      && /^[0-9a-f-]{36}$/.test(base64Node.username),
-    "new subscriptions must render a rotating per-device UUID",
+    base64Node.username === activeCredentialUuid
+      && base64Node.username !== userUuid,
+    "new subscriptions must render the event-driven device credential instead of the user identity",
   );
   const clashSubscription = await (
     await fetch(`${created.subUrl}?format=clash`)

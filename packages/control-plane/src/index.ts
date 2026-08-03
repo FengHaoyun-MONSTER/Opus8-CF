@@ -38,6 +38,7 @@ import {
   createUserDevice,
   updateUserDevice,
   resetUserDeviceHwid,
+  rotateUserDeviceConnectionCredential,
   rotateUserDeviceCredential,
   deleteUserDevice,
   bindUserDeviceHwid,
@@ -343,12 +344,13 @@ export default {
         if (!hwidMode) return err("HWID mode must be off, optional, or required", 400);
         const now = Date.now();
         const userId = randomHex(8);
-        const baseUuid = randomUuid();
+        const userUuid = randomUuid();
+        const credentialUuid = randomUuid();
         const subToken = randomToken();
         const user: UserRecord = {
           id: userId,
           username: b.username ?? null,
-          uuid: baseUuid,
+          uuid: userUuid,
           plan_id: b.planId ?? null,
           node_group: b.nodeGroup ? JSON.stringify(b.nodeGroup) : null,
           unlock: b.unlock ? 1 : 0,
@@ -361,9 +363,9 @@ export default {
           id: `legacy-${userId}`,
           user_id: userId,
           name: "Default device",
-          base_uuid: baseUuid,
+          base_uuid: credentialUuid,
           sub_token: subToken,
-          credential_mode: "rotating",
+          credential_mode: "static",
           hwid_mode: hwidMode,
           hwid_hash: null,
           hwid_bound_at: null,
@@ -376,12 +378,21 @@ export default {
           ipLimit24h,
           trafficLimitBytes,
         }, device);
+        const activeCredentialUuid = await currentDeviceCredentialUuid(
+          env,
+          device,
+          now,
+        );
         const policy = await publishEdgePolicyChange(env);
         // 订阅链接用 worker 实际访问源（workers.dev）；接入自定义域名后可改为 SUB_BASE。
         const base = env.SUB_BASE || url.origin;
         return json(
           {
             user,
+            credential: {
+              mode: device.credential_mode,
+              uuid: activeCredentialUuid,
+            },
             subUrl: `${base}/sub/${device.sub_token}`,
             policyVersion: policy.version,
             cacheInvalidation: policy.invalidation,
@@ -425,7 +436,7 @@ export default {
           name,
           base_uuid: randomUuid(),
           sub_token: randomToken(),
-          credential_mode: "rotating",
+          credential_mode: "static",
           hwid_mode: hwidMode,
           hwid_hash: null,
           hwid_bound_at: null,
@@ -434,11 +445,20 @@ export default {
           updated_at: now,
         };
         await createUserDevice(env, device);
+        const credentialUuid = await currentDeviceCredentialUuid(
+          env,
+          device,
+          now,
+        );
         const policy = await publishEdgePolicyChange(env);
         const base = env.SUB_BASE || url.origin;
         return json(
           {
             device: adminDeviceView(device, base),
+            credential: {
+              mode: device.credential_mode,
+              uuid: credentialUuid,
+            },
             policyVersion: policy.version,
             cacheInvalidation: policy.invalidation,
           },
@@ -456,6 +476,30 @@ export default {
           deviceHwidResetMatch[2],
         );
         return json({ ok: true });
+      }
+      const deviceCredentialRotateMatch = p.match(
+        /^\/api\/users\/([^/]+)\/devices\/([^/]+)\/credential\/rotate$/,
+      );
+      if (deviceCredentialRotateMatch && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const [userId, deviceId] = deviceCredentialRotateMatch.slice(1);
+        const rotated = await rotateUserDeviceConnectionCredential(
+          env,
+          userId,
+          deviceId,
+          randomUuid(),
+        );
+        if (!rotated) return err("设备不存在", 404);
+        const devices = await listUserDevices(env, userId);
+        const device = devices.find((item) => item.id === deviceId);
+        if (!device) return err("设备不存在", 404);
+        const policy = await publishEdgePolicyChange(env);
+        const base = env.SUB_BASE || url.origin;
+        return json({
+          device: adminDeviceView(device, base),
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
       }
       const deviceRotateMatch = p.match(
         /^\/api\/users\/([^/]+)\/devices\/([^/]+)\/rotate$/,
@@ -1084,14 +1128,11 @@ export default {
             return subscriptionError("HWID 与已绑定设备不匹配", 403);
           }
         }
-        const credentialUuid =
-          device.credential_mode === "static"
-            ? device.base_uuid
-            : await deriveDeviceUuid(
-                env.NODE_HMAC_SECRET,
-                device.base_uuid,
-              );
+        const credentialUuid = await currentDeviceCredentialUuid(env, device);
         const nodes = nodesForUser(user, await listNodes(env));
+        if (nodes.length === 0) {
+          return subscriptionError("暂无可用节点，请稍后重试", 503, 60);
+        }
         const fmt = pickFormat(
           req.headers.get("user-agent") || "",
           url.searchParams.get("format"),
@@ -1335,6 +1376,16 @@ function adminDeviceView(device: UserDeviceRecord, base: string) {
     updated_at: device.updated_at,
     sub_url: `${base}/sub/${device.sub_token}`,
   };
+}
+
+async function currentDeviceCredentialUuid(
+  env: Env,
+  device: UserDeviceRecord,
+  now = Date.now(),
+): Promise<string> {
+  return device.credential_mode === "static"
+    ? device.base_uuid.toLowerCase()
+    : deriveDeviceUuid(env.NODE_HMAC_SECRET, device.base_uuid, now);
 }
 
 function boundedInteger(

@@ -50,6 +50,8 @@ export interface UserAccessPolicy {
 }
 
 export type HwidMode = "off" | "optional" | "required";
+// "static" is the event-driven device credential. "rotating" remains for
+// existing records until the legacy time-window implementation is retired.
 export type DeviceCredentialMode = "static" | "rotating";
 
 export interface UserDeviceRecord {

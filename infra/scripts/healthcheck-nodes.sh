@@ -165,7 +165,7 @@ CREATE_RESPONSE="$(curl -fsS --max-time 30 -X POST \
     --arg username "$PROBE_USERNAME" \
     '{username:$username,durationDays:1,unlock:true,deviceLimit:20,ipLimit24h:100}')")"
 USER_ID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.id')"
-PROBE_UUID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.user.uuid')"
+PROBE_UUID="$(printf '%s' "$CREATE_RESPONSE" | jq -er '.credential.uuid')"
 echo "::add-mask::$USER_ID"
 echo "::add-mask::$PROBE_UUID"
 echo "OK probe-user-created"

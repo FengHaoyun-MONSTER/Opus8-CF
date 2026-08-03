@@ -544,8 +544,11 @@ for id in $ORPH; do curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$id" -
 CU=$(curl -fsS --max-time 15 -X POST "$API_URL/api/users" -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"username":"__smoke__","durationDays":1,"trafficLimitBytes":1048576}')
 SUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.id||"")}catch(e){process.stdout.write("")}})')
 SUB=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).subUrl||"")}catch(e){process.stdout.write("")}})')
-SUUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).user.uuid||"")}catch(e){process.stdout.write("")}})')
-if [ -n "$SUID" ] && [ -n "$SUUID" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; exit 21; fi
+SUUID=$(printf '%s' "$CU" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).credential.uuid||"")}catch(e){process.stdout.write("")}})')
+if [ -n "$SUID" ] && [ -n "$SUUID" ] && [ -n "$SUB" ]; then echo "OK smoke-create-user(D1-write)"; else echo "ERROR smoke-create-user"; exit 21; fi
+echo "::add-mask::$SUID"
+echo "::add-mask::$SUUID"
+echo "::add-mask::$SUB"
 
 signed_node_post() {
   local path="$1" body="$2" output="$3" ts sig

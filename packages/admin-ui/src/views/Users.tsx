@@ -28,6 +28,18 @@ function accessLabel(user: User): string {
   return "即将到期";
 }
 
+function credentialModeLabel(mode: UserDevice["credential_mode"]): string {
+  return mode === "static"
+    ? "设备凭证（事件轮换）"
+    : "旧动态 UUID（可轮换升级）";
+}
+
+function hwidModeLabel(mode: HwidMode): string {
+  if (mode === "required") return "HWID 强制";
+  if (mode === "optional") return "HWID 可选";
+  return "HWID 关闭";
+}
+
 function promptInteger(
   label: string,
   current: number,
@@ -57,6 +69,8 @@ export function Users() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [devices, setDevices] = useState<UserDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(false);
+  const [deviceAction, setDeviceAction] = useState("");
+  const [deviceNotice, setDeviceNotice] = useState("");
 
   const [username, setUsername] = useState("");
   const [durationDays, setDurationDays] = useState("30");
@@ -232,6 +246,8 @@ export function Users() {
     setDetailUser(user);
     setActivity(null);
     setDevices([]);
+    setDeviceAction("");
+    setDeviceNotice("");
     setActivityLoading(true);
     setDevicesLoading(true);
     try {
@@ -309,28 +325,73 @@ export function Users() {
   }
 
   async function resetDeviceHwid(user: User, device: UserDevice) {
-    if (!confirm(`清除 ${device.name} 当前绑定的 HWID？`)) return;
+    if (
+      !confirm(
+        `仅清除 ${device.name} 当前绑定的 HWID？订阅地址和连接凭证不会改变，已经下载的节点配置仍然有效。`,
+      )
+    ) return;
+    const action = `hwid:${device.id}`;
+    setDeviceAction(action);
+    setDeviceNotice("");
+    setError("");
     try {
       await api.resetUserDeviceHwid(user.id, device.id);
       await refreshDevices(user.id);
+      setDeviceNotice(`${device.name} 的 HWID 绑定已清除，连接凭证未改变。`);
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setDeviceAction("");
     }
   }
 
-  async function rotateDevice(user: User, device: UserDevice) {
+  async function rotateConnectionCredential(user: User, device: UserDevice) {
     if (
       !confirm(
-        `轮换 ${device.name} 的订阅令牌和连接凭证？旧订阅与旧节点配置会立即失效。`,
+        `轮换 ${device.name} 的连接凭证？旧节点配置会立即失效；订阅地址和 HWID 绑定保持不变，合法设备需要立即更新订阅。`,
       )
     ) {
       return;
     }
+    const action = `credential:${device.id}`;
+    setDeviceAction(action);
+    setDeviceNotice("");
+    setError("");
     try {
-      await api.rotateUserDevice(user.id, device.id);
+      await api.rotateUserDeviceConnectionCredential(user.id, device.id);
       await refreshDevices(user.id);
+      setDeviceNotice(
+        `${device.name} 的连接凭证已轮换。原订阅地址仍然有效，请让合法设备立即更新订阅。`,
+      );
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setDeviceAction("");
+    }
+  }
+
+  async function replaceDevice(user: User, device: UserDevice) {
+    if (
+      !confirm(
+        `完全更换 ${device.name}？订阅地址、连接凭证和 HWID 绑定都会重置，旧订阅与旧节点配置会立即失效。`,
+      )
+    ) {
+      return;
+    }
+    const action = `replace:${device.id}`;
+    setDeviceAction(action);
+    setDeviceNotice("");
+    setError("");
+    try {
+      await api.replaceUserDevice(user.id, device.id);
+      await refreshDevices(user.id);
+      setDeviceNotice(
+        `${device.name} 已完全更换。请复制新的订阅地址，并在新设备上重新绑定 HWID。`,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDeviceAction("");
     }
   }
 
@@ -687,11 +748,21 @@ export function Users() {
                       <h3>设备凭证</h3>
                       <button
                         className="btn-mini"
+                        disabled={Boolean(deviceAction)}
                         onClick={() => void addDevice(detailUser)}
                       >
                         + 新增设备
                       </button>
                     </div>
+                    <div className="device-security-guide">
+                      <strong>安全操作说明</strong>
+                      <span>轮换连接凭证：旧节点配置失效，订阅地址和 HWID 不变。</span>
+                      <span>仅重置 HWID：只解除设备绑定，已下载的节点配置仍然有效。</span>
+                      <span>完全更换设备：订阅地址、连接凭证和 HWID 全部重置。</span>
+                    </div>
+                    {deviceNotice && (
+                      <div className="device-operation-notice">{deviceNotice}</div>
+                    )}
                     {devicesLoading ? (
                       <div className="empty-inline">正在读取设备…</div>
                     ) : (
@@ -701,12 +772,16 @@ export function Users() {
                             <div>
                               <strong>{device.name}</strong>
                               <span>
-                                {device.credential_mode === "rotating"
-                                  ? "动态 UUID"
-                                  : "静态兼容"}
+                                {credentialModeLabel(device.credential_mode)}
                                 {" · "}
-                                HWID {device.hwid_mode}
-                                {device.hwid_bound ? "（已绑定）" : "（未绑定）"}
+                                {hwidModeLabel(device.hwid_mode)}
+                                {device.hwid_bound
+                                  ? `（已绑定${
+                                    device.hwid_bound_at
+                                      ? ` · ${fmtTime(device.hwid_bound_at)}`
+                                      : ""
+                                  }）`
+                                  : "（未绑定）"}
                                 {" · "}
                                 {device.enabled ? "已启用" : "已停用"}
                               </span>
@@ -725,6 +800,7 @@ export function Users() {
                               </button>
                               <button
                                 className="btn-mini"
+                                disabled={Boolean(deviceAction)}
                                 onClick={() =>
                                   void toggleDevice(detailUser, device)
                                 }
@@ -733,6 +809,7 @@ export function Users() {
                               </button>
                               <button
                                 className="btn-mini"
+                                disabled={Boolean(deviceAction)}
                                 onClick={() =>
                                   void changeDeviceHwid(detailUser, device)
                                 }
@@ -742,24 +819,42 @@ export function Users() {
                               {device.hwid_bound && (
                                 <button
                                   className="btn-mini"
+                                  disabled={Boolean(deviceAction)}
                                   onClick={() =>
                                     void resetDeviceHwid(detailUser, device)
                                   }
                                 >
-                                  重置 HWID
+                                  {deviceAction === `hwid:${device.id}`
+                                    ? "处理中…"
+                                    : "仅重置 HWID"}
                                 </button>
                               )}
                               <button
                                 className="btn-mini"
+                                disabled={Boolean(deviceAction)}
                                 onClick={() =>
-                                  void rotateDevice(detailUser, device)
+                                  void rotateConnectionCredential(detailUser, device)
                                 }
                               >
-                                轮换凭证
+                                {deviceAction === `credential:${device.id}`
+                                  ? "轮换中…"
+                                  : "轮换连接凭证"}
+                              </button>
+                              <button
+                                className="btn-danger"
+                                disabled={Boolean(deviceAction)}
+                                onClick={() =>
+                                  void replaceDevice(detailUser, device)
+                                }
+                              >
+                                {deviceAction === `replace:${device.id}`
+                                  ? "更换中…"
+                                  : "完全更换设备"}
                               </button>
                               {!device.id.startsWith("legacy-") && (
                                 <button
                                   className="btn-danger"
+                                  disabled={Boolean(deviceAction)}
                                   onClick={() =>
                                     void removeDevice(detailUser, device)
                                   }

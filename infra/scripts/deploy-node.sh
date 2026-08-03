@@ -417,7 +417,7 @@ else
     -H "authorization: Bearer $ADMIN_TOKEN" \
     -H 'content-type: application/json' -d "$CREATE_BODY")
   CANARY_USER_ID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.id)process.exit(1);process.stdout.write(j.user.id)})')
-  TEST_UUID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.uuid)process.exit(1);process.stdout.write(j.user.uuid)})')
+  TEST_UUID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.credential?.uuid)process.exit(1);process.stdout.write(j.credential.uuid)})')
   echo "::add-mask::$CANARY_USER_ID"
   echo "::add-mask::$TEST_UUID"
   INVALIDATION_ACKS=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(String(j.cacheInvalidation?.acknowledged||0))})')

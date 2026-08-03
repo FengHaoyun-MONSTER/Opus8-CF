@@ -34,6 +34,11 @@ export interface User {
 
 export type HwidMode = "off" | "optional" | "required";
 
+export interface DeviceCredential {
+  mode: "static" | "rotating";
+  uuid: string;
+}
+
 export interface UserDevice {
   id: string;
   user_id: string;
@@ -359,7 +364,7 @@ export const api = {
   listUsers: () => req<{ users: User[] }>("/api/users"),
   userActivity: (id: string) => req<UserActivity>(`/api/users/${id}/activity`),
   createUser: (input: CreateUserInput) =>
-    req<{ user: User; subUrl: string }>("/api/users", {
+    req<{ user: User; credential: DeviceCredential; subUrl: string }>("/api/users", {
       method: "POST",
       body: JSON.stringify(input),
     }),
@@ -369,7 +374,7 @@ export const api = {
     userId: string,
     input: { name?: string; hwidMode?: HwidMode },
   ) =>
-    req<{ device: UserDevice }>(`/api/users/${userId}/devices`, {
+    req<{ device: UserDevice; credential: DeviceCredential }>(`/api/users/${userId}/devices`, {
       method: "POST",
       body: JSON.stringify(input),
     }),
@@ -387,7 +392,12 @@ export const api = {
       `/api/users/${userId}/devices/${deviceId}/hwid/reset`,
       { method: "POST" },
     ),
-  rotateUserDevice: (userId: string, deviceId: string) =>
+  rotateUserDeviceConnectionCredential: (userId: string, deviceId: string) =>
+    req<{ device: UserDevice }>(
+      `/api/users/${userId}/devices/${deviceId}/credential/rotate`,
+      { method: "POST" },
+    ),
+  replaceUserDevice: (userId: string, deviceId: string) =>
     req<{ device: UserDevice }>(
       `/api/users/${userId}/devices/${deviceId}/rotate`,
       { method: "POST" },

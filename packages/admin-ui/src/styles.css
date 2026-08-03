@@ -359,6 +359,11 @@ button {
   cursor: pointer;
   font-size: 12px;
 }
+.btn-mini:disabled,
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .btn-danger {
   background: transparent;
   color: var(--red);
@@ -905,6 +910,27 @@ button {
 }
 .drawer-section-title span {
   color: var(--muted);
+  font-size: 11px;
+}
+.device-security-guide {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.device-security-guide strong {
+  color: var(--text);
+  font-size: 11px;
+}
+.device-operation-notice {
+  margin: 0 0 9px;
+  color: var(--green);
   font-size: 11px;
 }
 .activity-list {

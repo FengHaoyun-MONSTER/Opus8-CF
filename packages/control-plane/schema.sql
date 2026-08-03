@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_node_health_events_checked
 CREATE TABLE IF NOT EXISTS users (
   id          TEXT PRIMARY KEY,
   username    TEXT UNIQUE,
-  uuid        TEXT UNIQUE NOT NULL,         -- 该用户的 VLESS/Trojan UUID
+  uuid        TEXT UNIQUE NOT NULL,         -- 用户身份 UUID；旧版静态用户可能同时将其作为连接凭证
   plan_id     TEXT,
   node_group  TEXT,                          -- JSON: 分配的节点组/标签
   unlock      INTEGER DEFAULT 0,             -- 是否解锁套餐(走落地)
@@ -84,9 +84,9 @@ CREATE TABLE IF NOT EXISTS user_devices (
   id              TEXT PRIMARY KEY,
   user_id         TEXT NOT NULL,
   name            TEXT NOT NULL,
-  base_uuid       TEXT UNIQUE NOT NULL,
+  base_uuid       TEXT UNIQUE NOT NULL,      -- 实际设备连接 UUID；新用户与 users.uuid 分离
   sub_token       TEXT UNIQUE NOT NULL,
-  credential_mode TEXT NOT NULL DEFAULT 'rotating'
+  credential_mode TEXT NOT NULL DEFAULT 'static'
     CHECK (credential_mode IN ('static', 'rotating')),
   hwid_mode       TEXT NOT NULL DEFAULT 'off'
     CHECK (hwid_mode IN ('off', 'optional', 'required')),
@@ -105,7 +105,7 @@ CREATE INDEX IF NOT EXISTS idx_user_devices_subtoken
 CREATE INDEX IF NOT EXISTS idx_user_devices_uuid
   ON user_devices(base_uuid);
 
--- Idempotent compatibility migration. New users insert their rotating device in-app.
+-- Idempotent compatibility migration. Existing users retain their legacy static credential.
 INSERT OR IGNORE INTO user_devices
   (id, user_id, name, base_uuid, sub_token, credential_mode, hwid_mode,
    hwid_hash, hwid_bound_at, enabled, created_at, updated_at)
