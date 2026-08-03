@@ -3,10 +3,7 @@
   "markers": [
     "STEP prepare-vantages",
     "OK vantages=github-runner,landing-vps",
-    "STEP login",
-    "OK login",
-    "STEP eligible-nodes",
-    "ERROR no-eligible-nodes"
+    "STEP login"
   ],
-  "finishedAt": "2026-08-03T07:49:08Z"
+  "finishedAt": "2026-08-03T11:46:39Z"
 }
