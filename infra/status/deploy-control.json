@@ -4,13 +4,13 @@
   "markers": [
     "STEP compliance-policy",
     "OK compliance-policy provisioning=1 enforcement=observe-only policy=cloudflare-data-plane-v1",
-    "STEP ensure-d1-kv"
+    "STEP control-deploy-preflight",
+    "ERROR control-deploy-preflight",
+    "ERROR FREEDOMPOST_INTEGRATION_KEY_ID: contains an invalid key ID",
+    "ERROR LANDING_CONFIG_KEY: must be a canonical base64url-encoded 256-bit key"
   ],
   "tail": [
-    "+ typescript 5.9.3",
-    "+ wrangler 4.115.0",
-    "",
-    "Done in 2.7s",
+    "Done in 2.5s",
     "",
     "added 38 packages in 5s",
     "",
@@ -18,7 +18,10 @@
     "  run `npm fund` for details",
     "STEP compliance-policy",
     "OK compliance-policy provisioning=1 enforcement=observe-only policy=<redacted>",
-    "STEP ensure-d1-kv"
+    "STEP <redacted>",
+    "ERROR <redacted>",
+    "ERROR <redacted>: contains an invalid key ID",
+    "ERROR LANDING_CONFIG_KEY: must be a canonical base64url-encoded 256-bit key"
   ],
-  "finishedAt": "2026-08-03T12:11:15Z"
+  "finishedAt": "2026-08-04T13:40:35Z"
 }
