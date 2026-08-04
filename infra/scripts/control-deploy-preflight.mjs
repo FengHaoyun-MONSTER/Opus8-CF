@@ -14,13 +14,11 @@ export function validateControlDeployEnvironment(environment = process.env) {
   validateSecret(environment, errors, "ADMIN_PASSWORD", 8);
   validateSecret(environment, errors, "JWT_SECRET", 24);
   validateSecret(environment, errors, "NODE_HMAC_SECRET", 32);
+  validateSecret(environment, errors, "LANDING_CONFIG_KEY", 32);
   validateSecret(environment, errors, "FREEDOMPOST_INTEGRATION_SECRET", 32);
 
   if (!/^[A-Za-z0-9._-]{3,64}$/.test(value("FREEDOMPOST_INTEGRATION_KEY_ID"))) {
     add("FREEDOMPOST_INTEGRATION_KEY_ID", "contains an invalid key ID");
-  }
-  if (!validBase64UrlKey(value("LANDING_CONFIG_KEY"))) {
-    add("LANDING_CONFIG_KEY", "must be a canonical base64url-encoded 256-bit key");
   }
   return errors;
 }
@@ -37,12 +35,6 @@ function validateSecret(environment, errors, name, minimum) {
       message: `must contain ${minimum} to 4096 characters without line breaks`
     });
   }
-}
-
-function validBase64UrlKey(input) {
-  if (!/^[A-Za-z0-9_-]{43}$/.test(input)) return false;
-  const decoded = Buffer.from(input, "base64url");
-  return decoded.length === 32 && decoded.toString("base64url") === input;
 }
 
 function runCli() {

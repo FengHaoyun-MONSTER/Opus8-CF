@@ -15,7 +15,7 @@ function validEnvironment() {
     ADMIN_PASSWORD: "a".repeat(16),
     JWT_SECRET: "j".repeat(32),
     NODE_HMAC_SECRET: "n".repeat(32),
-    LANDING_CONFIG_KEY: Buffer.alloc(32, 9).toString("base64url"),
+    LANDING_CONFIG_KEY: "existing-landing-config-key-32-bytes",
     FREEDOMPOST_INTEGRATION_KEY_ID: "freedompost-prod",
     FREEDOMPOST_INTEGRATION_SECRET: "f".repeat(32)
   };
@@ -32,6 +32,12 @@ test("fails closed when FreedomPost integration credentials are absent", () => {
   const names = validateControlDeployEnvironment(environment).map((error) => error.name);
   assert.ok(names.includes("FREEDOMPOST_INTEGRATION_KEY_ID"));
   assert.ok(names.includes("FREEDOMPOST_INTEGRATION_SECRET"));
+});
+
+test("keeps compatibility with existing derived landing encryption secrets", () => {
+  const environment = validEnvironment();
+  environment.LANDING_CONFIG_KEY = "raw-landing-secret-compatible-value";
+  assert.deepEqual(validateControlDeployEnvironment(environment), []);
 });
 
 test("rejects malformed integration credentials without exposing values", () => {
