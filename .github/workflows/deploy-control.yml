@@ -70,7 +70,6 @@ jobs:
           {
             corepack enable
             pnpm install --frozen-lockfile
-            npm i -g wrangler@4.115.0 esbuild
             bash infra/scripts/deploy-control.sh
           } 2>&1 | tee /tmp/dc.log
 

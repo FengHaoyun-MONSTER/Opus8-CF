@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."          # repo root
 REPO_ROOT="$(pwd)"
+export PATH="$REPO_ROOT/node_modules/.bin:$PATH"
 echo "STEP compliance-policy"
 COMPLIANCE_ENV="$(node "$REPO_ROOT/infra/scripts/compliance-gate.mjs" \
   --mode control-maintenance --format env)"

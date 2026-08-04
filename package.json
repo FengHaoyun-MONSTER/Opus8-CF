@@ -16,7 +16,12 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260729.1",
     "typescript": "^5.6.0",
-    "wrangler": "^4.115.0",
+    "wrangler": "4.115.0",
     "esbuild": "^0.25.12"
+  },
+  "pnpm": {
+    "overrides": {
+      "undici@>=7.0.0 <7.29.0": "7.29.0"
+    }
   }
 }
