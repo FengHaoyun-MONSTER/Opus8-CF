@@ -681,8 +681,10 @@ async function OPUS8_heartbeat(env) {
 const OPUS8_requestUsage = new WeakMap();
 const OPUS8_socketUsage = new WeakMap();
 const OPUS8_admissionCache = new Map();
-const OPUS8_USAGE_FLUSH_BYTES = 1024 * 1024;
-const OPUS8_USAGE_FLUSH_MS = 30_000;
+const OPUS8_USAGE_MIN_FLUSH_BYTES = 256 * 1024;
+const OPUS8_USAGE_TARGET_FLUSH_BYTES = 8 * 1024 * 1024;
+const OPUS8_USAGE_NORMAL_FLUSH_MS = 120_000;
+const OPUS8_USAGE_NEAR_QUOTA_FLUSH_MS = 15_000;
 
 function OPUS8_dataSize(value) {
   if (typeof value === "string") return new TextEncoder().encode(value).byteLength;
@@ -701,6 +703,42 @@ function OPUS8_usageRuntime(request) {
   return request && typeof request === "object" ? OPUS8_requestUsage.get(request) : null;
 }
 
+function OPUS8_usageRemainingBytes(runtime) {
+  if (!runtime || runtime.trafficLimitBytes <= 0) return Number.POSITIVE_INFINITY;
+  return Math.max(
+    0,
+    runtime.trafficLimitBytes - runtime.usedBytesAtStart - runtime.sessionBytes,
+  );
+}
+
+function OPUS8_usageFlushTargetBytes(runtime) {
+  const remaining = OPUS8_usageRemainingBytes(runtime);
+  if (!Number.isFinite(remaining)) return OPUS8_USAGE_TARGET_FLUSH_BYTES;
+  if (remaining <= OPUS8_USAGE_MIN_FLUSH_BYTES) return Math.max(1, remaining);
+  return Math.min(
+    OPUS8_USAGE_TARGET_FLUSH_BYTES,
+    Math.max(OPUS8_USAGE_MIN_FLUSH_BYTES, Math.floor(remaining / 16)),
+  );
+}
+
+function OPUS8_usageFlushIntervalMs(runtime) {
+  if (!runtime || runtime.trafficLimitBytes <= 0) return OPUS8_USAGE_NORMAL_FLUSH_MS;
+  const remainingRatio = OPUS8_usageRemainingBytes(runtime) / runtime.trafficLimitBytes;
+  if (remainingRatio <= 0.1) return OPUS8_USAGE_NEAR_QUOTA_FLUSH_MS;
+  if (remainingRatio <= 0.25) return 30_000;
+  return OPUS8_USAGE_NORMAL_FLUSH_MS;
+}
+
+function OPUS8_refreshQuotaBase(runtime, serverUsedBytes) {
+  if (!runtime) return;
+  const serverUsed = Math.max(0, Number(serverUsedBytes) || 0);
+  const ownAcknowledged = Math.max(0, Number(runtime.acknowledgedSessionBytes) || 0);
+  runtime.usedBytesAtStart = Math.max(
+    runtime.usedBytesAtStart,
+    Math.max(0, serverUsed - ownAcknowledged),
+  );
+}
+
 function OPUS8_scheduleUsage(runtime, final = false) {
   const promise = OPUS8_flushUsage(runtime, final).catch(() => {});
   try { runtime.ctx?.waitUntil?.(promise) } catch (_) { /* WebSocket event may outlive fetch ctx */ }
@@ -711,8 +749,8 @@ function OPUS8_maybeFlushUsage(runtime) {
   if (!runtime || runtime.closed) return;
   const total = runtime.bytesUp + runtime.bytesDown;
   if (
-    total >= OPUS8_USAGE_FLUSH_BYTES ||
-    (total > 0 && Date.now() - runtime.lastFlush >= OPUS8_USAGE_FLUSH_MS)
+    total >= OPUS8_usageFlushTargetBytes(runtime) ||
+    (total > 0 && Date.now() - runtime.lastFlush >= OPUS8_usageFlushIntervalMs(runtime))
   ) {
     OPUS8_scheduleUsage(runtime, false);
   }
@@ -747,6 +785,7 @@ function OPUS8_createUsageRuntime(request, env, ctx, uuidRef, transport, socket 
     bytesUp: 0,
     bytesDown: 0,
     sessionBytes: 0,
+    acknowledgedSessionBytes: 0,
     usedBytesAtStart: 0,
     trafficLimitBytes: 0,
     connectionReported: false,
@@ -896,7 +935,7 @@ async function OPUS8_requireAdmission(request, uuidRef, force = false) {
   runtime.ipHashKey = String(policy.ipHashKey || uuid);
   runtime.meteringEnabled = policy.meteringEnabled === true
     && Number(policy.trafficLimitBytes || 0) > 0;
-  runtime.usedBytesAtStart = Number(policy.usedBytes || 0);
+  if (!runtime.admitted) runtime.usedBytesAtStart = Number(policy.usedBytes || 0);
   runtime.trafficLimitBytes = Number(policy.trafficLimitBytes || 0);
   if (runtime.admissionPromise) return runtime.admissionPromise;
 
@@ -943,7 +982,7 @@ async function OPUS8_requireAdmission(request, uuidRef, force = false) {
     if (!result?.allowed) {
       throw new Error("OPUS8_ACCESS_DENIED:" + String(result?.reason || "policy_denied"));
     }
-    runtime.usedBytesAtStart = Number(result.usedBytes || runtime.usedBytesAtStart || 0);
+    OPUS8_refreshQuotaBase(runtime, result.usedBytes);
     runtime.trafficLimitBytes = Number(
       result.trafficLimitBytes || runtime.trafficLimitBytes || 0,
     );
@@ -1021,6 +1060,10 @@ async function OPUS8_flushUsage(runtime, final = false) {
       }
       if (!response.ok) return;
       runtime.queuedEvents.splice(0, events.length);
+      runtime.acknowledgedSessionBytes += events.reduce(
+        (total, event) => total + event.bytesUp + event.bytesDown,
+        0,
+      );
       if (!final) break;
     }
   })();

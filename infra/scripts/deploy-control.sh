@@ -37,6 +37,14 @@ export HMAC_V1_ACCEPT_UNTIL HMAC_V1_NODE_IDS
 echo "OK compliance-policy provisioning=$COMPLIANCE_PROXY_ALLOWED enforcement=$COMPLIANCE_ENFORCEMENT_MODE policy=$COMPLIANCE_POLICY_ID"
 cd packages/control-plane
 
+echo "STEP control-deploy-preflight"
+if ! node ../../infra/scripts/control-deploy-preflight.mjs >/tmp/control-deploy-preflight.log 2>&1; then
+  echo "ERROR control-deploy-preflight"
+  tail -n 12 /tmp/control-deploy-preflight.log
+  exit 9
+fi
+echo "OK control-deploy-preflight"
+
 : "${ROOT_DOMAIN:?ROOT_DOMAIN is required for production custom domains}"
 : "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
 : "${JWT_SECRET:?JWT_SECRET is required}"
@@ -214,6 +222,18 @@ if ! node test/signature-test.mjs >/tmp/signature-test.log 2>&1; then
   echo "ERROR signature-test"; tail -n 8 /tmp/signature-test.log; exit 12
 fi
 echo "OK signature-test"
+if ! node test/integration-auth-test.mjs >/tmp/integration-auth-test.log 2>&1; then
+  echo "ERROR integration-auth-test"; tail -n 8 /tmp/integration-auth-test.log; exit 12
+fi
+echo "OK integration-auth-test"
+if ! node test/webmaster-benefit-test.mjs >/tmp/webmaster-benefit-test.log 2>&1; then
+  echo "ERROR webmaster-benefit-test"; tail -n 8 /tmp/webmaster-benefit-test.log; exit 12
+fi
+echo "OK webmaster-benefit-test"
+if ! node test/deployment-preflight-test.mjs >/tmp/deployment-preflight-test.log 2>&1; then
+  echo "ERROR deployment-preflight-test"; tail -n 8 /tmp/deployment-preflight-test.log; exit 12
+fi
+echo "OK deployment-preflight-test"
 if ! node test/key-rotation-test.mjs >/tmp/key-rotation-test.log 2>&1; then
   echo "ERROR key-rotation-test"; tail -n 8 /tmp/key-rotation-test.log; exit 12
 fi
@@ -308,6 +328,8 @@ put_secret ADMIN_PASSWORD "$ADMIN_PASSWORD"
 put_secret JWT_SECRET "$JWT_SECRET"
 put_secret NODE_HMAC_SECRET "$NODE_HMAC_SECRET"
 put_secret LANDING_CONFIG_KEY "$LANDING_CONFIG_KEY"
+put_secret "FREEDOMPOST_INTEGRATION_KEY_ID" "$FREEDOMPOST_INTEGRATION_KEY_ID"
+put_secret "FREEDOMPOST_INTEGRATION_SECRET" "$FREEDOMPOST_INTEGRATION_SECRET"
 put_secret ROOT_DOMAIN "$ROOT_DOMAIN"
 put_secret SUB_BASE "$SUB_URL"
 

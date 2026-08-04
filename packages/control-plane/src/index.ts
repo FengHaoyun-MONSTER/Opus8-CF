@@ -42,6 +42,8 @@ import {
   rotateUserDeviceCredential,
   deleteUserDevice,
   bindUserDeviceHwid,
+  getWebmasterBenefitProvisioning,
+  createWebmasterBenefitProvisioningAtomic,
 } from "./db";
 import {
   nodesForUser,
@@ -104,6 +106,12 @@ import {
   landingCredentialRotationStatus,
   migrateLandingCredentialsToCurrentKey,
 } from "./landing-key-rotation";
+import { verifyIntegrationRequest } from "./integration-auth";
+import {
+  WEBMASTER_BENEFIT_CAMPAIGN_ID,
+  WEBMASTER_BENEFIT_POLICY,
+  provisionWebmasterBenefit,
+} from "./webmaster-benefit";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
@@ -141,6 +149,13 @@ export default {
         headers: { ...JSON_HEADERS, ...cors.responseHeaders },
       });
     const err = (msg: string, status = 400) => json({ error: msg }, status);
+    const privateJson = (data: unknown, status = 200) =>
+      new Response(JSON.stringify(data), {
+        status,
+        headers: { ...JSON_HEADERS, "cache-control": "no-store" },
+      });
+    const privateErr = (msg: string, status = 400) =>
+      privateJson({ error: msg }, status);
 
     if (m === "OPTIONS") {
       const preflightError = validateAdminPreflight(req, cors);
@@ -178,6 +193,91 @@ export default {
         });
 
       // ---------- 管理员登录 ----------
+      if (
+        p === "/api/integrations/freedompost/benefits/webmaster/claim"
+      ) {
+        if (m !== "POST") return privateErr("Method not allowed", 405);
+        const declaredLength = Number(req.headers.get("content-length") || 0);
+        if (Number.isFinite(declaredLength) && declaredLength > 4096) {
+          return privateErr("Request body too large", 413);
+        }
+        const rawBody = await req.text();
+        if (new TextEncoder().encode(rawBody).byteLength > 4096) {
+          return privateErr("Request body too large", 413);
+        }
+        const auth = await verifyIntegrationRequest(
+          req,
+          {
+            keyId: env.FREEDOMPOST_INTEGRATION_KEY_ID || "",
+            secret: env.FREEDOMPOST_INTEGRATION_SECRET || "",
+          },
+          rawBody,
+        );
+        if (!auth) return privateErr("Unauthorized", 401);
+
+        let body: Record<string, unknown>;
+        try {
+          const parsed = JSON.parse(rawBody) as unknown;
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return privateErr("Invalid request body", 400);
+          }
+          body = parsed as Record<string, unknown>;
+        } catch {
+          return privateErr("Invalid request body", 400);
+        }
+        const allowedFields = new Set(["externalClaimId", "campaignId"]);
+        const fields = Object.keys(body);
+        if (
+          fields.length !== allowedFields.size
+          || fields.some((field) => !allowedFields.has(field))
+          || typeof body.externalClaimId !== "string"
+          || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+            body.externalClaimId,
+          )
+          || body.campaignId !== WEBMASTER_BENEFIT_CAMPAIGN_ID
+        ) {
+          return privateErr("Invalid benefit claim contract", 400);
+        }
+
+        try {
+          const result = await provisionWebmasterBenefit(
+            {
+              get: (externalClaimId) =>
+                getWebmasterBenefitProvisioning(env, externalClaimId),
+              createAtomic: (provisioning) =>
+                createWebmasterBenefitProvisioningAtomic(env, provisioning),
+            },
+            body.externalClaimId,
+          );
+          const policy = await publishEdgePolicyChange(env);
+          const { claim, user, device } = result.provisioning;
+          const subBase = String(env.SUB_BASE || url.origin).replace(/\/$/, "");
+          return privateJson(
+            {
+              externalClaimId: claim.externalClaimId,
+              opusUserId: user.id,
+              opusDeviceId: device.id,
+              subscriptionUrl: `${subBase}/sub/${device.sub_token}`,
+              expiresAt: new Date(user.expire_at || 0).toISOString(),
+              trafficBytes: WEBMASTER_BENEFIT_POLICY.trafficLimitBytes,
+              durationDays: WEBMASTER_BENEFIT_POLICY.durationDays,
+              hwidRequired: true,
+              ipLimit: WEBMASTER_BENEFIT_POLICY.ipLimit24h,
+              created: result.created,
+              policyVersion: policy.version,
+              cacheInvalidation: policy.invalidation,
+            },
+            result.created ? 201 : 200,
+          );
+        } catch (error) {
+          console.error(
+            "FreedomPost benefit provisioning failed",
+            error instanceof Error ? error.name : "UnknownError",
+          );
+          return privateErr("Benefit provisioning temporarily unavailable", 503);
+        }
+      }
+
       if (p === "/api/admin/login" && m === "POST") {
         const { password } = (await req.json().catch(() => ({}))) as {
           password?: string;

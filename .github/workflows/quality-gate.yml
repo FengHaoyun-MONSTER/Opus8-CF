@@ -54,10 +54,14 @@ jobs:
         run: |
           pnpm --filter @opus8-cf/control-plane test:cors
           pnpm --filter @opus8-cf/control-plane test:signature
+          pnpm --filter @opus8-cf/control-plane test:integration-auth
+          pnpm --filter @opus8-cf/control-plane test:webmaster-benefit
+          pnpm --filter @opus8-cf/control-plane test:deploy-preflight
           pnpm --filter @opus8-cf/control-plane test:key-rotation
           pnpm --filter @opus8-cf/control-plane test:d1-backup
           pnpm --filter @opus8-cf/control-plane test:subscription-rate-limit
           pnpm --filter @opus8-cf/control-plane test:device-credentials
+          pnpm --filter @opus8-cf/control-plane test:usage-aggregation
           pnpm --filter @opus8-cf/control-plane test:compliance
           pnpm --filter @opus8-cf/control-plane test:resource-audit
           pnpm --filter @opus8-cf/control-plane test:transport-path

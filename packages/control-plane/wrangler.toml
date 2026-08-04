@@ -14,6 +14,12 @@ COMPLIANCE_MAINTENANCE_NODE_IDS = "acc1-n1,acc1-n2,acc2-n1,acc2-n2"
 HMAC_V1_ACCEPT_UNTIL = "0"
 HMAC_V1_NODE_IDS = ""
 
+# Configure these with `wrangler secret put` before enabling the FreedomPost
+# server-to-server benefit integration. The HMAC secret must be at least 32
+# characters and must not reuse an admin, JWT, landing, or node secret.
+# FREEDOMPOST_INTEGRATION_KEY_ID
+# FREEDOMPOST_INTEGRATION_SECRET
+
 [[ratelimits]]
 name = "SUB_SOURCE_RATE_LIMITER"
 namespace_id = "683401"

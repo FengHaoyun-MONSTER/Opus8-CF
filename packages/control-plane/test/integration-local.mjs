@@ -101,6 +101,10 @@ const worker = spawn(
     "COMPLIANCE_ENFORCEMENT_MODE:enforce",
     "--var",
     "COMPLIANCE_POLICY_ID:cloudflare-data-plane-v1",
+    "--var",
+    "FREEDOMPOST_INTEGRATION_KEY_ID:freedompost-local",
+    "--var",
+    "FREEDOMPOST_INTEGRATION_SECRET:test-freedompost-integration-secret-32-bytes",
   ],
   {
     cwd: controlRoot,
@@ -116,6 +120,9 @@ try {
   process.env.OPUS8_TEST_BASE = base;
   process.env.OPUS8_TEST_ADMIN = "test-admin";
   process.env.OPUS8_TEST_NODE_SECRET = "test-node-hmac-secret-32-bytes!!";
+  process.env.OPUS8_TEST_INTEGRATION_KEY_ID = "freedompost-local";
+  process.env.OPUS8_TEST_INTEGRATION_SECRET =
+    "test-freedompost-integration-secret-32-bytes";
   process.env.OPUS8_TEST_RATE_LIMIT = "1";
   await import(`./integration.mjs?local=${Date.now()}`);
 } finally {

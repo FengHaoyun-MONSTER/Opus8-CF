@@ -12,6 +12,7 @@ import {
   type AccessState,
 } from "./access-status";
 import { deviceCredentialUuids } from "./device-credentials";
+import type { WebmasterBenefitProvisioning } from "./webmaster-benefit";
 
 export interface Env {
   DB: D1Database;
@@ -36,6 +37,8 @@ export interface Env {
   COMPLIANCE_ENFORCEMENT_MODE?: string;
   COMPLIANCE_POLICY_ID?: string;
   COMPLIANCE_MAINTENANCE_NODE_IDS?: string;
+  FREEDOMPOST_INTEGRATION_KEY_ID?: string;
+  FREEDOMPOST_INTEGRATION_SECRET?: string;
   SUB_SOURCE_RATE_LIMITER?: RateLimit;
   SUB_TOKEN_RATE_LIMITER?: RateLimit;
 }
@@ -337,6 +340,145 @@ export async function insertUser(
       u.created_at,
     ),
   ]);
+}
+
+export async function getWebmasterBenefitProvisioning(
+  env: Env,
+  externalClaimId: string,
+): Promise<WebmasterBenefitProvisioning | null> {
+  const row = await env.DB.prepare(
+    `SELECT
+       c.external_claim_id, c.integration_id, c.campaign_id,
+       c.user_id AS claim_user_id, c.device_id AS claim_device_id,
+       c.created_at AS claim_created_at,
+       u.id AS user_id, u.username, u.uuid, u.plan_id, u.node_group,
+       u.unlock, u.sub_token AS user_sub_token, u.expire_at,
+       u.enabled AS user_enabled, u.created_at AS user_created_at,
+       d.id AS device_id, d.user_id AS device_user_id, d.name AS device_name,
+       d.base_uuid, d.sub_token AS device_sub_token, d.credential_mode,
+       d.hwid_mode, d.hwid_hash, d.hwid_bound_at,
+       d.enabled AS device_enabled, d.created_at AS device_created_at,
+       d.updated_at AS device_updated_at,
+       l.device_limit, l.ip_limit_24h, l.traffic_limit_bytes
+     FROM integration_claims c
+     JOIN users u ON u.id=c.user_id
+     JOIN user_devices d ON d.id=c.device_id AND d.user_id=u.id
+     JOIN user_limits l ON l.user_id=u.id
+     WHERE c.external_claim_id=?1
+       AND c.integration_id='freedompost'
+       AND c.campaign_id='webmaster-benefit-v1'`,
+  )
+    .bind(externalClaimId)
+    .first<Record<string, unknown>>();
+  if (!row) return null;
+
+  return {
+    claim: {
+      externalClaimId: String(row.external_claim_id),
+      integrationId: "freedompost",
+      campaignId: "webmaster-benefit-v1",
+      userId: String(row.claim_user_id),
+      deviceId: String(row.claim_device_id),
+      createdAt: Number(row.claim_created_at),
+    },
+    user: {
+      id: String(row.user_id),
+      username: row.username === null ? null : String(row.username),
+      uuid: String(row.uuid),
+      plan_id: row.plan_id === null ? null : String(row.plan_id),
+      node_group: row.node_group === null ? null : String(row.node_group),
+      unlock: Number(row.unlock),
+      sub_token: String(row.user_sub_token),
+      expire_at: row.expire_at === null ? null : Number(row.expire_at),
+      enabled: Number(row.user_enabled),
+      created_at: Number(row.user_created_at),
+    },
+    device: {
+      id: String(row.device_id),
+      user_id: String(row.device_user_id),
+      name: String(row.device_name),
+      base_uuid: String(row.base_uuid),
+      sub_token: String(row.device_sub_token),
+      credential_mode: String(row.credential_mode) as DeviceCredentialMode,
+      hwid_mode: String(row.hwid_mode) as HwidMode,
+      hwid_hash: row.hwid_hash === null ? null : String(row.hwid_hash),
+      hwid_bound_at:
+        row.hwid_bound_at === null ? null : Number(row.hwid_bound_at),
+      enabled: Number(row.device_enabled),
+      created_at: Number(row.device_created_at),
+      updated_at: Number(row.device_updated_at),
+    },
+    limits: {
+      deviceLimit: Number(row.device_limit),
+      ipLimit24h: Number(row.ip_limit_24h),
+      trafficLimitBytes: Number(row.traffic_limit_bytes),
+    },
+  };
+}
+
+export async function createWebmasterBenefitProvisioningAtomic(
+  env: Env,
+  provisioning: WebmasterBenefitProvisioning,
+): Promise<boolean> {
+  const { claim, user, device, limits } = provisioning;
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users
+         (id,username,uuid,plan_id,node_group,unlock,sub_token,expire_at,enabled,created_at)
+         VALUES (?1,?2,?3,NULL,NULL,0,?4,?5,1,?6)`,
+      ).bind(
+        user.id,
+        user.username,
+        user.uuid,
+        user.sub_token,
+        user.expire_at,
+        user.created_at,
+      ),
+      env.DB.prepare(
+        `INSERT INTO user_devices
+         (id,user_id,name,base_uuid,sub_token,credential_mode,hwid_mode,
+          hwid_hash,hwid_bound_at,enabled,created_at,updated_at)
+         VALUES (?1,?2,?3,?4,?5,'static','required',NULL,NULL,1,?6,?6)`,
+      ).bind(
+        device.id,
+        user.id,
+        device.name,
+        device.base_uuid,
+        device.sub_token,
+        device.created_at,
+      ),
+      env.DB.prepare(
+        `INSERT INTO user_limits
+         (user_id,device_limit,ip_limit_24h,traffic_limit_bytes,updated_at)
+         VALUES (?1,?2,?3,?4,?5)`,
+      ).bind(
+        user.id,
+        limits.deviceLimit,
+        limits.ipLimit24h,
+        limits.trafficLimitBytes,
+        user.created_at,
+      ),
+      env.DB.prepare(
+        `INSERT INTO integration_claims
+         (external_claim_id,integration_id,campaign_id,user_id,device_id,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6)`,
+      ).bind(
+        claim.externalClaimId,
+        claim.integrationId,
+        claim.campaignId,
+        user.id,
+        device.id,
+        claim.createdAt,
+      ),
+    ]);
+    return true;
+  } catch (error) {
+    if (await getWebmasterBenefitProvisioning(env, claim.externalClaimId)) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export async function listUserDevices(

@@ -252,6 +252,58 @@ if (
 ) {
   throw new Error("stream transport byte accounting is incorrect");
 }
+streamRuntime.usedBytesAtStart = 0;
+streamRuntime.trafficLimitBytes = 30 * 1024 * 1024 * 1024;
+streamRuntime.sessionBytes = 0;
+if (
+  OPUS8_usageFlushTargetBytes(streamRuntime) !== 8 * 1024 * 1024
+  || OPUS8_usageFlushIntervalMs(streamRuntime) !== 120_000
+) {
+  throw new Error("usage aggregation must use a large batch far from quota");
+}
+streamRuntime.usedBytesAtStart = streamRuntime.trafficLimitBytes - 4 * 1024 * 1024;
+if (
+  OPUS8_usageFlushTargetBytes(streamRuntime) !== 256 * 1024
+  || OPUS8_usageFlushIntervalMs(streamRuntime) !== 15_000
+) {
+  throw new Error("usage aggregation must tighten near quota");
+}
+
+const quotaRequest = {};
+OPUS8_setRequestPolicy(quotaRequest, unlocked);
+const quotaRuntime = OPUS8_bindUsageStream(
+  quotaRequest, { NODE_ID: "test" }, {}, presentedUuids, "xhttp",
+);
+const quotaBridge = {
+  readyState: 1,
+  closeCode: 0,
+  close(code) { this.readyState = 3; this.closeCode = code; },
+};
+OPUS8_attachUsageBridge(quotaRequest, quotaBridge);
+quotaRuntime.admitted = true;
+quotaRuntime.meteringEnabled = true;
+quotaRuntime.usedBytesAtStart = 100;
+quotaRuntime.trafficLimitBytes = 150;
+quotaRuntime.lastAdmission = Date.now();
+OPUS8_noteUplink(quotaRequest, new Uint8Array(49));
+if (quotaBridge.readyState !== 1) {
+  throw new Error("hard quota must not close before the exact byte limit");
+}
+OPUS8_noteUplink(quotaRequest, new Uint8Array(1));
+if (quotaBridge.readyState !== 3 || quotaBridge.closeCode !== 1008) {
+  throw new Error("adaptive aggregation must preserve exact local quota enforcement");
+}
+quotaRuntime.usedBytesAtStart = 100;
+quotaRuntime.sessionBytes = 50;
+quotaRuntime.acknowledgedSessionBytes = 50;
+OPUS8_refreshQuotaBase(quotaRuntime, 150);
+if (quotaRuntime.usedBytesAtStart !== 100) {
+  throw new Error("admission refresh must not count acknowledged session bytes twice");
+}
+OPUS8_refreshQuotaBase(quotaRuntime, 180);
+if (quotaRuntime.usedBytesAtStart !== 130) {
+  throw new Error("admission refresh must include usage from concurrent sessions");
+}
 const unlimitedRequest = {};
 OPUS8_setRequestPolicy(unlimitedRequest, await OPUS8_normalizeState({
   uuids: ["unlimited-user"],

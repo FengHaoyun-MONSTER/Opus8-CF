@@ -258,21 +258,29 @@ export async function recordUsage(
         event.userId || "",
         event.uuid,
       ),
-      env.DB.prepare(
-        `INSERT INTO usage (user_id,node_id,ts_bucket,connections,bytes_up,bytes_down)
-         SELECT user_id,node_id,ts_bucket,connections,bytes_up,bytes_down
-         FROM usage_events WHERE event_id=?1 AND applied=0
-         ON CONFLICT(user_id,node_id,ts_bucket) DO UPDATE SET
-           connections=connections+excluded.connections,
-           bytes_up=bytes_up+excluded.bytes_up,
-           bytes_down=bytes_down+excluded.bytes_down`,
-      ).bind(event.id),
-      env.DB.prepare(
-        "UPDATE usage_events SET applied=1 WHERE event_id=?1 AND applied=0",
-      ).bind(event.id),
     );
   }
   if (statements.length === 0) return { accepted: 0 };
+  const eventPlaceholders = events.map((_, index) => `?${index + 1}`).join(",");
+  const eventIds = events.map((event) => event.id);
+  statements.push(
+    env.DB.prepare(
+      `INSERT INTO usage (user_id,node_id,ts_bucket,connections,bytes_up,bytes_down)
+       SELECT user_id,node_id,ts_bucket,
+         SUM(connections),SUM(bytes_up),SUM(bytes_down)
+       FROM usage_events
+       WHERE applied=0 AND event_id IN (${eventPlaceholders})
+       GROUP BY user_id,node_id,ts_bucket
+       ON CONFLICT(user_id,node_id,ts_bucket) DO UPDATE SET
+         connections=usage.connections+excluded.connections,
+         bytes_up=usage.bytes_up+excluded.bytes_up,
+         bytes_down=usage.bytes_down+excluded.bytes_down`,
+    ).bind(...eventIds),
+    env.DB.prepare(
+      `UPDATE usage_events SET applied=1
+       WHERE applied=0 AND event_id IN (${eventPlaceholders})`,
+    ).bind(...eventIds),
+  );
   // 幂等事件只需覆盖节点的短时重试窗口，避免事件明细无限增长。
   statements.push(
     env.DB.prepare("DELETE FROM usage_events WHERE created_at<=?1")
@@ -281,7 +289,7 @@ export async function recordUsage(
   const results = await env.DB.batch(statements);
   let accepted = 0;
   for (let index = 0; index < events.length; index += 1) {
-    accepted += Number(results[index * 3]?.meta?.changes || 0);
+    accepted += Number(results[index]?.meta?.changes || 0);
   }
   return { accepted };
 }

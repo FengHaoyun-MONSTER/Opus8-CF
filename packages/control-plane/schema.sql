@@ -105,6 +105,22 @@ CREATE INDEX IF NOT EXISTS idx_user_devices_subtoken
 CREATE INDEX IF NOT EXISTS idx_user_devices_uuid
   ON user_devices(base_uuid);
 
+-- Server-to-server campaign idempotency. The referenced user and device are
+-- created in the same D1 batch as this record.
+CREATE TABLE IF NOT EXISTS integration_claims (
+  external_claim_id TEXT PRIMARY KEY,
+  integration_id    TEXT NOT NULL,
+  campaign_id       TEXT NOT NULL,
+  user_id           TEXT NOT NULL UNIQUE,
+  device_id         TEXT NOT NULL UNIQUE,
+  created_at        INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (device_id) REFERENCES user_devices(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_integration_claims_campaign
+  ON integration_claims(integration_id, campaign_id, created_at);
+
 -- Idempotent compatibility migration. Existing users retain their legacy static credential.
 INSERT OR IGNORE INTO user_devices
   (id, user_id, name, base_uuid, sub_token, credential_mode, hwid_mode,

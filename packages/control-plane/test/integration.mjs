@@ -4,6 +4,13 @@ const base = process.env.OPUS8_TEST_BASE || "http://127.0.0.1:8787";
 const adminPassword = process.env.OPUS8_TEST_ADMIN || "test-admin";
 const nodeSecret =
   process.env.OPUS8_TEST_NODE_SECRET || "test-node-hmac-secret-32-bytes!!";
+const integrationKeyId =
+  process.env.OPUS8_TEST_INTEGRATION_KEY_ID || "freedompost-local";
+const integrationSecret =
+  process.env.OPUS8_TEST_INTEGRATION_SECRET
+  || "test-freedompost-integration-secret-32-bytes";
+const benefitPath =
+  "/api/integrations/freedompost/benefits/webmaster/claim";
 const nodeId = `test-node-${process.pid}-${Date.now()}`;
 const nodeHost = `${nodeId}.example.com`;
 const transportPath = `/ws/integration-${process.pid}`;
@@ -65,6 +72,38 @@ async function signedGet(path, timestamp = String(Date.now())) {
       "x-opus8-node": nodeId,
       "x-opus8-sign-v2": signature,
     },
+  });
+}
+
+async function signedBenefitPost(payload, {
+  requestId = `benefit-request-${crypto.randomUUID()}`,
+  timestamp = String(Date.now()),
+  signedPayload = payload,
+} = {}) {
+  const body = JSON.stringify(payload);
+  const signedBody = JSON.stringify(signedPayload);
+  const bodyHash = crypto.createHash("sha256").update(signedBody).digest("hex");
+  const signature = crypto
+    .createHmac("sha256", integrationSecret)
+    .update([
+      "opus8-integration-v1",
+      timestamp,
+      requestId,
+      "POST",
+      benefitPath,
+      bodyHash,
+    ].join("\n"))
+    .digest("hex");
+  return fetch(base + benefitPath, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-opus8-integration-key-id": integrationKeyId,
+      "x-opus8-integration-timestamp": timestamp,
+      "x-opus8-integration-request-id": requestId,
+      "x-opus8-integration-signature": signature,
+    },
+    body,
   });
 }
 
@@ -238,7 +277,165 @@ for (const landing of initialLandings.landings.filter(
 let userId = "";
 let unlimitedUserId = "";
 let landingId = "";
+const benefitUserIds = [];
 try {
+  const unsignedBenefit = await fetch(base + benefitPath, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      externalClaimId: crypto.randomUUID(),
+      campaignId: "webmaster-benefit-v1",
+    }),
+  });
+  assert(
+    unsignedBenefit.status === 401
+      && (unsignedBenefit.headers.get("cache-control") || "").includes("no-store"),
+    "the FreedomPost integration endpoint must reject unsigned requests without caching",
+  );
+
+  const tamperedClaimId = crypto.randomUUID();
+  const tamperedBenefit = await signedBenefitPost(
+    {
+      externalClaimId: tamperedClaimId,
+      campaignId: "webmaster-benefit-v1",
+    },
+    {
+      signedPayload: {
+        externalClaimId: crypto.randomUUID(),
+        campaignId: "webmaster-benefit-v1",
+      },
+    },
+  );
+  assert(
+    tamperedBenefit.status === 401,
+    "a body changed after signing must be rejected",
+  );
+
+  const overrideBenefit = await signedBenefitPost({
+    externalClaimId: crypto.randomUUID(),
+    campaignId: "webmaster-benefit-v1",
+    trafficLimitBytes: 1,
+  });
+  assert(
+    overrideBenefit.status === 400,
+    "the integration endpoint must reject attempts to override the fixed policy",
+  );
+  const invalidClaimIdBenefit = await signedBenefitPost({
+    externalClaimId: "not-a-uuid",
+    campaignId: "webmaster-benefit-v1",
+  });
+  assert(
+    invalidClaimIdBenefit.status === 400,
+    "invalid external claim ids must be rejected as contract errors",
+  );
+
+  const benefitClaimId = crypto.randomUUID();
+  const firstBenefitResponse = await signedBenefitPost({
+    externalClaimId: benefitClaimId,
+    campaignId: "webmaster-benefit-v1",
+  });
+  const firstBenefit = await jsonResponse(firstBenefitResponse);
+  benefitUserIds.push(firstBenefit.opusUserId);
+  assert(
+    firstBenefitResponse.status === 201
+      && firstBenefit.created === true
+      && firstBenefit.externalClaimId === benefitClaimId
+      && firstBenefit.trafficBytes === 32_212_254_720
+      && firstBenefit.durationDays === 15
+      && firstBenefit.hwidRequired === true
+      && firstBenefit.ipLimit === 2
+      && typeof firstBenefit.subscriptionUrl === "string"
+      && !Object.hasOwn(firstBenefit, "credential"),
+    `the first benefit claim must return only the fixed public contract: ${JSON.stringify(firstBenefit)}`,
+  );
+  assert(
+    (firstBenefitResponse.headers.get("cache-control") || "").includes("no-store"),
+    "benefit provisioning responses must never be cached",
+  );
+
+  const repeatedBenefitResponse = await signedBenefitPost({
+    externalClaimId: benefitClaimId,
+    campaignId: "webmaster-benefit-v1",
+  });
+  const repeatedBenefit = await jsonResponse(repeatedBenefitResponse);
+  assert(
+    repeatedBenefitResponse.status === 200
+      && repeatedBenefit.created === false
+      && repeatedBenefit.opusUserId === firstBenefit.opusUserId
+      && repeatedBenefit.opusDeviceId === firstBenefit.opusDeviceId
+      && repeatedBenefit.subscriptionUrl === firstBenefit.subscriptionUrl,
+    "a serial HTTP retry must restore the same benefit resources",
+  );
+
+  const concurrentClaimId = crypto.randomUUID();
+  const concurrentResponses = await Promise.all([
+    signedBenefitPost({
+      externalClaimId: concurrentClaimId,
+      campaignId: "webmaster-benefit-v1",
+    }),
+    signedBenefitPost({
+      externalClaimId: concurrentClaimId,
+      campaignId: "webmaster-benefit-v1",
+    }),
+  ]);
+  const concurrentBenefits = await Promise.all(
+    concurrentResponses.map((response) => jsonResponse(response)),
+  );
+  benefitUserIds.push(concurrentBenefits[0].opusUserId);
+  assert(
+    concurrentResponses.map((response) => response.status).sort().join(",")
+      === "200,201"
+      && concurrentBenefits.filter((item) => item.created).length === 1
+      && concurrentBenefits[0].opusUserId === concurrentBenefits[1].opusUserId
+      && concurrentBenefits[0].opusDeviceId === concurrentBenefits[1].opusDeviceId,
+    `concurrent HTTP claims must converge on one user and device: ${JSON.stringify(concurrentBenefits)}`,
+  );
+
+  const benefitUsers = await jsonResponse(
+    await fetch(`${base}/api/users`, { headers: adminHeaders }),
+  );
+  const benefitRows = benefitUsers.users.filter(
+    (item) => benefitUserIds.includes(item.id),
+  );
+  assert(
+    benefitRows.length === 2
+      && benefitRows.every(
+        (item) => item.device_limit === 2
+          && item.ip_limit_24h === 2
+          && item.traffic_limit_bytes === 32_212_254_720
+          && item.unlock === 0,
+      ),
+    `D1 must contain exactly the fixed policy for each benefit claim: ${JSON.stringify(benefitRows)}`,
+  );
+  const benefitDevices = await jsonResponse(
+    await fetch(`${base}/api/users/${firstBenefit.opusUserId}/devices`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    benefitDevices.devices.length === 1
+      && benefitDevices.devices[0].id === firstBenefit.opusDeviceId
+      && benefitDevices.devices[0].credential_mode === "static"
+      && benefitDevices.devices[0].hwid_mode === "required",
+    `the benefit must create exactly one static required-HWID device: ${JSON.stringify(benefitDevices)}`,
+  );
+  assert(
+    (await fetch(firstBenefit.subscriptionUrl)).status === 403,
+    "the benefit subscription must reject clients without HWID",
+  );
+  assert(
+    (await fetch(firstBenefit.subscriptionUrl, {
+      headers: { "x-hwid": "freedompost-integration-device-a" },
+    })).status === 200,
+    "the first valid benefit HWID must bind and download",
+  );
+  assert(
+    (await fetch(firstBenefit.subscriptionUrl, {
+      headers: { "x-hwid": "freedompost-integration-device-b" },
+    })).status === 403,
+    "a second benefit HWID must be rejected after binding",
+  );
+
   const created = await jsonResponse(
     await fetch(`${base}/api/users`, {
       method: "POST",
@@ -463,11 +660,18 @@ try {
     bytesDown: 200,
     tsBucket: Math.floor(Date.now() / 3_600_000) * 3_600_000,
   };
+  const secondEvent = {
+    ...event,
+    id: `${nodeId}:event-2`,
+    connections: 0,
+    bytesUp: 300,
+    bytesDown: 400,
+  };
   await jsonResponse(
-    await signedPost("/api/nodes/usage", { nodeId, events: [event] }),
+    await signedPost("/api/nodes/usage", { nodeId, events: [event, secondEvent] }),
   );
   await jsonResponse(
-    await signedPost("/api/nodes/usage", { nodeId, events: [event] }),
+    await signedPost("/api/nodes/usage", { nodeId, events: [event, secondEvent] }),
   );
   const unlimitedCreated = await jsonResponse(
     await fetch(`${base}/api/users`, {
@@ -523,8 +727,8 @@ try {
   );
   const row = users.users.find((item) => item.id === userId);
   assert(
-    row?.bytes_up === 100 && row?.bytes_down === 200 && row?.connections === 1,
-    `usage event must be idempotent: ${JSON.stringify(row)}`,
+    row?.bytes_up === 400 && row?.bytes_down === 600 && row?.connections === 1,
+    `batched usage events must aggregate and remain idempotent: ${JSON.stringify(row)}`,
   );
   const unlimitedRow = users.users.find(
     (item) => item.id === unlimitedUserId,
@@ -554,8 +758,8 @@ try {
       activity.usageByNode.some(
         (item) =>
           item.nodeId === nodeId &&
-          item.bytesUp === 100 &&
-          item.bytesDown === 200,
+          item.bytesUp === 400 &&
+          item.bytesDown === 600,
       ),
     `user activity must combine leases, fingerprints and usage: ${JSON.stringify(activity)}`,
   );
@@ -908,11 +1112,11 @@ try {
     "sing-box subscription must use the registered path and explicit Early Data",
   );
   assert(
-    usageHeader.includes("upload=100"),
+    usageHeader.includes("upload=400"),
     `missing upload usage: ${usageHeader}`,
   );
   assert(
-    usageHeader.includes("download=200"),
+    usageHeader.includes("download=600"),
     `missing download usage: ${usageHeader}`,
   );
   assert(
@@ -983,6 +1187,9 @@ try {
   console.log("OK alert-incidents-resolution-history");
   console.log("OK subscription-native-rate-limit");
   console.log("OK transport-path-single-source");
+  console.log("OK freedompost-benefit-integration-contract");
+  console.log("OK freedompost-benefit-http-idempotency");
+  console.log("OK freedompost-benefit-required-hwid");
 } finally {
   if (landingId) {
     await fetch(`${base}/api/landings/${landingId}`, {
@@ -998,6 +1205,13 @@ try {
   }
   if (unlimitedUserId) {
     await fetch(`${base}/api/users/${unlimitedUserId}`, {
+      method: "DELETE",
+      headers: adminHeaders,
+    });
+  }
+  for (const benefitUserId of new Set(benefitUserIds)) {
+    if (!benefitUserId) continue;
+    await fetch(`${base}/api/users/${benefitUserId}`, {
       method: "DELETE",
       headers: adminHeaders,
     });

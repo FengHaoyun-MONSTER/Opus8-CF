@@ -49,6 +49,8 @@ jobs:
       NODE_HMAC_SECRET_PREVIOUS: ${{ secrets.NODE_HMAC_SECRET_PREVIOUS }}
       LANDING_CONFIG_KEY: ${{ secrets.LANDING_CONFIG_KEY }}
       LANDING_CONFIG_KEY_PREVIOUS: ${{ secrets.LANDING_CONFIG_KEY_PREVIOUS }}
+      FREEDOMPOST_INTEGRATION_KEY_ID: ${{ secrets.FREEDOMPOST_INTEGRATION_KEY_ID }}
+      FREEDOMPOST_INTEGRATION_SECRET: ${{ secrets.FREEDOMPOST_INTEGRATION_SECRET }}
       RETIRE_PREVIOUS_SECRET: ${{ inputs.retire_previous_secret || 'none' }}
       ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       ADMIN_UI_ORIGINS: https://opus8cf-admin-openal.pages.dev
