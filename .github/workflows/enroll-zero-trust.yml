@@ -45,7 +45,7 @@ jobs:
       ROOT_DOMAIN_ACC1: ${{ secrets.ROOT_DOMAIN }}
       ROOT_DOMAIN_ACC2: ${{ secrets.ROOT_DOMAIN_NUM1 }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Validate and mask credentials
         shell: bash

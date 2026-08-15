@@ -124,16 +124,41 @@ import {
   WEBMASTER_BENEFIT_POLICY,
   provisionWebmasterBenefit,
 } from "./webmaster-benefit";
+import {
+  claimAutomationRequest,
+  verifyAutomationRequest,
+  type AutomationAuthResult,
+} from "./automation-auth";
+import { listAdminAudit, recordAdminAudit } from "./admin-audit";
+import { runDataMaintenance } from "./data-maintenance";
+import { operationsSlo } from "./operations-slo";
+import { enforceAdminLoginRateLimit } from "./admin-login-rate-limit";
 
 const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
 
-/** 校验管理员 JWT，返回 true/false。 */
-async function requireAdmin(req: Request, env: Env): Promise<boolean> {
+interface AdminActor {
+  actor: string;
+  authentication: "password-jwt";
+}
+
+/** 校验管理员 JWT，并返回可审计身份。 */
+async function authenticateAdmin(
+  req: Request,
+  env: Env,
+): Promise<AdminActor | null> {
   const auth = req.headers.get("authorization") || "";
   const token = auth.replace(/^Bearer\s+/i, "");
-  if (!token) return false;
+  if (!token) return null;
   const payload = await verifyJwtWithRotation(token, env);
-  return !!payload && payload.role === "admin";
+  if (!payload || payload.role !== "admin") return null;
+  const actor = typeof payload.sub === "string" && payload.sub
+    ? payload.sub
+    : "local-admin";
+  return { actor, authentication: "password-jwt" };
+}
+
+async function requireAdmin(req: Request, env: Env): Promise<boolean> {
+  return Boolean(await authenticateAdmin(req, env));
 }
 
 /** 校验节点 HMAC 签名，返回签名身份与时间戳。body 为原始文本。 */
@@ -155,17 +180,67 @@ export default {
     const p = url.pathname;
     const m = req.method;
     const cors = controlCorsPolicy(req, env, p);
-    const json = (data: unknown, status = 200) =>
-      new Response(JSON.stringify(data), {
+    const scheduleJwtMutationAudit = (status: number) => {
+      if (
+        status >= 400
+        || m === "GET"
+        || m === "OPTIONS"
+        || p === "/api/admin/login"
+      ) return;
+      ctx.waitUntil(
+        authenticateAdmin(req, env)
+          .then((admin) => admin && recordAdminAudit(env, {
+            actor: admin.actor,
+            authentication: admin.authentication,
+            method: m,
+            path: p,
+            status,
+            requestId: req.headers.get("x-request-id") || undefined,
+          }))
+          .then(() => undefined)
+          .catch((error) => {
+            console.error(
+              "Admin audit write failed",
+              error instanceof Error ? error.name : "UnknownError",
+            );
+          }),
+      );
+    };
+    const scheduleAutomationAudit = (
+      automation: AutomationAuthResult,
+      status: number,
+    ) => {
+      ctx.waitUntil(
+        recordAdminAudit(env, {
+          actor: automation.identity,
+          authentication: "automation-hmac",
+          method: m,
+          path: p,
+          status,
+          requestId: automation.requestId,
+        }).catch((error) => {
+          console.error(
+            "Automation audit write failed",
+            error instanceof Error ? error.name : "UnknownError",
+          );
+        }),
+      );
+    };
+    const json = (data: unknown, status = 200) => {
+      scheduleJwtMutationAudit(status);
+      return new Response(JSON.stringify(data), {
         status,
         headers: { ...JSON_HEADERS, ...cors.responseHeaders },
       });
+    };
     const err = (msg: string, status = 400) => json({ error: msg }, status);
-    const privateJson = (data: unknown, status = 200) =>
-      new Response(JSON.stringify(data), {
+    const privateJson = (data: unknown, status = 200) => {
+      scheduleJwtMutationAudit(status);
+      return new Response(JSON.stringify(data), {
         status,
         headers: { ...JSON_HEADERS, "cache-control": "no-store" },
       });
+    };
     const privateErr = (msg: string, status = 400) =>
       privateJson({ error: msg }, status);
 
@@ -291,12 +366,35 @@ export default {
       }
 
       if (p === "/api/admin/login" && m === "POST") {
+        const loginLimit = await enforceAdminLoginRateLimit(req, env);
+        if (!loginLimit.allowed) {
+          return new Response(
+            JSON.stringify({
+              error: loginLimit.status === 429
+                ? "登录尝试过于频繁"
+                : "登录保护暂时不可用",
+            }),
+            {
+              status: loginLimit.status,
+              headers: {
+                ...JSON_HEADERS,
+                ...cors.responseHeaders,
+                "cache-control": "no-store",
+                "retry-after": String(loginLimit.retryAfterSeconds),
+              },
+            },
+          );
+        }
         const { password } = (await req.json().catch(() => ({}))) as {
           password?: string;
         };
         if (!password || !timingSafeEqual(password, env.ADMIN_PASSWORD))
           return err("密码错误", 401);
-        const token = await jwtSign({ role: "admin" }, env.JWT_SECRET, 86400);
+        const token = await jwtSign(
+          { role: "admin", sub: "local-admin", authn: "password-jwt" },
+          env.JWT_SECRET,
+          86400,
+        );
         return json({ token });
       }
       if (p === "/api/admin/me" && m === "GET") {
@@ -369,6 +467,21 @@ export default {
       if (p === "/api/operations/node-health" && m === "GET") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         return json(await nodeHealthOverview(env));
+      }
+      if (p === "/api/operations/audit" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const limit = boundedInteger(url.searchParams.get("limit"), 1, 200, 50);
+        const before = boundedInteger(
+          url.searchParams.get("before"),
+          1,
+          Number.MAX_SAFE_INTEGER,
+          Number.MAX_SAFE_INTEGER,
+        );
+        return privateJson({ entries: await listAdminAudit(env, limit, before) });
+      }
+      if (p === "/api/operations/slo" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return privateJson(await operationsSlo(env));
       }
       if (p === "/api/operations/node-health/report" && m === "POST") {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
@@ -975,7 +1088,10 @@ export default {
 
       // ---------- 节点接口 ----------
       if (p === "/api/nodes" && m === "GET") {
-        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const automation = await verifyAutomationRequest(req, env, "");
+        if (!(await requireAdmin(req, env)) && !automation) {
+          return err("未授权", 401);
+        }
         return json({ nodes: await listNodes(env) });
       }
       if (p === "/api/node-enrollments" && m === "GET") {
@@ -983,17 +1099,23 @@ export default {
         return privateJson({ enrollments: await listNodeEnrollments(env) });
       }
       if (p === "/api/node-enrollments" && m === "POST") {
-        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const rawBody = await req.text();
+        const automation = await verifyAutomationRequest(req, env, rawBody);
+        const admin = await requireAdmin(req, env);
+        if (!admin) {
+          if (!automation || !(await claimAutomationRequest(env, automation))) {
+            return err("未授权", 401);
+          }
+        }
         try {
-          const input = (await req.json()) as CreateNodeEnrollmentInput;
-          return privateJson(
-            await createNodeEnrollment(
-              env,
-              input,
-              proxyProvisioningAllowed(env),
-            ),
-            201,
+          const input = JSON.parse(rawBody) as CreateNodeEnrollmentInput;
+          const enrollment = await createNodeEnrollment(
+            env,
+            input,
+            proxyProvisioningAllowed(env),
           );
+          if (!admin && automation) scheduleAutomationAudit(automation, 201);
+          return privateJson(enrollment, 201);
         } catch (error) {
           if (error instanceof NodeEnrollmentError) {
             return privateErr(error.message, error.status);
@@ -1020,10 +1142,17 @@ export default {
         /^\/api\/node-enrollments\/([A-Za-z0-9-]+)$/,
       );
       if (enrollmentMatch && m === "DELETE") {
-        if (!(await requireAdmin(req, env))) return err("未授权", 401);
-        return (await revokeNodeEnrollment(env, enrollmentMatch[1]))
-          ? privateJson({ ok: true })
-          : privateErr("注册任务不存在或不可撤销", 404);
+        const automation = await verifyAutomationRequest(req, env, "");
+        const admin = await requireAdmin(req, env);
+        if (!admin) {
+          if (!automation || !(await claimAutomationRequest(env, automation))) {
+            return err("未授权", 401);
+          }
+        }
+        const revoked = await revokeNodeEnrollment(env, enrollmentMatch[1]);
+        if (!revoked) return privateErr("注册任务不存在或不可撤销", 404);
+        if (!admin && automation) scheduleAutomationAudit(automation, 200);
+        return privateJson({ ok: true });
       }
       const nodeCredentialMatch = p.match(
         /^\/api\/nodes\/([A-Za-z0-9._:-]+)\/credential$/,
@@ -1433,6 +1562,27 @@ export default {
     } catch (e) {
       return err(`内部错误: ${(e as Error).message}`, 500);
     }
+  },
+  async scheduled(
+    _controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<void> {
+    ctx.waitUntil(
+      runDataMaintenance(env)
+        .then((result) => {
+          console.log(
+            `Data maintenance completed deleted=${result.deletedRows} statements=${result.statements}`,
+          );
+        })
+        .catch((error) => {
+          console.error(
+            "Data maintenance failed",
+            error instanceof Error ? error.name : "UnknownError",
+          );
+          throw error;
+        }),
+    );
   },
 };
 

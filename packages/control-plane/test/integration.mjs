@@ -10,6 +10,9 @@ const integrationKeyId =
 const integrationSecret =
   process.env.OPUS8_TEST_INTEGRATION_SECRET
   || "test-freedompost-integration-secret-32-bytes";
+const automationSecret =
+  process.env.OPUS8_TEST_AUTOMATION_SECRET
+  || "test-control-automation-secret-32-bytes";
 const benefitPath =
   "/api/integrations/freedompost/benefits/webmaster/claim";
 const nodeId = `test-node-${process.pid}-${Date.now()}`;
@@ -119,6 +122,35 @@ async function signedBenefitPost(payload, {
   });
 }
 
+async function automationRequest(method, path, payload, options = {}) {
+  const body = payload === undefined ? "" : JSON.stringify(payload);
+  const target = new URL(path, base).pathname + new URL(path, base).search;
+  const timestamp = options.timestamp || String(Date.now());
+  const identity = "github-node-deploy";
+  const requestId = options.requestId || crypto.randomUUID();
+  const bodyHash = crypto.createHash("sha256").update(body).digest("hex");
+  const signature = crypto.createHmac("sha256", automationSecret).update([
+    "opus8-automation-v1",
+    timestamp,
+    identity,
+    requestId,
+    method,
+    target,
+    bodyHash,
+  ].join("\n")).digest("hex");
+  return fetch(base + path, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      "x-opus8-automation-id": identity,
+      "x-opus8-automation-timestamp": timestamp,
+      "x-opus8-automation-request-id": requestId,
+      "x-opus8-automation-signature": signature,
+    },
+    body: method === "GET" ? undefined : body,
+  });
+}
+
 const login = await jsonResponse(
   await fetch(`${base}/api/admin/login`, {
     method: "POST",
@@ -130,6 +162,16 @@ const adminHeaders = {
   authorization: `Bearer ${login.token}`,
   "content-type": "application/json",
 };
+
+const automationNodes = await jsonResponse(
+  await automationRequest("GET", "/api/nodes"),
+);
+assert(Array.isArray(automationNodes.nodes), "deployment automation may list nodes");
+const automationScopeEscape = await automationRequest("GET", "/api/users");
+assert(
+  automationScopeEscape.status === 401,
+  "deployment automation must not access general admin APIs",
+);
 
 const compliance = await jsonResponse(
   await fetch(`${base}/api/operations/compliance`, {
@@ -179,25 +221,41 @@ assert(
 );
 
 const accountId = "a".repeat(32);
+const enrollmentInput = {
+  nodeId,
+  accountAlias: "integration",
+  accountId,
+  hostname: nodeHost,
+  region: "test",
+  capabilities: ["vless", "ws"],
+  transportPath,
+};
+const enrollmentAutomation = {
+  timestamp: String(Date.now()),
+  requestId: crypto.randomUUID(),
+};
 const enrollmentCreated = await jsonResponse(
-  await fetch(`${base}/api/node-enrollments`, {
-    method: "POST",
-    headers: adminHeaders,
-    body: JSON.stringify({
-      nodeId,
-      accountAlias: "integration",
-      accountId,
-      hostname: nodeHost,
-      region: "test",
-      capabilities: ["vless", "ws"],
-      transportPath,
-    }),
-  }),
+  await automationRequest(
+    "POST",
+    "/api/node-enrollments",
+    enrollmentInput,
+    enrollmentAutomation,
+  ),
 );
 assert(
   enrollmentCreated.enrollment?.kind === "provision" &&
     /^[a-f0-9]{64}$/.test(enrollmentCreated.token || ""),
-  "admin enrollment must return a one-time token",
+  "least-privilege automation enrollment must return a one-time token",
+);
+const replayedAutomationMutation = await automationRequest(
+  "POST",
+  "/api/node-enrollments",
+  enrollmentInput,
+  enrollmentAutomation,
+);
+assert(
+  replayedAutomationMutation.status === 401,
+  "deployment automation request IDs must be consumed atomically",
 );
 const wrongAccountExchange = await fetch(`${base}/api/node-enrollments/exchange`, {
   method: "POST",
@@ -1425,6 +1483,39 @@ try {
     "malformed subscription tokens must fail before D1 and remain non-cacheable",
   );
 
+  const slo = await jsonResponse(
+    await fetch(`${base}/api/operations/slo`, { headers: adminHeaders }),
+  );
+  assert(
+    typeof slo.checks?.credentialsIsolated === "boolean"
+      && slo.retention?.maxAgeHours === 12,
+    `operations SLO must expose bounded health and retention checks: ${JSON.stringify(slo)}`,
+  );
+  const auditResponse = await jsonResponse(
+    await fetch(`${base}/api/operations/audit?limit=200`, {
+      headers: adminHeaders,
+    }),
+  );
+  assert(
+    auditResponse.entries?.some(
+      (entry) =>
+        entry.actor === "github-node-deploy"
+        && entry.authentication === "automation-hmac"
+        && entry.method === "POST"
+        && entry.path === "/api/node-enrollments",
+    ),
+    "automation enrollment must leave a body-free administrator audit event",
+  );
+  assert(
+    auditResponse.entries?.some(
+      (entry) =>
+        entry.actor === "local-admin"
+        && entry.authentication === "password-jwt"
+        && entry.method !== "GET",
+    ),
+    "administrator mutations must leave an attributable audit event",
+  );
+
   if (process.env.OPUS8_TEST_RATE_LIMIT === "1") {
     let limitedResponse = null;
     for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -1464,6 +1555,9 @@ try {
   console.log("OK alert-incidents-d1-deduplication");
   console.log("OK alert-incidents-resolution-history");
   console.log("OK subscription-native-rate-limit");
+  console.log("OK least-privilege-automation-scope");
+  console.log("OK administrator-audit-log");
+  console.log("OK operations-slo");
   console.log("OK transport-path-single-source");
   console.log("OK freedompost-benefit-integration-contract");
   console.log("OK freedompost-benefit-http-idempotency");

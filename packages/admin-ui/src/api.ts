@@ -286,6 +286,39 @@ export interface ComplianceStatus {
     | "documented_authorization_required";
 }
 
+export interface OperationsSlo {
+  generatedAt: number;
+  status: "ok" | "degraded";
+  checks: {
+    nodesRegistered: boolean;
+    nodesHealthy: boolean;
+    credentialsIsolated: boolean;
+    retentionCurrent: boolean;
+  };
+  nodes: {
+    enabled: number;
+    healthy: number;
+    isolated: number;
+    heartbeatMaxAgeMinutes: number;
+  };
+  retention: {
+    lastSuccessAt: number | null;
+    lastDeletedRows: number | null;
+    maxAgeHours: number;
+  };
+}
+
+export interface AdminAuditEntry {
+  id: string;
+  actor: string;
+  authentication: "password-jwt" | "automation-hmac";
+  method: string;
+  path: string;
+  status: number;
+  requestId: string;
+  createdAt: number;
+}
+
 export interface UserActivity {
   generatedAt: number;
   user: OperationsUser;
@@ -321,8 +354,17 @@ let auth: Auth = { base: "", token: "" };
 
 export function loadAuth(): Auth {
   try {
-    const s = localStorage.getItem(KEY);
-    if (s) auth = JSON.parse(s) as Auth;
+    const current = sessionStorage.getItem(KEY);
+    if (current) {
+      auth = JSON.parse(current) as Auth;
+    } else {
+      const legacy = localStorage.getItem(KEY);
+      if (legacy) {
+        auth = JSON.parse(legacy) as Auth;
+        sessionStorage.setItem(KEY, legacy);
+      }
+    }
+    localStorage.removeItem(KEY);
   } catch {
     /* ignore */
   }
@@ -330,10 +372,12 @@ export function loadAuth(): Auth {
 }
 export function setAuth(base: string, token: string): void {
   auth = { base: base.replace(/\/+$/, ""), token };
-  localStorage.setItem(KEY, JSON.stringify(auth));
+  sessionStorage.setItem(KEY, JSON.stringify(auth));
+  localStorage.removeItem(KEY);
 }
 export function clearAuth(): void {
   auth = { base: "", token: "" };
+  sessionStorage.removeItem(KEY);
   localStorage.removeItem(KEY);
 }
 export function isLoggedIn(): boolean {
@@ -384,6 +428,9 @@ export async function login(base: string, password: string): Promise<string> {
 
 export const api = {
   operationsOverview: () => req<OperationsOverview>("/api/operations/overview"),
+  operationsSlo: () => req<OperationsSlo>("/api/operations/slo"),
+  adminAudit: (limit = 20) =>
+    req<{ entries: AdminAuditEntry[] }>(`/api/operations/audit?limit=${limit}`),
   complianceStatus: () =>
     req<ComplianceStatus>("/api/operations/compliance"),
   alertIncidents: (

@@ -320,6 +320,33 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
 CREATE INDEX IF NOT EXISTS idx_alert_incidents_status_changed
   ON alert_incidents(status, last_changed DESC);
 
+-- 管理面变更审计。只记录身份、方法、路径和结果；不记录请求正文、令牌、密钥或原始 IP。
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+  id             TEXT PRIMARY KEY,
+  actor          TEXT NOT NULL,
+  authentication TEXT NOT NULL
+    CHECK (authentication IN ('password-jwt', 'automation-hmac')),
+  method         TEXT NOT NULL,
+  path           TEXT NOT NULL,
+  status         INTEGER NOT NULL,
+  request_id     TEXT NOT NULL,
+  created_at     INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_created
+  ON admin_audit_log(created_at DESC);
+
+-- 自动化写请求的短期 nonce；INSERT OR IGNORE 原子阻止签名时窗内重放。
+CREATE TABLE IF NOT EXISTS automation_request_nonces (
+  request_id TEXT PRIMARY KEY,
+  identity   TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_nonces_expiry
+  ON automation_request_nonces(expires_at);
+
 -- 计费预留（P7，一期不写入）
 CREATE TABLE IF NOT EXISTS orders (
   id          TEXT PRIMARY KEY,

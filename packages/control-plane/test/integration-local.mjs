@@ -106,6 +106,8 @@ const worker = spawn(
     "--var",
     "FREEDOMPOST_INTEGRATION_SECRET:test-freedompost-integration-secret-32-bytes",
     "--var",
+    "AUTOMATION_HMAC_SECRET:test-control-automation-secret-32-bytes",
+    "--var",
     `SUB_BASE:${base}`,
   ],
   {
@@ -125,6 +127,8 @@ try {
   process.env.OPUS8_TEST_INTEGRATION_KEY_ID = "freedompost-local";
   process.env.OPUS8_TEST_INTEGRATION_SECRET =
     "test-freedompost-integration-secret-32-bytes";
+  process.env.OPUS8_TEST_AUTOMATION_SECRET =
+    "test-control-automation-secret-32-bytes";
   process.env.OPUS8_TEST_RATE_LIMIT = "1";
   await import(`./integration.mjs?local=${Date.now()}`);
 } finally {

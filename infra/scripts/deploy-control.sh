@@ -51,6 +51,7 @@ echo "OK control-deploy-preflight"
 : "${JWT_SECRET:?JWT_SECRET is required}"
 : "${NODE_HMAC_SECRET:?NODE_HMAC_SECRET is required}"
 : "${LANDING_CONFIG_KEY:?LANDING_CONFIG_KEY is required}"
+: "${AUTOMATION_HMAC_SECRET:?AUTOMATION_HMAC_SECRET is required}"
 RETIRE_PREVIOUS_SECRET="${RETIRE_PREVIOUS_SECRET:-none}"
 case "$RETIRE_PREVIOUS_SECRET" in
   none) ;;
@@ -113,6 +114,7 @@ DEFAULT_UNLOCK_HOSTS=$(grep -E '^[A-Za-z0-9.-]+$' ../../infra/ai-unlock.txt | tr
 OPUS8_BUILD_ID="${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
 SUB_SOURCE_RATE_LIMIT=120
 SUB_TOKEN_RATE_LIMIT=20
+ADMIN_LOGIN_RATE_LIMIT=10
 SUB_RATE_LIMIT_PERIOD=60
 
 echo "STEP ensure-d1-kv"
@@ -179,10 +181,23 @@ ADMIN_UI_ORIGINS = "$ADMIN_UI_ORIGINS"
 HMAC_V1_ACCEPT_UNTIL = "$HMAC_V1_ACCEPT_UNTIL"
 HMAC_V1_NODE_IDS = "$HMAC_V1_NODE_IDS"
 SUB_RATE_LIMIT_REQUIRED = "1"
+ADMIN_LOGIN_RATE_LIMIT_REQUIRED = "1"
+AUTOMATION_ALLOWED_IDS = "github-node-deploy"
 COMPLIANCE_PROXY_ALLOWED = "$COMPLIANCE_PROXY_ALLOWED"
 COMPLIANCE_ENFORCEMENT_MODE = "$COMPLIANCE_ENFORCEMENT_MODE"
 COMPLIANCE_POLICY_ID = "$COMPLIANCE_POLICY_ID"
 COMPLIANCE_MAINTENANCE_NODE_IDS = "$COMPLIANCE_MAINTENANCE_NODE_IDS"
+
+[triggers]
+crons = ["17 */6 * * *"]
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 0.05
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 0.01
 
 [[ratelimits]]
 name = "SUB_SOURCE_RATE_LIMITER"
@@ -198,6 +213,14 @@ namespace_id = "683402"
 
   [ratelimits.simple]
   limit = $SUB_TOKEN_RATE_LIMIT
+  period = $SUB_RATE_LIMIT_PERIOD
+
+[[ratelimits]]
+name = "ADMIN_LOGIN_RATE_LIMITER"
+namespace_id = "683403"
+
+  [ratelimits.simple]
+  limit = $ADMIN_LOGIN_RATE_LIMIT
   period = $SUB_RATE_LIMIT_PERIOD
 
 [[d1_databases]]
@@ -371,6 +394,7 @@ put_secret NODE_HMAC_SECRET "$NODE_HMAC_SECRET"
 put_secret LANDING_CONFIG_KEY "$LANDING_CONFIG_KEY"
 put_secret "FREEDOMPOST_INTEGRATION_KEY_ID" "$FREEDOMPOST_INTEGRATION_KEY_ID"
 put_secret "FREEDOMPOST_INTEGRATION_SECRET" "$FREEDOMPOST_INTEGRATION_SECRET"
+put_secret "AUTOMATION_HMAC_SECRET" "$AUTOMATION_HMAC_SECRET"
 put_secret ROOT_DOMAIN "$ROOT_DOMAIN"
 put_secret SUB_BASE "$SUB_URL"
 
@@ -472,6 +496,26 @@ if [ "$ROTATION_STATE_OK" != "1" ]; then
   exit 16
 fi
 echo "OK smoke-key-rotation-state unreadable=0"
+
+REMOTE_SLO=$(curl -fsS --max-time 15 \
+  "$API_URL/api/operations/slo" \
+  -H "authorization: Bearer $TOK")
+if ! printf '%s' "$REMOTE_SLO" \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const x=JSON.parse(s);process.exit(["ok","degraded"].includes(x.status)&&typeof x.checks?.retentionCurrent==="boolean"?0:1)}catch{process.exit(1)}})'; then
+  echo "ERROR smoke-operations-slo"
+  exit 16
+fi
+echo "OK smoke-operations-slo"
+
+REMOTE_AUDIT=$(curl -fsS --max-time 15 \
+  "$API_URL/api/operations/audit?limit=1" \
+  -H "authorization: Bearer $TOK")
+if ! printf '%s' "$REMOTE_AUDIT" \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.exit(Array.isArray(JSON.parse(s).entries)?0:1)}catch{process.exit(1)}})'; then
+  echo "ERROR smoke-admin-audit"
+  exit 16
+fi
+echo "OK smoke-admin-audit"
 
 echo "STEP cors-regression"
 PREFLIGHT_OK=0

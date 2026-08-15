@@ -7,12 +7,25 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 USE_OPTIMIZED_IPS = "1"
 SUB_RATE_LIMIT_REQUIRED = "1"
+ADMIN_LOGIN_RATE_LIMIT_REQUIRED = "1"
 COMPLIANCE_PROXY_ALLOWED = "1"
 COMPLIANCE_ENFORCEMENT_MODE = "observe-only"
 COMPLIANCE_POLICY_ID = "cloudflare-data-plane-v1"
 COMPLIANCE_MAINTENANCE_NODE_IDS = "acc1-n1,acc1-n2,acc2-n1,acc2-n2"
 HMAC_V1_ACCEPT_UNTIL = "0"
 HMAC_V1_NODE_IDS = ""
+AUTOMATION_ALLOWED_IDS = "github-node-deploy"
+
+[triggers]
+crons = ["17 */6 * * *"]
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 0.05
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 0.01
 
 # Configure these with `wrangler secret put` before enabling the FreedomPost
 # server-to-server benefit integration. The HMAC secret must be at least 32
@@ -36,6 +49,14 @@ namespace_id = "683402"
   limit = 20
   period = 60
 
+[[ratelimits]]
+name = "ADMIN_LOGIN_RATE_LIMITER"
+namespace_id = "683403"
+
+  [ratelimits.simple]
+  limit = 10
+  period = 60
+
 # routes 由 CI 按 ROOT_DOMAIN 注入，如 api.<ROOT_DOMAIN>/*
 
 [[d1_databases]]
@@ -55,3 +76,4 @@ id = "PLACEHOLDER_FILL_AFTER_PREFLIGHT"
 #   NODE_HMAC_SECRET_PREVIOUS 控制面根密钥滚动轮换期的旧值（可选）
 #   LANDING_CONFIG_KEY 落地机账号密码的静态加密密钥（至少 32 字符）
 #   LANDING_CONFIG_KEY_PREVIOUS 落地凭据重加密前的旧密钥（可选）
+#   AUTOMATION_HMAC_SECRET 节点部署自动化专用 HMAC 密钥（至少 32 字符，不与其他密钥复用）

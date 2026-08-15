@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
+  type AdminAuditEntry,
   type ComplianceStatus,
   type OperationsOverview,
+  type OperationsSlo,
 } from "../api";
 import { fmtBytes, fmtNumber, relTime } from "../util";
 
@@ -46,6 +48,8 @@ function alertTarget(kind: Alert["kind"]): string {
 export function Dashboard() {
   const [overview, setOverview] = useState<OperationsOverview | null>(null);
   const [compliance, setCompliance] = useState<ComplianceStatus | null>(null);
+  const [slo, setSlo] = useState<OperationsSlo | null>(null);
+  const [audit, setAudit] = useState<AdminAuditEntry[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -56,12 +60,16 @@ export function Dashboard() {
     if (silent) setRefreshing(true);
     else setLoading(true);
     try {
-      const [overviewResponse, complianceResponse] = await Promise.all([
+      const [overviewResponse, complianceResponse, sloResponse, auditResponse] = await Promise.all([
         api.operationsOverview(),
         api.complianceStatus().catch(() => null),
+        api.operationsSlo().catch(() => null),
+        api.adminAudit(12).catch(() => ({ entries: [] })),
       ]);
       setOverview(overviewResponse);
       setCompliance(complianceResponse);
+      setSlo(sloResponse);
+      setAudit(auditResponse.entries);
       setError("");
     } catch (e) {
       setError((e as Error).message);
@@ -459,6 +467,72 @@ export function Dashboard() {
             {!overview?.nodeTraffic.length && (
               <div className="muted">还没有节点数据。</div>
             )}
+          </div>
+        </section>
+      </div>
+
+      <div className="ops-grid bottom-grid">
+        <section className="ops-panel">
+          <div className="panel-heading">
+            <div>
+              <h3>运行目标</h3>
+              <span>节点新鲜度、凭据隔离与数据保留</span>
+            </div>
+            <span className={`pill pill-${slo?.status === "ok" ? "healthy" : "danger"}`}>
+              {slo?.status === "ok" ? "达标" : "需处理"}
+            </span>
+          </div>
+          <div className="activity-list">
+            <div className="activity-row">
+              <strong>节点健康</strong>
+              <span>{slo ? `${slo.nodes.healthy} / ${slo.nodes.enabled}` : "—"}</span>
+            </div>
+            <div className="activity-row">
+              <strong>凭据隔离</strong>
+              <span>{slo ? `${slo.nodes.isolated} / ${slo.nodes.enabled}` : "—"}</span>
+            </div>
+            <div className="activity-row">
+              <strong>数据清理</strong>
+              <span>
+                {slo?.retention.lastSuccessAt
+                  ? `${relTime(slo.retention.lastSuccessAt)} · 删除 ${slo.retention.lastDeletedRows || 0} 行`
+                  : "尚无成功记录"}
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <section className="ops-panel">
+          <div className="panel-heading">
+            <div>
+              <h3>管理员审计</h3>
+              <span>仅记录变更身份、端点和结果，不记录正文与密钥</span>
+            </div>
+          </div>
+          <div className="table-scroll">
+            <table className="tbl compact-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>身份</th>
+                  <th>操作</th>
+                  <th>结果</th>
+                </tr>
+              </thead>
+              <tbody>
+                {audit.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>{relTime(entry.createdAt)}</td>
+                    <td title={entry.authentication}>{entry.actor}</td>
+                    <td><code>{entry.method} {entry.path}</code></td>
+                    <td>{entry.status}</td>
+                  </tr>
+                ))}
+                {!audit.length && (
+                  <tr><td colSpan={4} className="muted">尚无管理变更记录。</td></tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </section>
       </div>

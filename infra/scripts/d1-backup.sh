@@ -29,7 +29,30 @@ require_runtime() {
 
 resolve_database_id() {
   local name="$1"
-  wrangler d1 list --json 2>/dev/null | D1_LOOKUP_NAME="$name" node -e '
+  local rows error_log attempts delay_seconds attempt status
+  error_log="$(mktemp)"
+  attempts="${D1_LIST_ATTEMPTS:-5}"
+  delay_seconds="${D1_LIST_RETRY_DELAY_SECONDS:-8}"
+  attempt=1
+  while true; do
+    if rows="$(wrangler d1 list --json 2>"$error_log")"; then
+      rm -f -- "$error_log"
+      break
+    else
+      status="$?"
+    fi
+    if [ "$attempt" -ge "$attempts" ] \
+        || ! grep -Eqi '10429|rate[ -]?limit|temporar|timeout' "$error_log"; then
+      echo "ERROR Cloudflare D1 discovery failed attempt=$attempt/$attempts" >&2
+      sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g' "$error_log" >&2
+      rm -f -- "$error_log"
+      return "$status"
+    fi
+    echo "WARN Cloudflare D1 discovery retry attempt=$attempt/$attempts delay=${delay_seconds}s" >&2
+    sleep "$delay_seconds"
+    attempt=$((attempt + 1))
+  done
+  printf '%s' "$rows" | D1_LOOKUP_NAME="$name" node -e '
     let input="";
     process.stdin.on("data", chunk => input += chunk).on("end", () => {
       try {

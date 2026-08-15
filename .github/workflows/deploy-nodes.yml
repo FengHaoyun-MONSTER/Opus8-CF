@@ -4,16 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: Edge node to deploy
+        description: Declared node id from infra/accounts.json, or all
         required: true
         default: acc1-n1
-        type: choice
-        options:
-          - acc1-n1
-          - acc1-n2
-          - acc2-n1
-          - acc2-n2
-          - all
+        type: string
       transport_mode:
         description: One-run transport mode override
         required: true
@@ -38,35 +32,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - id: matrix
+        name: Validate topology manifest and build deployment matrix
+        env:
+          DEPLOY_TARGET: ${{ inputs.target }}
+        run: |
+          matrix="$(node infra/scripts/node-deploy-matrix.mjs infra/accounts.json "$DEPLOY_TARGET")"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   deploy:
+    needs: prepare
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       max-parallel: 2
-      matrix:
-        include:
-          - alias: acc1
-            node_id: acc1-n1
-            region: US
-            deploy_suffix: -v2
-          - alias: acc1
-            node_id: acc1-n2
-            region: EU
-            deploy_suffix: ""
-          - alias: acc2
-            node_id: acc2-n1
-            region: HK
-            deploy_suffix: ""
-          - alias: acc2
-            node_id: acc2-n2
-            region: SG
-            deploy_suffix: ""
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
       CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
-      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
-      CLOUDFLARE_API_TOKEN: ${{ matrix.alias == 'acc1' && secrets.API_TOKEN || secrets.API_TOKEN_NUM1 }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ matrix.alias == 'acc1' && secrets.ACCOUNT_ID || secrets.ACCOUNT_ID_NUM1 }}
-      ROOT_DOMAIN: ${{ matrix.alias == 'acc1' && secrets.ROOT_DOMAIN || secrets.ROOT_DOMAIN_NUM1 }}
+      CONTROL_AUTOMATION_SECRET: ${{ secrets.CONTROL_AUTOMATION_SECRET }}
+      CONTROL_AUTOMATION_ID: github-node-deploy
+      CLOUDFLARE_API_TOKEN: ${{ secrets[matrix.api_token_secret] }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets[matrix.account_id_secret] }}
+      ROOT_DOMAIN: ${{ secrets[matrix.root_domain_secret] }}
       NODE_ID: ${{ matrix.node_id }}
       NODE_ACCOUNT_ALIAS: ${{ matrix.alias }}
       NODE_REGION: ${{ matrix.region }}
@@ -82,8 +75,8 @@ jobs:
       VPS_SSH_PORT: ${{ secrets.SERVICES_SSH_PORT }}
       CLOUDFLARE_PROXY_PERMISSION_REF: ${{ secrets.CLOUDFLARE_PROXY_PERMISSION_REF }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
       - name: Install probe dependencies
@@ -92,23 +85,17 @@ jobs:
           sudo apt-get install -y -qq sshpass
       - run: npm i -g wrangler@4.115.0
       - name: Create just-in-time node enrollment
-        if: inputs.target == 'all' || inputs.target == matrix.node_id
         run: |
           set -euo pipefail
           CONTROL_HOST="${CONTROL_ROOT_DOMAIN#https://}"
           CONTROL_HOST="${CONTROL_HOST#http://}"
           CONTROL_HOST="${CONTROL_HOST%%/*}"
           CONTROL_API="https://api.${CONTROL_HOST}"
-          LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
-            'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
-          ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
-            "$CONTROL_API/api/admin/login" \
-            -H 'content-type: application/json' --data "$LOGIN_BODY" \
-            | jq -er '.token')
-          echo "::add-mask::$ADMIN_TOKEN"
-          REGISTERED_NODES=$(curl -fsS --max-time 20 \
-            "$CONTROL_API/api/nodes" \
-            -H "authorization: Bearer $ADMIN_TOKEN")
+          REGISTERED_NODES=$(node infra/scripts/control-automation-request.mjs \
+            GET "$CONTROL_API/api/nodes" </dev/null)
+          if [ "$TRANSPORT_MIGRATION_MODE" = "strict" ]; then
+            printf '%s' "$REGISTERED_NODES" | node infra/scripts/strict-promotion-gate.mjs
+          fi
           ENROLL_BODY=$(REGISTERED_NODES="$REGISTERED_NODES" node <<'NODE'
           const response = JSON.parse(process.env.REGISTERED_NODES || "{}");
           const existing = (response.nodes || []).find(
@@ -132,10 +119,9 @@ jobs:
           process.stdout.write(JSON.stringify(body));
           NODE
           )
-          ENROLLMENT=$(curl -fsS --max-time 20 -X POST \
-            "$CONTROL_API/api/node-enrollments" \
-            -H "authorization: Bearer $ADMIN_TOKEN" \
-            -H 'content-type: application/json' --data "$ENROLL_BODY")
+          ENROLLMENT=$(printf '%s' "$ENROLL_BODY" \
+            | node infra/scripts/control-automation-request.mjs \
+              POST "$CONTROL_API/api/node-enrollments")
           NODE_ENROLLMENT_TOKEN=$(printf '%s' "$ENROLLMENT" | jq -er '.token')
           NODE_ENROLLMENT_ID=$(printf '%s' "$ENROLLMENT" | jq -er '.enrollment.id')
           echo "NODE_ENROLLMENT_ID=$NODE_ENROLLMENT_ID" >> "$GITHUB_ENV"
@@ -148,9 +134,9 @@ jobs:
             && [ "$NODE_ENROLLMENT_KIND" != "migrate" ] \
             && [ "$NODE_ENROLLMENT_KIND" != "rotate" ]; }; then
             echo "ERROR enrollment-operation-mismatch kind=$NODE_ENROLLMENT_KIND operation=$NODE_DEPLOY_OPERATION"
-            curl -sS --max-time 20 -X DELETE \
+            node infra/scripts/control-automation-request.mjs DELETE \
               "$CONTROL_API/api/node-enrollments/$NODE_ENROLLMENT_ID" \
-              -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null || true
+              </dev/null >/dev/null || true
             exit 9
           fi
           echo "::add-mask::$NODE_ENROLLMENT_TOKEN"
@@ -162,13 +148,12 @@ jobs:
           echo "OK just-in-time-enrollment kind=$NODE_ENROLLMENT_KIND"
       - name: Deploy declared edge node
         id: deploy
-        if: inputs.target == 'all' || inputs.target == matrix.node_id
         run: |
           set -o pipefail
           bash infra/scripts/deploy-node.sh 2>&1 | tee /tmp/dn.log
 
       - name: Revoke unused enrollment
-        if: always() && (inputs.target == 'all' || inputs.target == matrix.node_id)
+        if: always()
         run: |
           set -euo pipefail
           [ -n "${NODE_ENROLLMENT_ID:-}" ] || exit 0
@@ -176,19 +161,12 @@ jobs:
           CONTROL_HOST="${CONTROL_HOST#http://}"
           CONTROL_HOST="${CONTROL_HOST%%/*}"
           CONTROL_API="https://api.${CONTROL_HOST}"
-          LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
-            'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
-          ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
-            "$CONTROL_API/api/admin/login" \
-            -H 'content-type: application/json' --data "$LOGIN_BODY" \
-            | jq -er '.token')
-          echo "::add-mask::$ADMIN_TOKEN"
-          curl -sS --max-time 20 -X DELETE \
+          node infra/scripts/control-automation-request.mjs DELETE \
             "$CONTROL_API/api/node-enrollments/$NODE_ENROLLMENT_ID" \
-            -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null || true
+            </dev/null >/dev/null || true
 
       - name: Publish status back to repo
-        if: always() && (inputs.target == 'all' || inputs.target == matrix.node_id)
+        if: always()
         run: |
           mkdir -p infra/status
           URL=$(grep '^DONE url=' /tmp/dn.log | tail -n1 | sed 's/^DONE url=//' || true)

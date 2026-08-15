@@ -15,6 +15,10 @@
       "accountIdSecret": "ACCOUNT_ID",
       "apiTokenSecret": "API_TOKEN",
       "rootDomainSecret": "ROOT_DOMAIN",
+      "nodes": [
+        { "id": "acc1-n1", "region": "US", "deploySuffix": "-v2" },
+        { "id": "acc1-n2", "region": "EU" }
+      ],
       "r2": {
         "accessKeyIdSecret": "ACCESS_KEY_ID",
         "secretAccessKeySecret": "SECRET_ACCESS_KEY",
@@ -28,6 +32,10 @@
       "accountIdSecret": "ACCOUNT_ID_NUM1",
       "apiTokenSecret": "API_TOKEN_NUM1",
       "rootDomainSecret": "ROOT_DOMAIN_NUM1",
+      "nodes": [
+        { "id": "acc2-n1", "region": "HK" },
+        { "id": "acc2-n2", "region": "SG" }
+      ],
       "r2": {
         "accessKeyIdSecret": "ACCESS_KEY_ID_NUM1",
         "secretAccessKeySecret": "SECRET_ACCESS_KEY_NUM1",

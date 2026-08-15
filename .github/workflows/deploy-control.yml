@@ -51,6 +51,7 @@ jobs:
       LANDING_CONFIG_KEY_PREVIOUS: ${{ secrets.LANDING_CONFIG_KEY_PREVIOUS }}
       FREEDOMPOST_INTEGRATION_KEY_ID: ${{ secrets.FREEDOMPOST_INTEGRATION_KEY_ID }}
       FREEDOMPOST_INTEGRATION_SECRET: ${{ secrets.FREEDOMPOST_INTEGRATION_SECRET }}
+      AUTOMATION_HMAC_SECRET: ${{ secrets.CONTROL_AUTOMATION_SECRET }}
       RETIRE_PREVIOUS_SECRET: ${{ inputs.retire_previous_secret || 'none' }}
       ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       ADMIN_UI_ORIGINS: https://opus8cf-admin-openal.pages.dev
@@ -59,8 +60,8 @@ jobs:
       SERVICES_CODE: ${{ secrets.SOCKS_PASSWORD }}
       CLOUDFLARE_PROXY_PERMISSION_REF: ${{ secrets.CLOUDFLARE_PROXY_PERMISSION_REF }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
       - name: Deploy control-plane

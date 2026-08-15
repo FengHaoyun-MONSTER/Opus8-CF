@@ -16,6 +16,7 @@ export function validateControlDeployEnvironment(environment = process.env) {
   validateSecret(environment, errors, "NODE_HMAC_SECRET", 32);
   validateSecret(environment, errors, "LANDING_CONFIG_KEY", 32);
   validateSecret(environment, errors, "FREEDOMPOST_INTEGRATION_SECRET", 32);
+  validateSecret(environment, errors, "AUTOMATION_HMAC_SECRET", 32);
 
   if (!/^[A-Za-z0-9._-]{3,64}$/.test(value("FREEDOMPOST_INTEGRATION_KEY_ID"))) {
     add("FREEDOMPOST_INTEGRATION_KEY_ID", "contains an invalid key ID");

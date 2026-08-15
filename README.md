@@ -33,7 +33,11 @@
 - [x] P6.8.6 客户端兼容矩阵：固定 Xray/Mihomo/sing-box 版本与校验和，真实 TLS/SNI/WS/用量验收
 - [x] P6.8.7 Cloudflare 合规与资源门禁：书面许可默认拒绝、拓扑白名单、只读 GraphQL 资源审计、零 KV 审计写入
 - [x] P6.9 生产灾备：D1 认证加密备份/隔离恢复、JWT/HMAC/落地配置无停机轮换
-- [ ] P6 优选 IP 自动化 + 硬化
+- [x] P6.10A 灾备闭环：备份失败诊断、新鲜度告警与 72 小时 strict 晋级门
+- [x] P6.10B 管理安全：窄权限部署身份、变更 nonce 防重放与无敏感正文审计
+- [x] P6.10C 声明式扩展：从账号/节点清单生成校验后的动态部署矩阵
+- [x] P6.10D 运营治理：控制面抽样观测、定时数据保留、SLO 与管理站状态
+- [ ] P6.11 用户门户（实验阶段不做）
 - [ ] P7 计费（暂缓，仅预留）
 
 ## 部署
@@ -41,9 +45,11 @@
 所有凭据存于 GitHub Actions Secrets；部署经由 CI。见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)。
 先跑 **preflight** 工作流验证密钥、创建 D1/KV、探测落地机端口。
 
-节点部署不会读取控制面根密钥。手动运行 `deploy-nodes` 时，每个账号 Job 会用自己的 Account ID
+节点部署不会读取控制面根密钥或管理员密码。手动运行 `deploy-nodes` 时，每个账号 Job 会用窄权限 HMAC 自动化身份
 即时创建一次性注册任务，绑定 Node ID、账号别名、域名和传输路径，部署验证完成后自动收回旧凭据。
 管理站“节点管理”也可生成同样的一次性令牌，供单机部署或故障恢复使用；令牌只显示一次。
+P6.10 的发布顺序、Secret 配置和新增账号步骤见
+[`docs/P6.10-OPERATIONS-HARDENING.md`](docs/P6.10-OPERATIONS-HARDENING.md)。
 
 ## 落地分流运维
 

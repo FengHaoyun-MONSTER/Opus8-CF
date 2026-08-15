@@ -28,6 +28,7 @@
 | `LANDING_CONFIG_KEY` | D1 中落地机账号密码的 AES-GCM 静态加密密钥（至少 32 字符） |
 | `LANDING_CONFIG_KEY_PREVIOUS` | 落地凭据迁移期的旧加密密钥；平时不配置 |
 | `D1_BACKUP_ENCRYPTION_KEY` | D1 离线备份的独立加密密钥（至少 32 字符，另存离线副本） |
+| `CONTROL_AUTOMATION_SECRET` | 节点部署专用 HMAC 密钥（至少 32 字符，只能调用节点登记子集） |
 | `ACCESS_ADMIN_EMAIL` | Cloudflare Access 唯一允许登录的管理邮箱 |
 | `CLOUDFLARE_PROXY_PERMISSION_REF` | Cloudflare 书面许可引用；仅在许可范围、有效期和 SHA-256 摘要都写入合规策略后启用 |
 
@@ -46,15 +47,16 @@
    `HMAC_V1_ACCEPT_UNTIL` 和 `HMAC_V1_NODE_IDS`，部署不会自动延长兼容期；
 2. v1 仅允许白名单中的四个存量节点调用心跳、UUID 拉取、准入和用量接口，不能注册节点，
    不能访问带查询参数或其他路径；控制面也只向这些节点发送 v1/v2 双签名的缓存失效通知；
-3. 手动运行 `deploy-nodes` 并选择 `operation=maintenance`。每个账号 Job 使用控制面管理员凭据和该账号
+3. 手动运行 `deploy-nodes` 并选择 `operation=maintenance`。每个账号 Job 使用独立的窄权限自动化签名和该账号
    Account ID 即时创建一次性注册任务；任务严格绑定 Node ID、账号别名、域名和传输路径，节点只拿到自己的派生密钥；
 4. 部署采用“激活新密钥并保留旧凭据—部署 Worker—策略与 VLESS 冒烟—收回旧凭据”的顺序，
    中途失败时旧 Worker 仍能工作。新增节点须取得明确书面许可并选择 `operation=provision`；
 5. 全部节点完成升级后应提前删除 v1 兼容；最迟在策略中的 2027-07-29 截止时间自动失效。
    不得通过重新部署或修改脚本静默顺延。
 
-五分钟签名窗口只解决网络重试和轻微时钟偏差，不建立逐请求 nonce 存储。注册、心跳与租约使用已签名时间戳作单调更新，
-旧请求不能延长在线状态或租约；用量按事件 ID 幂等。这样不会为每次节点请求增加 KV 写入。部署前应确保 GitHub Runner、
+节点运行时 HMAC 的五分钟签名窗口只解决网络重试和轻微时钟偏差，不建立逐请求 nonce 存储。注册、心跳与租约使用已签名时间戳作单调更新，
+旧请求不能延长在线状态或租约；用量按事件 ID 幂等。部署自动化属于低频高权限变更，另行在 D1 原子消费请求 ID 防重放。
+这样不会为每次节点运行请求增加 KV/D1 写入。部署前应确保 GitHub Runner、
 Cloudflare 与节点时钟正常同步。
 
 ### 传输路径迁移

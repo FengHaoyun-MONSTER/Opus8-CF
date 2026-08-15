@@ -41,8 +41,12 @@ export interface Env {
   COMPLIANCE_MAINTENANCE_NODE_IDS?: string;
   FREEDOMPOST_INTEGRATION_KEY_ID?: string;
   FREEDOMPOST_INTEGRATION_SECRET?: string;
+  AUTOMATION_HMAC_SECRET?: string;
+  AUTOMATION_ALLOWED_IDS?: string;
   SUB_SOURCE_RATE_LIMITER?: RateLimit;
   SUB_TOKEN_RATE_LIMITER?: RateLimit;
+  ADMIN_LOGIN_RATE_LIMIT_REQUIRED?: string;
+  ADMIN_LOGIN_RATE_LIMITER?: RateLimit;
 }
 
 export interface AdminUserRecord extends UserRecord {

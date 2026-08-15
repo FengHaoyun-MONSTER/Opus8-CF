@@ -67,8 +67,18 @@ const backupScript = await readFile(
 );
 assert.match(
   backupScript,
-  /wrangler d1 list --json 2>\/dev\/null \| D1_LOOKUP_NAME="\$name" node/,
+  /printf '%s' "\$rows" \| D1_LOOKUP_NAME="\$name" node/,
   "the D1 list parser must receive the requested database name",
+);
+assert.doesNotMatch(
+  backupScript,
+  /wrangler d1 list --json 2>\/dev\/null/,
+  "D1 discovery failures must not discard diagnostics",
+);
+assert.match(
+  backupScript,
+  /Cloudflare D1 discovery failed[\s\S]*<redacted>/,
+  "D1 discovery failures must emit sanitized diagnostics",
 );
 assert.match(
   backupScript,
@@ -104,6 +114,21 @@ assert.match(
 const backupWorkflow = await readFile(
   join(repoRoot, ".github", "workflows", "d1-backup.yml"),
   "utf8",
+);
+assert.match(
+  backupWorkflow,
+  /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/,
+  "backup must use the reviewed Node 24 checkout release",
+);
+assert.match(
+  backupWorkflow,
+  /actions\/setup-node@820762786026740c76f36085b0efc47a31fe5020/,
+  "backup must use the reviewed Node 24 setup-node release",
+);
+assert.match(
+  backupWorkflow,
+  /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/,
+  "backup must use the reviewed Node 24 artifact release",
 );
 assert.match(
   backupWorkflow,
