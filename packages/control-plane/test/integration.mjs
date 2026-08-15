@@ -643,9 +643,10 @@ try {
       && benefitDevices.devices[0].hwid_mode === "required",
     `the benefit must create exactly one static required-HWID device: ${JSON.stringify(benefitDevices)}`,
   );
+  const benefitWithoutHwid = await fetch(firstBenefit.subscriptionUrl);
   assert(
-    (await fetch(firstBenefit.subscriptionUrl)).status === 403,
-    "the benefit subscription must reject clients without HWID",
+    benefitWithoutHwid.status === 403,
+    `the benefit subscription must reject clients without HWID: status=${benefitWithoutHwid.status} retry-after=${benefitWithoutHwid.headers.get("retry-after") || "none"} body=${JSON.stringify(await benefitWithoutHwid.text())}`,
   );
   assert(
     (await fetch(firstBenefit.subscriptionUrl, {
