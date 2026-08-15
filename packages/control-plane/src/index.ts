@@ -238,7 +238,11 @@ export default {
       scheduleJwtMutationAudit(status);
       return new Response(JSON.stringify(data), {
         status,
-        headers: { ...JSON_HEADERS, "cache-control": "no-store" },
+        headers: {
+          ...JSON_HEADERS,
+          ...cors.responseHeaders,
+          "cache-control": "no-store",
+        },
       });
     };
     const privateErr = (msg: string, status = 400) =>

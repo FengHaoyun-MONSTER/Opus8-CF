@@ -570,6 +570,31 @@ if [ "$ADMIN_CORS_CODE" != "200" ] \
   exit 16
 fi
 
+PRIVATE_CORS_CODE=$(curl -sS -o /tmp/cors-private.body -D /tmp/cors-private.headers \
+  -w '%{http_code}' --max-time 15 "$API_URL/api/node-enrollments" \
+  -H "Origin: $ADMIN_UI_PRIMARY_ORIGIN" \
+  -H "authorization: Bearer $TOK" || true)
+if [ "$PRIVATE_CORS_CODE" != "200" ] \
+  || ! grep -Fqi "access-control-allow-origin: $ADMIN_UI_PRIMARY_ORIGIN" /tmp/cors-private.headers \
+  || ! grep -qi '^cache-control: no-store' /tmp/cors-private.headers; then
+  echo "ERROR cors-private-response http=$PRIVATE_CORS_CODE"
+  exit 16
+fi
+
+PRIVATE_ERROR_CORS_CODE=$(curl -sS -o /tmp/cors-private-error.body \
+  -D /tmp/cors-private-error.headers -w '%{http_code}' --max-time 15 \
+  -X POST "$API_URL/api/node-enrollments" \
+  -H "Origin: $ADMIN_UI_PRIMARY_ORIGIN" \
+  -H "authorization: Bearer $TOK" \
+  -H 'content-type: application/json' \
+  -d '{"nodeId":"invalid node id"}' || true)
+if [ "$PRIVATE_ERROR_CORS_CODE" != "400" ] \
+  || ! grep -Fqi "access-control-allow-origin: $ADMIN_UI_PRIMARY_ORIGIN" /tmp/cors-private-error.headers \
+  || ! grep -qi '^cache-control: no-store' /tmp/cors-private-error.headers; then
+  echo "ERROR cors-private-error-response http=$PRIVATE_ERROR_CORS_CODE"
+  exit 16
+fi
+
 HEALTH_CORS_CODE=$(curl -sS -o /tmp/cors-health.body -D /tmp/cors-health.headers \
   -w '%{http_code}' --max-time 15 "$API_URL/health" \
   -H "Origin: $ADMIN_UI_PRIMARY_ORIGIN" || true)

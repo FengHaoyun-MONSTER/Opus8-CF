@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 const base = process.env.OPUS8_TEST_BASE || "http://127.0.0.1:8787";
 const adminPassword = process.env.OPUS8_TEST_ADMIN || "test-admin";
+const adminOrigin = "https://opus8cf-admin-openal.pages.dev";
 const nodeRootSecret =
   process.env.OPUS8_TEST_NODE_SECRET || "test-node-hmac-secret-32-bytes!!";
 let nodeSecret = nodeRootSecret;
@@ -161,7 +162,37 @@ const login = await jsonResponse(
 const adminHeaders = {
   authorization: `Bearer ${login.token}`,
   "content-type": "application/json",
+  origin: adminOrigin,
 };
+
+const enrollmentListCorsResponse = await fetch(
+  `${base}/api/node-enrollments`,
+  { headers: adminHeaders },
+);
+assert(
+  enrollmentListCorsResponse.status === 200
+    && enrollmentListCorsResponse.headers.get("access-control-allow-origin")
+      === adminOrigin
+    && enrollmentListCorsResponse.headers.get("cache-control") === "no-store",
+  "private admin GET responses must preserve allowed CORS and no-store headers",
+);
+await jsonResponse(enrollmentListCorsResponse);
+
+const enrollmentErrorCorsResponse = await fetch(
+  `${base}/api/node-enrollments`,
+  {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({ nodeId: "invalid node id" }),
+  },
+);
+assert(
+  enrollmentErrorCorsResponse.status === 400
+    && enrollmentErrorCorsResponse.headers.get("access-control-allow-origin")
+      === adminOrigin
+    && enrollmentErrorCorsResponse.headers.get("cache-control") === "no-store",
+  "private admin error responses must preserve allowed CORS and no-store headers",
+);
 
 const automationNodes = await jsonResponse(
   await automationRequest("GET", "/api/nodes"),
@@ -318,8 +349,9 @@ assert(
   "the shared control root must stop authenticating a migrated node",
 );
 
-const rotationEnrollment = await jsonResponse(
-  await fetch(`${base}/api/node-enrollments`, {
+const rotationEnrollmentResponse = await fetch(
+  `${base}/api/node-enrollments`,
+  {
     method: "POST",
     headers: adminHeaders,
     body: JSON.stringify({
@@ -331,8 +363,15 @@ const rotationEnrollment = await jsonResponse(
       capabilities: ["vless", "ws"],
       transportPath,
     }),
-  }),
+  },
 );
+assert(
+  rotationEnrollmentResponse.headers.get("access-control-allow-origin")
+    === adminOrigin
+    && rotationEnrollmentResponse.headers.get("cache-control") === "no-store",
+  "successful private admin mutations must preserve allowed CORS and no-store headers",
+);
+const rotationEnrollment = await jsonResponse(rotationEnrollmentResponse);
 assert(
   rotationEnrollment.enrollment?.kind === "rotate",
   "an isolated node must create a rotation enrollment",
