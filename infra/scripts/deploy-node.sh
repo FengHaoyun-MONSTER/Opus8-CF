@@ -2,7 +2,8 @@
 # 部署单个边缘节点：构建补丁版 worker、探测落地机端口、部署、设密钥、注册、验证。
 # 需要环境变量：
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
-#   CONTROL_ROOT_DOMAIN / ROOT_DOMAIN / NODE_ENROLLMENT_TOKEN / NODE_ID / NODE_ACCOUNT_ALIAS / NODE_REGION
+#   CONTROL_ROOT_DOMAIN / CONTROL_AUTOMATION_SECRET / ROOT_DOMAIN / NODE_ENROLLMENT_TOKEN
+#   NODE_ID / NODE_ACCOUNT_ALIAS / NODE_REGION
 #   NODE_HOSTNAME（可选；缺省为 <NODE_ID><NODE_DEPLOY_SUFFIX>.<ROOT_DOMAIN>）
 #   NODE_DEPLOY_SUFFIX  (可选，例如 -v2，用于无损替换异常 Worker 槽位)
 #   NODE_DEPLOY_OPERATION=maintenance|provision（缺省 maintenance）
@@ -18,7 +19,7 @@ cd packages/edge-node
 
 : "${NODE_ID:?}"; : "${NODE_ACCOUNT_ALIAS:?}"; : "${NODE_ENROLLMENT_TOKEN:?}"
 : "${CLOUDFLARE_ACCOUNT_ID:?}"
-: "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required for the managed canary user}"
+: "${CONTROL_AUTOMATION_SECRET:?CONTROL_AUTOMATION_SECRET is required for credential retirement}"
 : "${ROOT_DOMAIN:?ROOT_DOMAIN is required for production custom domains}"
 : "${CONTROL_ROOT_DOMAIN:?CONTROL_ROOT_DOMAIN is required}"
 NODE_REGION="${NODE_REGION:-}"
@@ -426,44 +427,10 @@ echo "OK uuids-endpoint-count=$UC"
 HAS_LANDING_BUNDLE=$(printf '%s' "$UDATA" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(typeof j.landingBundle==="string"&&j.landingBundle.startsWith("v1.")?"1":"0")}catch(e){process.stdout.write("0")}})')
 if [ "$HAS_LANDING_BUNDLE" = "1" ]; then echo "OK landing-bundle-encrypted"; else echo "ERROR landing-bundle-missing"; exit 16; fi
 
-echo "STEP canary-user"
-if [ "$NODE_DEPLOY_OPERATION" = "maintenance" ]; then
-  TEST_UUID="$NODE_UUID"
-  echo "::add-mask::$TEST_UUID"
-  echo "OK maintenance-canary-uses-node-fallback"
-else
-  LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
-    'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
-  ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
-    "$CONTROL_PLANE_URL/api/admin/login" \
-    -H 'content-type: application/json' -d "$LOGIN_BODY" \
-    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.token)process.exit(1);process.stdout.write(j.token)})')
-  echo "::add-mask::$ADMIN_TOKEN"
-  CANARY_NAME="opus8-node-canary-${NODE_ID}-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
-  CREATE_BODY=$(CANARY_NAME="$CANARY_NAME" NODE_ID="$NODE_ID" node -e 'process.stdout.write(JSON.stringify({username:process.env.CANARY_NAME,nodeGroup:[process.env.NODE_ID],unlock:false,durationDays:1,deviceLimit:4,ipLimit24h:10,trafficLimitBytes:0}))')
-  CANARY_USER=$(curl -fsS --max-time 20 -X POST "$CONTROL_PLANE_URL/api/users" \
-    -H "authorization: Bearer $ADMIN_TOKEN" \
-    -H 'content-type: application/json' -d "$CREATE_BODY")
-  CANARY_USER_ID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.user?.id)process.exit(1);process.stdout.write(j.user.id)})')
-  TEST_UUID=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.credential?.uuid)process.exit(1);process.stdout.write(j.credential.uuid)})')
-  echo "::add-mask::$CANARY_USER_ID"
-  echo "::add-mask::$TEST_UUID"
-  INVALIDATION_ACKS=$(printf '%s' "$CANARY_USER" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(String(j.cacheInvalidation?.acknowledged||0))})')
-  TARGET_INVALIDATED=$(printf '%s' "$CANARY_USER" | NODE_ID="$NODE_ID" node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write((j.cacheInvalidation?.acknowledgedNodes||[]).includes(process.env.NODE_ID)?"1":"0")})')
-  cleanup_canary_user() {
-    curl -fsS --max-time 20 -X DELETE "$CONTROL_PLANE_URL/api/users/$CANARY_USER_ID" \
-      -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null 2>&1 || true
-  }
-  trap cleanup_canary_user EXIT
-  echo "OK canary-user-created"
-  echo "INFO edge-policy-invalidation acknowledged=$INVALIDATION_ACKS target=$TARGET_INVALIDATED"
-  if [ "$TARGET_INVALIDATED" = "1" ]; then
-    sleep 3
-  else
-    echo "WARN target-node-did-not-acknowledge-active-invalidation; using-ttl-fallback"
-    sleep 16
-  fi
-fi
+echo "STEP canary-credential"
+TEST_UUID="$NODE_UUID"
+echo "::add-mask::$TEST_UUID"
+echo "OK deployment-canary-uses-node-fallback"
 
 echo "STEP policy-status"
 STATUS_TS=$(date +%s)000
@@ -591,18 +558,8 @@ fi
 
 if [ "$ENROLLMENT_KIND" = "migrate" ] || [ "$ENROLLMENT_KIND" = "rotate" ]; then
   echo "STEP retire-previous-credential"
-  if [ -z "${ADMIN_TOKEN:-}" ]; then
-    LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
-      'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
-    ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
-      "$CONTROL_PLANE_URL/api/admin/login" \
-      -H 'content-type: application/json' -d "$LOGIN_BODY" \
-      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.token)process.exit(1);process.stdout.write(j.token)})')
-    echo "::add-mask::$ADMIN_TOKEN"
-  fi
-  if curl -fsS --max-time 20 -X DELETE \
-    "$CONTROL_PLANE_URL/api/nodes/$NODE_ID/credential/previous" \
-    -H "authorization: Bearer $ADMIN_TOKEN" \
+  if node "$REPO_ROOT/infra/scripts/control-automation-request.mjs" DELETE \
+    "$CONTROL_PLANE_URL/api/nodes/$NODE_ID/credential/previous" </dev/null \
     | grep -q '"ok":true'; then
     echo "OK previous-credential-retired"
   else

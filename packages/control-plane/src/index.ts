@@ -1173,7 +1173,13 @@ export default {
         /^\/api\/nodes\/([A-Za-z0-9._:-]+)\/credential\/previous$/,
       );
       if (nodePreviousCredentialMatch && m === "DELETE") {
-        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        const automation = await verifyAutomationRequest(req, env, "");
+        const admin = await requireAdmin(req, env);
+        if (!admin) {
+          if (!automation || !(await claimAutomationRequest(env, automation))) {
+            return err("未授权", 401);
+          }
+        }
         if (
           !(await retirePreviousNodeCredential(
             env,
@@ -1182,6 +1188,7 @@ export default {
         ) {
           return err("节点没有待收回的旧凭据", 404);
         }
+        if (!admin && automation) scheduleAutomationAudit(automation, 200);
         return privateJson({ ok: true });
       }
       const nodeDeleteMatch = p.match(/^\/api\/nodes\/([A-Za-z0-9._:-]+)$/);

@@ -89,8 +89,13 @@ test("node jobs use just-in-time enrollment without the control root", () => {
     `${repositoryRoot}.github/workflows/enroll-zero-trust.yml`,
     "utf8",
   );
+  const deployNodeScript = readFileSync(
+    `${repositoryRoot}infra/scripts/deploy-node.sh`,
+    "utf8",
+  );
   assert.doesNotMatch(workflow, /secrets\.NODE_HMAC_SECRET/);
   assert.doesNotMatch(workflow, /ADMIN_PASSWORD|api\/admin\/login/);
+  assert.doesNotMatch(deployNodeScript, /ADMIN_PASSWORD|api\/admin\/login/);
   assert.doesNotMatch(zeroTrustWorkflow, /secrets\.NODE_HMAC_SECRET/);
   assert.match(workflow, /api\/node-enrollments/);
   assert.match(workflow, /CONTROL_AUTOMATION_SECRET/);
@@ -98,4 +103,5 @@ test("node jobs use just-in-time enrollment without the control root", () => {
   assert.match(workflow, /secrets\[matrix\.api_token_secret\]/);
   assert.match(workflow, /CLOUDFLARE_ACCOUNT_ID/);
   assert.match(workflow, /NODE_ENROLLMENT_TOKEN/);
+  assert.match(deployNodeScript, /control-automation-request\.mjs/);
 });

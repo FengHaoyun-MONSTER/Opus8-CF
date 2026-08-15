@@ -376,10 +376,10 @@ assert(
   "the admin API must expose an unretired previous credential",
 );
 await jsonResponse(
-  await fetch(`${base}/api/nodes/${nodeId}/credential/previous`, {
-    method: "DELETE",
-    headers: adminHeaders,
-  }),
+  await automationRequest(
+    "DELETE",
+    `/api/nodes/${nodeId}/credential/previous`,
+  ),
 );
 const retiredCredential = await signedPost(
   "/api/nodes/heartbeat",
@@ -1505,6 +1505,16 @@ try {
         && entry.path === "/api/node-enrollments",
     ),
     "automation enrollment must leave a body-free administrator audit event",
+  );
+  assert(
+    auditResponse.entries?.some(
+      (entry) =>
+        entry.actor === "github-node-deploy"
+        && entry.authentication === "automation-hmac"
+        && entry.method === "DELETE"
+        && entry.path === `/api/nodes/${nodeId}/credential/previous`,
+    ),
+    "automation credential retirement must leave an attributable audit event",
   );
   assert(
     auditResponse.entries?.some(
