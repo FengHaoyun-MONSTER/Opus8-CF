@@ -64,7 +64,6 @@ jobs:
     env:
       CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
-      NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
       CLOUDFLARE_API_TOKEN: ${{ matrix.alias == 'acc1' && secrets.API_TOKEN || secrets.API_TOKEN_NUM1 }}
       CLOUDFLARE_ACCOUNT_ID: ${{ matrix.alias == 'acc1' && secrets.ACCOUNT_ID || secrets.ACCOUNT_ID_NUM1 }}
       ROOT_DOMAIN: ${{ matrix.alias == 'acc1' && secrets.ROOT_DOMAIN || secrets.ROOT_DOMAIN_NUM1 }}
@@ -92,12 +91,101 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq sshpass
       - run: npm i -g wrangler@4.115.0
+      - name: Create just-in-time node enrollment
+        if: inputs.target == 'all' || inputs.target == matrix.node_id
+        run: |
+          set -euo pipefail
+          CONTROL_HOST="${CONTROL_ROOT_DOMAIN#https://}"
+          CONTROL_HOST="${CONTROL_HOST#http://}"
+          CONTROL_HOST="${CONTROL_HOST%%/*}"
+          CONTROL_API="https://api.${CONTROL_HOST}"
+          LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
+            'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
+          ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
+            "$CONTROL_API/api/admin/login" \
+            -H 'content-type: application/json' --data "$LOGIN_BODY" \
+            | jq -er '.token')
+          echo "::add-mask::$ADMIN_TOKEN"
+          REGISTERED_NODES=$(curl -fsS --max-time 20 \
+            "$CONTROL_API/api/nodes" \
+            -H "authorization: Bearer $ADMIN_TOKEN")
+          ENROLL_BODY=$(REGISTERED_NODES="$REGISTERED_NODES" node <<'NODE'
+          const response = JSON.parse(process.env.REGISTERED_NODES || "{}");
+          const existing = (response.nodes || []).find(
+            (node) => node.id === process.env.NODE_ID,
+          );
+          const root = String(process.env.ROOT_DOMAIN || "")
+            .replace(/^https?:\/\//, "").split("/")[0].replace(/\.$/, "");
+          const hostname = existing?.hostname ||
+            `${process.env.NODE_ID}${process.env.NODE_DEPLOY_SUFFIX || ""}.${root}`;
+          const body = {
+            nodeId: process.env.NODE_ID,
+            accountAlias: process.env.NODE_ACCOUNT_ALIAS,
+            accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+            hostname,
+            region: existing?.region || process.env.NODE_REGION || undefined,
+            capabilities: existing ? JSON.parse(existing.capabilities || "[]") : undefined,
+            preferredIp: existing?.preferred_ip || undefined,
+            transportPath: existing?.transport_path || undefined,
+            ttlSeconds: 3600,
+          };
+          process.stdout.write(JSON.stringify(body));
+          NODE
+          )
+          ENROLLMENT=$(curl -fsS --max-time 20 -X POST \
+            "$CONTROL_API/api/node-enrollments" \
+            -H "authorization: Bearer $ADMIN_TOKEN" \
+            -H 'content-type: application/json' --data "$ENROLL_BODY")
+          NODE_ENROLLMENT_TOKEN=$(printf '%s' "$ENROLLMENT" | jq -er '.token')
+          NODE_ENROLLMENT_ID=$(printf '%s' "$ENROLLMENT" | jq -er '.enrollment.id')
+          echo "NODE_ENROLLMENT_ID=$NODE_ENROLLMENT_ID" >> "$GITHUB_ENV"
+          NODE_ENROLLMENT_KIND=$(printf '%s' "$ENROLLMENT" | jq -er '.enrollment.kind')
+          NODE_HOSTNAME=$(printf '%s' "$ENROLLMENT" | jq -er '.enrollment.hostname')
+          NODE_TRANSPORT_PATH=$(printf '%s' "$ENROLLMENT" | jq -er '.enrollment.transportPath')
+          if { [ "$NODE_DEPLOY_OPERATION" = "provision" ] \
+            && [ "$NODE_ENROLLMENT_KIND" != "provision" ]; } \
+            || { [ "$NODE_DEPLOY_OPERATION" = "maintenance" ] \
+            && [ "$NODE_ENROLLMENT_KIND" != "migrate" ] \
+            && [ "$NODE_ENROLLMENT_KIND" != "rotate" ]; }; then
+            echo "ERROR enrollment-operation-mismatch kind=$NODE_ENROLLMENT_KIND operation=$NODE_DEPLOY_OPERATION"
+            curl -sS --max-time 20 -X DELETE \
+              "$CONTROL_API/api/node-enrollments/$NODE_ENROLLMENT_ID" \
+              -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null || true
+            exit 9
+          fi
+          echo "::add-mask::$NODE_ENROLLMENT_TOKEN"
+          {
+            echo "NODE_ENROLLMENT_TOKEN=$NODE_ENROLLMENT_TOKEN"
+            echo "NODE_HOSTNAME=$NODE_HOSTNAME"
+            echo "NODE_TRANSPORT_PATH=$NODE_TRANSPORT_PATH"
+          } >> "$GITHUB_ENV"
+          echo "OK just-in-time-enrollment kind=$NODE_ENROLLMENT_KIND"
       - name: Deploy declared edge node
         id: deploy
         if: inputs.target == 'all' || inputs.target == matrix.node_id
         run: |
           set -o pipefail
           bash infra/scripts/deploy-node.sh 2>&1 | tee /tmp/dn.log
+
+      - name: Revoke unused enrollment
+        if: always() && (inputs.target == 'all' || inputs.target == matrix.node_id)
+        run: |
+          set -euo pipefail
+          [ -n "${NODE_ENROLLMENT_ID:-}" ] || exit 0
+          CONTROL_HOST="${CONTROL_ROOT_DOMAIN#https://}"
+          CONTROL_HOST="${CONTROL_HOST#http://}"
+          CONTROL_HOST="${CONTROL_HOST%%/*}"
+          CONTROL_API="https://api.${CONTROL_HOST}"
+          LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
+            'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
+          ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
+            "$CONTROL_API/api/admin/login" \
+            -H 'content-type: application/json' --data "$LOGIN_BODY" \
+            | jq -er '.token')
+          echo "::add-mask::$ADMIN_TOKEN"
+          curl -sS --max-time 20 -X DELETE \
+            "$CONTROL_API/api/node-enrollments/$NODE_ENROLLMENT_ID" \
+            -H "authorization: Bearer $ADMIN_TOKEN" >/dev/null || true
 
       - name: Publish status back to repo
         if: always() && (inputs.target == 'all' || inputs.target == matrix.node_id)

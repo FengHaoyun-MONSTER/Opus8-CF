@@ -42,7 +42,6 @@ jobs:
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
       CONTROL_ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
       ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
-      NODE_HMAC_SECRET: ${{ secrets.NODE_HMAC_SECRET }}
       ROOT_DOMAIN_ACC1: ${{ secrets.ROOT_DOMAIN }}
       ROOT_DOMAIN_ACC2: ${{ secrets.ROOT_DOMAIN_NUM1 }}
     steps:
@@ -152,7 +151,6 @@ jobs:
           set -euo pipefail
           : "${CONTROL_ROOT_DOMAIN:?ROOT_DOMAIN is required}"
           : "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
-          : "${NODE_HMAC_SECRET:?NODE_HMAC_SECRET is required}"
           : "${ROOT_DOMAIN_ACC1:?ROOT_DOMAIN is required}"
           : "${ROOT_DOMAIN_ACC2:?ROOT_DOMAIN_NUM1 is required}"
 
@@ -294,23 +292,6 @@ jobs:
 
           for entry in "${nodes[@]}"; do
             IFS='|' read -r node host transport_path <<<"$entry"
-            timestamp="$(date +%s)000"
-            request_path="/api/nodes/$node/uuids"
-            signature="$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
-              "$timestamp" "$node" "GET" "$request_path" "" \
-              | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r \
-              | cut -d' ' -f1)"
-            uuid="$(curl -fsS --max-time 20 \
-              "$CONTROL_API/api/nodes/$node/uuids" \
-              -H "x-opus8-ts: $timestamp" \
-              -H "x-opus8-node: $node" \
-              -H "x-opus8-sign-v2: $signature")"
-            printf '%s' "$uuid" | jq -e \
-              --arg uuid "$VERIFY_CREDENTIAL_UUID" \
-              '(.uuids | index($uuid) != null) and (.unlockUuids | index($uuid) != null)' \
-              >/dev/null
-            echo "OK $node isolated-policy-active"
-
             smoke_with_retry "$node direct-cf-egress" \
               infra/scripts/smoke-vless.py \
               --url "wss://${host}${transport_path}?ed=2560" \
@@ -350,7 +331,6 @@ jobs:
           set -euo pipefail
           : "${CONTROL_ROOT_DOMAIN:?ROOT_DOMAIN is required}"
           : "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
-          : "${NODE_HMAC_SECRET:?NODE_HMAC_SECRET is required}"
           : "${ROOT_DOMAIN_ACC1:?ROOT_DOMAIN is required}"
 
           normalize_domain() {

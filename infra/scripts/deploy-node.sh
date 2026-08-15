@@ -2,7 +2,8 @@
 # 部署单个边缘节点：构建补丁版 worker、探测落地机端口、部署、设密钥、注册、验证。
 # 需要环境变量：
 #   CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
-#   CONTROL_ROOT_DOMAIN / ROOT_DOMAIN / NODE_HMAC_SECRET / NODE_ID / NODE_ACCOUNT_ALIAS / NODE_REGION
+#   CONTROL_ROOT_DOMAIN / ROOT_DOMAIN / NODE_ENROLLMENT_TOKEN / NODE_ID / NODE_ACCOUNT_ALIAS / NODE_REGION
+#   NODE_HOSTNAME（可选；缺省为 <NODE_ID><NODE_DEPLOY_SUFFIX>.<ROOT_DOMAIN>）
 #   NODE_DEPLOY_SUFFIX  (可选，例如 -v2，用于无损替换异常 Worker 槽位)
 #   NODE_DEPLOY_OPERATION=maintenance|provision（缺省 maintenance）
 #   NODE_TRANSPORT_PATH (可选；缺省时按节点稳定派生)
@@ -15,7 +16,8 @@ cd "$(dirname "$0")/../.."
 REPO_ROOT="$(pwd)"
 cd packages/edge-node
 
-: "${NODE_ID:?}"; : "${NODE_ACCOUNT_ALIAS:?}"; : "${NODE_HMAC_SECRET:?}"
+: "${NODE_ID:?}"; : "${NODE_ACCOUNT_ALIAS:?}"; : "${NODE_ENROLLMENT_TOKEN:?}"
+: "${CLOUDFLARE_ACCOUNT_ID:?}"
 : "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required for the managed canary user}"
 : "${ROOT_DOMAIN:?ROOT_DOMAIN is required for production custom domains}"
 : "${CONTROL_ROOT_DOMAIN:?CONTROL_ROOT_DOMAIN is required}"
@@ -29,7 +31,13 @@ fi
 ROOT_DOMAIN="${ROOT_DOMAIN#https://}"; ROOT_DOMAIN="${ROOT_DOMAIN#http://}"; ROOT_DOMAIN="${ROOT_DOMAIN%%/*}"
 CONTROL_ROOT_DOMAIN="${CONTROL_ROOT_DOMAIN#https://}"; CONTROL_ROOT_DOMAIN="${CONTROL_ROOT_DOMAIN#http://}"; CONTROL_ROOT_DOMAIN="${CONTROL_ROOT_DOMAIN%%/*}"
 CONTROL_PLANE_URL="https://api.${CONTROL_ROOT_DOMAIN}"
-CUSTOM_HOST="${NODE_ID}${NODE_DEPLOY_SUFFIX}.${ROOT_DOMAIN}"
+CUSTOM_HOST="${NODE_HOSTNAME:-${NODE_ID}${NODE_DEPLOY_SUFFIX}.${ROOT_DOMAIN}}"
+CUSTOM_HOST="${CUSTOM_HOST%.}"
+if [ "$CUSTOM_HOST" != "$ROOT_DOMAIN" ] \
+  && [[ "$CUSTOM_HOST" != *."$ROOT_DOMAIN" ]]; then
+  echo "ERROR node-hostname-outside-root-domain"
+  exit 9
+fi
 CUSTOM_URL="https://${CUSTOM_HOST}"
 WORKER_NAME="opus8cf-node-${NODE_ID}${NODE_DEPLOY_SUFFIX}"
 OPUS8_BUILD_ID="${GITHUB_SHA:-manual}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
@@ -74,55 +82,69 @@ normalize_transport_path() {
   '
 }
 
-echo "STEP resolve-registered-transport"
-LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
-  'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
-CONTROL_ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
-  "$CONTROL_PLANE_URL/api/admin/login" \
-  -H 'content-type: application/json' -d "$LOGIN_BODY" \
-  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.token)process.exit(1);process.stdout.write(j.token)})')
-echo "::add-mask::$CONTROL_ADMIN_TOKEN"
-REGISTERED_NODES=$(curl -fsS --max-time 20 "$CONTROL_PLANE_URL/api/nodes" \
-  -H "authorization: Bearer $CONTROL_ADMIN_TOKEN")
-if ! PREVIOUS_TRANSPORT_PATH=$(printf '%s' "$REGISTERED_NODES" \
+echo "STEP exchange-one-time-enrollment"
+echo "::add-mask::$NODE_ENROLLMENT_TOKEN"
+ENROLL_BODY=$(NODE_ENROLLMENT_TOKEN="$NODE_ENROLLMENT_TOKEN" \
+  NODE_ID="$NODE_ID" CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" node -e '
+    process.stdout.write(JSON.stringify({
+      token:process.env.NODE_ENROLLMENT_TOKEN,
+      nodeId:process.env.NODE_ID,
+      accountId:process.env.CLOUDFLARE_ACCOUNT_ID
+    }))
+  ')
+if ! ENROLL_RESPONSE=$(curl -fsS --max-time 20 -X POST \
+  "$CONTROL_PLANE_URL/api/node-enrollments/exchange" \
+  -H 'content-type: application/json' --data "$ENROLL_BODY"); then
+  echo "ERROR enrollment-exchange-failed"
+  exit 9
+fi
+if ! ENROLL_VALUES=$(printf '%s' "$ENROLL_RESPONSE" \
   | NODE_ID="$NODE_ID" NODE_ACCOUNT_ALIAS="$NODE_ACCOUNT_ALIAS" \
-    CUSTOM_HOST="$CUSTOM_HOST" NODE_DEPLOY_OPERATION="$NODE_DEPLOY_OPERATION" \
-    node -e '
+    CUSTOM_HOST="$CUSTOM_HOST" CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" \
+    NODE_DEPLOY_OPERATION="$NODE_DEPLOY_OPERATION" node -e '
       let s="";
       process.stdin.on("data",d=>s+=d).on("end",()=>{
-        const nodes=JSON.parse(s).nodes||[];
-        const node=nodes.find(x=>x.id===process.env.NODE_ID);
-        if(process.env.NODE_DEPLOY_OPERATION==="maintenance"){
-          const normalize=x=>String(x||"").trim().toLowerCase().replace(/\.$/,"");
-          if(!node||
-            node.account_alias!==process.env.NODE_ACCOUNT_ALIAS||
-            normalize(node.hostname)!==normalize(process.env.CUSTOM_HOST)){
-            process.exit(2);
-          }
-        }else if(node){
-          process.exit(3);
+        const value=JSON.parse(s);
+        const e=value.enrollment||{};
+        const normalize=x=>String(x||"").trim().toLowerCase().replace(/\.$/,"");
+        const expectedKinds=process.env.NODE_DEPLOY_OPERATION==="provision"
+          ?["provision"]:["migrate","rotate"];
+        if(!/^[a-f0-9]{64}$/i.test(String(value.nodeSecret||""))||
+          e.nodeId!==process.env.NODE_ID||
+          e.accountAlias!==process.env.NODE_ACCOUNT_ALIAS||
+          e.accountId!==String(process.env.CLOUDFLARE_ACCOUNT_ID).toLowerCase()||
+          normalize(e.hostname)!==normalize(process.env.CUSTOM_HOST)||
+          !expectedKinds.includes(e.kind)){
+          process.exit(2);
         }
-        process.stdout.write(String(node?.transport_path||"/"));
+        process.stdout.write([
+          value.nodeSecret,
+          String(e.transportPath||""),
+          String(e.kind||"")
+        ].join("\n"));
       });
     '); then
-  echo "ERROR node-operation-state-mismatch operation=$NODE_DEPLOY_OPERATION"
+  echo "ERROR enrollment-identity-mismatch"
   exit 9
 fi
+NODE_HMAC_SECRET=$(printf '%s\n' "$ENROLL_VALUES" | sed -n '1p')
+PREVIOUS_TRANSPORT_PATH=$(printf '%s\n' "$ENROLL_VALUES" | sed -n '2p')
+ENROLLMENT_KIND=$(printf '%s\n' "$ENROLL_VALUES" | sed -n '3p')
+echo "::add-mask::$NODE_HMAC_SECRET"
+unset NODE_ENROLLMENT_TOKEN ENROLL_BODY ENROLL_RESPONSE ENROLL_VALUES
+export NODE_HMAC_SECRET
 if ! PREVIOUS_TRANSPORT_PATH=$(normalize_transport_path "$PREVIOUS_TRANSPORT_PATH"); then
-  echo "ERROR invalid-registered-transport-path"
+  echo "ERROR invalid-enrollment-transport-path"
   exit 9
 fi
+echo "OK enrollment-exchanged kind=$ENROLLMENT_KIND"
 
-if [ -n "${NODE_TRANSPORT_PATH:-}" ]; then
-  TRANSPORT_CANDIDATE="$NODE_TRANSPORT_PATH"
-elif [ "$PREVIOUS_TRANSPORT_PATH" != "/" ]; then
-  TRANSPORT_CANDIDATE="$PREVIOUS_TRANSPORT_PATH"
-else
-  TRANSPORT_HEX=$(printf 'transport-path-v1:%s' "$NODE_ID" \
-    | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r \
-    | cut -d' ' -f1)
-  TRANSPORT_CANDIDATE="/ws/${TRANSPORT_HEX:0:24}"
+if [ -n "${NODE_TRANSPORT_PATH:-}" ] \
+  && [ "$NODE_TRANSPORT_PATH" != "$PREVIOUS_TRANSPORT_PATH" ]; then
+  echo "ERROR transport-path-must-match-enrollment"
+  exit 9
 fi
+TRANSPORT_CANDIDATE="$PREVIOUS_TRANSPORT_PATH"
 if ! TRANSPORT_PATH=$(normalize_transport_path "$TRANSPORT_CANDIDATE"); then
   echo "ERROR invalid-node-transport-path"
   exit 9
@@ -185,6 +207,33 @@ if [ -n "${SERVICES_IP:-}" ]; then
   fi
 else
   echo "INFO no-SERVICES_IP (纯 CF 出口)"
+fi
+
+echo "STEP activate-staged-credential"
+RCODE=000
+for n in $(seq 1 18); do
+  TS=$(date +%s)000
+  BODY=$(H="$CUSTOM_HOST" HASLAND="$LAND" TP="$TRANSPORT_PATH" node -e "process.stdout.write(JSON.stringify({nodeId:process.env.NODE_ID,accountAlias:process.env.NODE_ACCOUNT_ALIAS,hostname:process.env.H,region:process.env.NODE_REGION||null,transportPath:process.env.TP,capabilities:['vless-ws','transport-path-v1','anti-share-v1','usage-v1','hmac-v2'].concat(process.env.HASLAND?['unlock']:[])}))")
+  SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+    "$TS" "$NODE_ID" "POST" "/api/nodes/register" "$BODY" \
+    | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+  RCODE=$(curl -s -o /tmp/reg.json -w '%{http_code}' --max-time 20 -X POST "$CONTROL_PLANE_URL/api/nodes/register" \
+    -H "x-opus8-ts: $TS" -H "x-opus8-node: $NODE_ID" -H "x-opus8-sign-v2: $SIG" -H 'content-type: application/json' -d "$BODY" || true)
+  [ "$RCODE" = "200" ] && break
+  sleep 10
+done
+REGISTERED_PATH=$(TP="$TRANSPORT_PATH" node -e '
+  const fs=require("node:fs");
+  try {
+    const value=JSON.parse(fs.readFileSync("/tmp/reg.json","utf8"));
+    process.stdout.write(value.transportPath===process.env.TP?value.transportPath:"");
+  } catch {}
+')
+if [ "$RCODE" = "200" ] && [ "$REGISTERED_PATH" = "$TRANSPORT_PATH" ]; then
+  echo "OK staged-credential-active host=$CUSTOM_HOST transport=$TRANSPORT_PATH"
+else
+  echo "ERROR credential-activation http=$RCODE transport-path-mismatch"
+  exit 13
 fi
 
 echo "STEP kv"
@@ -272,33 +321,6 @@ if [ "$VERSION_READY" != "1" ]; then
   exit 12
 fi
 echo "OK deployed-version-active custom=1 workers=1"
-
-echo "STEP register"
-RCODE=000
-for n in $(seq 1 18); do
-  TS=$(date +%s)000
-  BODY=$(H="$HOST" HASLAND="$LAND" TP="$TRANSPORT_PATH" node -e "process.stdout.write(JSON.stringify({nodeId:process.env.NODE_ID,accountAlias:process.env.NODE_ACCOUNT_ALIAS,hostname:process.env.H,region:process.env.NODE_REGION||null,transportPath:process.env.TP,capabilities:['vless-ws','transport-path-v1','anti-share-v1','usage-v1','hmac-v2'].concat(process.env.HASLAND?['unlock']:[])}))")
-  SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
-    "$TS" "$NODE_ID" "POST" "/api/nodes/register" "$BODY" \
-    | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
-  RCODE=$(curl -s -o /tmp/reg.json -w '%{http_code}' --max-time 20 -X POST "$CONTROL_PLANE_URL/api/nodes/register" \
-    -H "x-opus8-ts: $TS" -H "x-opus8-node: $NODE_ID" -H "x-opus8-sign-v2: $SIG" -H 'content-type: application/json' -d "$BODY" || true)
-  [ "$RCODE" = "200" ] && break
-  sleep 10
-done
-REGISTERED_PATH=$(TP="$TRANSPORT_PATH" node -e '
-  const fs=require("node:fs");
-  try {
-    const value=JSON.parse(fs.readFileSync("/tmp/reg.json","utf8"));
-    process.stdout.write(value.transportPath===process.env.TP?value.transportPath:"");
-  } catch {}
-')
-if [ "$RCODE" = "200" ] && [ "$REGISTERED_PATH" = "$TRANSPORT_PATH" ]; then
-  echo "OK registered host=$HOST transport=$TRANSPORT_PATH"
-else
-  echo "ERROR register http=$RCODE transport-path-mismatch"
-  exit 13
-fi
 
 echo "STEP wait-custom-domain"
 DOMAIN_OK=0
@@ -405,12 +427,18 @@ HAS_LANDING_BUNDLE=$(printf '%s' "$UDATA" | node -e 'let s="";process.stdin.on("
 if [ "$HAS_LANDING_BUNDLE" = "1" ]; then echo "OK landing-bundle-encrypted"; else echo "ERROR landing-bundle-missing"; exit 16; fi
 
 echo "STEP canary-user"
-ADMIN_TOKEN="$CONTROL_ADMIN_TOKEN"
 if [ "$NODE_DEPLOY_OPERATION" = "maintenance" ]; then
   TEST_UUID="$NODE_UUID"
   echo "::add-mask::$TEST_UUID"
   echo "OK maintenance-canary-uses-node-fallback"
 else
+  LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
+    'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
+  ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
+    "$CONTROL_PLANE_URL/api/admin/login" \
+    -H 'content-type: application/json' -d "$LOGIN_BODY" \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.token)process.exit(1);process.stdout.write(j.token)})')
+  echo "::add-mask::$ADMIN_TOKEN"
   CANARY_NAME="opus8-node-canary-${NODE_ID}-${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}"
   CREATE_BODY=$(CANARY_NAME="$CANARY_NAME" NODE_ID="$NODE_ID" node -e 'process.stdout.write(JSON.stringify({username:process.env.CANARY_NAME,nodeGroup:[process.env.NODE_ID],unlock:false,durationDays:1,deviceLimit:4,ipLimit24h:10,trafficLimitBytes:0}))')
   CANARY_USER=$(curl -fsS --max-time 20 -X POST "$CONTROL_PLANE_URL/api/users" \
@@ -560,5 +588,27 @@ if [ -n "$TRANSPORT_LEGACY_PATH" ]; then
 fi
 
 [ -n "$LAND" ] && echo "OK unlock=on(AI域名走落地)" || echo "INFO unlock=off"
+
+if [ "$ENROLLMENT_KIND" = "migrate" ] || [ "$ENROLLMENT_KIND" = "rotate" ]; then
+  echo "STEP retire-previous-credential"
+  if [ -z "${ADMIN_TOKEN:-}" ]; then
+    LOGIN_BODY=$(ADMIN_PASSWORD="$ADMIN_PASSWORD" node -e \
+      'process.stdout.write(JSON.stringify({password:process.env.ADMIN_PASSWORD}))')
+    ADMIN_TOKEN=$(curl -fsS --max-time 20 -X POST \
+      "$CONTROL_PLANE_URL/api/admin/login" \
+      -H 'content-type: application/json' -d "$LOGIN_BODY" \
+      | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.token)process.exit(1);process.stdout.write(j.token)})')
+    echo "::add-mask::$ADMIN_TOKEN"
+  fi
+  if curl -fsS --max-time 20 -X DELETE \
+    "$CONTROL_PLANE_URL/api/nodes/$NODE_ID/credential/previous" \
+    -H "authorization: Bearer $ADMIN_TOKEN" \
+    | grep -q '"ok":true'; then
+    echo "OK previous-credential-retired"
+  else
+    echo "ERROR previous-credential-retirement"
+    exit 18
+  fi
+fi
 
 echo "DONE url=$URL"

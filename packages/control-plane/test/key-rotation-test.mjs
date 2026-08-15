@@ -204,10 +204,24 @@ try {
     {
       NODE_HMAC_SECRET: currentNodeKey,
       NODE_HMAC_SECRET_PREVIOUS: previousNodeKey,
-      DB: {
-        prepare() {
+       DB: {
+        prepare(sql) {
           return {
+            bind() {
+              return this;
+            },
+            async first() {
+              assert.match(sql, /FROM node_credentials/);
+              return {
+                node_id: "acc1-n1",
+                auth_mode: "legacy",
+                current_salt: null,
+                previous_salt: null,
+                legacy_fallback: 0,
+              };
+            },
             async all() {
+              assert.match(sql, /FROM nodes/);
               return {
                 results: [
                   {

@@ -51,7 +51,7 @@ id = "PLACEHOLDER_FILL_AFTER_PREFLIGHT"
 #   ADMIN_PASSWORD  管理后台密码
 #   JWT_SECRET      管理 JWT 签名
 #   JWT_SECRET_PREVIOUS JWT 轮换期的旧签名密钥（可选）
-#   NODE_HMAC_SECRET 节点↔控制面签名共享密钥
-#   NODE_HMAC_SECRET_PREVIOUS 节点滚动轮换期的旧共享密钥（可选）
+#   NODE_HMAC_SECRET 控制面根密钥：派生每节点运行密钥、注册令牌摘要和设备凭据
+#   NODE_HMAC_SECRET_PREVIOUS 控制面根密钥滚动轮换期的旧值（可选）
 #   LANDING_CONFIG_KEY 落地机账号密码的静态加密密钥（至少 32 字符）
 #   LANDING_CONFIG_KEY_PREVIOUS 落地凭据重加密前的旧密钥（可选）

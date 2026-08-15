@@ -1,10 +1,11 @@
-import type {
-  DeviceCredentialMode,
-  HwidMode,
-  NodeRecord,
-  UserAccessPolicy,
-  UserDeviceRecord,
-  UserRecord,
+import {
+  hmacSign,
+  type DeviceCredentialMode,
+  type HwidMode,
+  type NodeRecord,
+  type UserAccessPolicy,
+  type UserDeviceRecord,
+  type UserRecord,
 } from "@opus8-cf/shared";
 import {
   evaluateAccessStatus,
@@ -12,6 +13,7 @@ import {
   type AccessState,
 } from "./access-status";
 import { deviceCredentialUuids } from "./device-credentials";
+import { userAssignedToNode } from "./node-assignment";
 import type { WebmasterBenefitProvisioning } from "./webmaster-benefit";
 
 export interface Env {
@@ -114,9 +116,15 @@ export async function listNodes(env: Env): Promise<NodeRecord[]> {
        h.last_success AS health_last_success,
        h.last_failure AS health_last_failure,
        h.last_error AS health_last_error,
-       h.last_run_id AS health_last_run_id
+       h.last_run_id AS health_last_run_id,
+       c.auth_mode AS auth_mode,
+       CASE WHEN c.previous_salt IS NOT NULL OR c.legacy_fallback=1
+         THEN 1 ELSE 0 END AS credential_fallback_pending,
+       c.activated_at AS credential_activated_at,
+       c.updated_at AS credential_updated_at
      FROM nodes n
      LEFT JOIN node_health_state h ON h.node_id=n.id
+     LEFT JOIN node_credentials c ON c.node_id=n.id
      ORDER BY n.created_at DESC`,
   ).all<NodeRecord>();
   return results ?? [];
@@ -678,14 +686,22 @@ export async function updateUserPolicy(
 }
 
 /** 当前有效用户及其落地权限：启用中且未过期。 */
-export async function activeUserPolicy(env: Env): Promise<{
+export async function activeUserPolicy(env: Env, nodeId: string): Promise<{
   uuids: string[];
   unlockUuids: string[];
   accessPolicies: UserAccessPolicy[];
 }> {
   const now = Date.now();
+  const node = await env.DB.prepare(
+    "SELECT id,account_alias,enabled FROM nodes WHERE id=?1",
+  )
+    .bind(nodeId)
+    .first<{ id: string; account_alias: string; enabled: number }>();
+  if (!node || Number(node.enabled) !== 1) {
+    return { uuids: [], unlockUuids: [], accessPolicies: [] };
+  }
   const { results } = await env.DB.prepare(
-    `SELECT u.id, u.uuid AS user_uuid, u.unlock, d.base_uuid, d.credential_mode,
+    `SELECT u.id, u.uuid AS user_uuid, u.node_group, u.unlock, d.base_uuid, d.credential_mode,
        COALESCE(l.device_limit,2) AS device_limit,
        COALESCE(l.ip_limit_24h,5) AS ip_limit_24h,
        COALESCE(l.traffic_limit_bytes,0) AS traffic_limit_bytes,
@@ -699,6 +715,7 @@ export async function activeUserPolicy(env: Env): Promise<{
     .all<{
       id: string;
       user_uuid: string;
+      node_group: string | null;
       base_uuid: string;
       credential_mode: DeviceCredentialMode;
       unlock: number;
@@ -707,7 +724,9 @@ export async function activeUserPolicy(env: Env): Promise<{
       traffic_limit_bytes: number;
       used_bytes: number;
     }>();
-  const active = results ?? [];
+  const active = (results ?? []).filter((row) =>
+    userAssignedToNode(row.node_group, node.id, node.account_alias),
+  );
   const credentials = (
     await Promise.all(
       active.map(async (row) => ({
@@ -718,21 +737,24 @@ export async function activeUserPolicy(env: Env): Promise<{
           row.credential_mode,
           now,
         ),
+        ipHashKey: await hmacSign(
+          env.NODE_HMAC_SECRET,
+          `opus8-user-ip-key-v1\n${row.id}`,
+        ),
       })),
     )
-  ).flatMap(({ row, uuids }) => uuids.map((uuid) => ({ row, uuid })));
+  ).flatMap(({ row, uuids, ipHashKey }) =>
+    uuids.map((uuid) => ({ row, uuid, ipHashKey })),
+  );
   return {
     uuids: credentials.map(({ uuid }) => uuid),
     unlockUuids: credentials
       .filter(({ row }) => row.unlock === 1)
       .map(({ uuid }) => uuid),
-    accessPolicies: credentials.map(({ row, uuid }) => ({
+    accessPolicies: credentials.map(({ row, uuid, ipHashKey }) => ({
       userId: row.id,
       uuid,
-      ipHashKey:
-        row.credential_mode === "static" && row.base_uuid === row.user_uuid
-          ? uuid
-          : `user:${row.id}`,
+      ipHashKey,
       deviceLimit: row.device_limit,
       ipLimit24h: row.ip_limit_24h,
       trafficLimitBytes: row.traffic_limit_bytes,

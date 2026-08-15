@@ -23,8 +23,8 @@
 | `ADMIN_PASSWORD` | 管理后台登录密码 |
 | `JWT_SECRET` | 管理 JWT 签名 |
 | `JWT_SECRET_PREVIOUS` | JWT 无停机轮换期的旧密钥；平时不配置 |
-| `NODE_HMAC_SECRET` | 边缘节点 ↔ 控制面 请求签名共享密钥 |
-| `NODE_HMAC_SECRET_PREVIOUS` | 节点滚动轮换期的旧共享密钥；平时不配置 |
+| `NODE_HMAC_SECRET` | 控制面根密钥：派生每节点独立密钥、设备凭据和匿名计数键；绝不注入节点部署 Job |
+| `NODE_HMAC_SECRET_PREVIOUS` | 控制面根密钥滚动轮换期的旧值；平时不配置 |
 | `LANDING_CONFIG_KEY` | D1 中落地机账号密码的 AES-GCM 静态加密密钥（至少 32 字符） |
 | `LANDING_CONFIG_KEY_PREVIOUS` | 落地凭据迁移期的旧加密密钥；平时不配置 |
 | `D1_BACKUP_ENCRYPTION_KEY` | D1 离线备份的独立加密密钥（至少 32 字符，另存离线副本） |
@@ -35,7 +35,7 @@
 控制面会先安装过渡密钥再切换当前密钥。D1 备份与逐类轮换、迁移和退休步骤见
 [`P6.9-DISASTER-RECOVERY-AND-KEY-ROTATION.md`](P6.9-DISASTER-RECOVERY-AND-KEY-ROTATION.md)。
 
-### 节点 HMAC v2 与滚动升级
+### 节点 HMAC v2、一次性注册与滚动升级
 
 节点与控制面的请求签名格式为 HMAC v2，签名内容依次包含协议标识、13 位毫秒时间戳、节点 ID、HTTP 方法、
 `pathname+query` 和原始正文。服务端只接受前后五分钟内的时间戳；如果请求带有 v2 头但验证失败，绝不会降级尝试 v1。
@@ -46,9 +46,11 @@
    `HMAC_V1_ACCEPT_UNTIL` 和 `HMAC_V1_NODE_IDS`，部署不会自动延长兼容期；
 2. v1 仅允许白名单中的四个存量节点调用心跳、UUID 拉取、准入和用量接口，不能注册节点，
    不能访问带查询参数或其他路径；控制面也只向这些节点发送 v1/v2 双签名的缓存失效通知；
-3. 手动运行 `deploy-nodes` 并选择 `operation=maintenance`，逐台把身份不变的存量节点升级到 v2；
-   新增节点则必须取得覆盖当前数据面形态的明确书面许可，并选择 `operation=provision`；
-4. 全部节点完成升级后应提前删除 v1 兼容；最迟在策略中的 2027-07-29 截止时间自动失效。
+3. 手动运行 `deploy-nodes` 并选择 `operation=maintenance`。每个账号 Job 使用控制面管理员凭据和该账号
+   Account ID 即时创建一次性注册任务；任务严格绑定 Node ID、账号别名、域名和传输路径，节点只拿到自己的派生密钥；
+4. 部署采用“激活新密钥并保留旧凭据—部署 Worker—策略与 VLESS 冒烟—收回旧凭据”的顺序，
+   中途失败时旧 Worker 仍能工作。新增节点须取得明确书面许可并选择 `operation=provision`；
+5. 全部节点完成升级后应提前删除 v1 兼容；最迟在策略中的 2027-07-29 截止时间自动失效。
    不得通过重新部署或修改脚本静默顺延。
 
 五分钟签名窗口只解决网络重试和轻微时钟偏差，不建立逐请求 nonce 存储。注册、心跳与租约使用已签名时间戳作单调更新，
@@ -57,10 +59,8 @@ Cloudflare 与节点时钟正常同步。
 
 ### 传输路径迁移
 
-`nodes.transport_path` 是 WebSocket 数据路径的唯一配置源。部署节点时脚本先读取该节点已经注册的路径并复用；
-仅当记录不存在或仍为旧 `/`、且没有显式设置 `NODE_TRANSPORT_PATH` 时，才按
-`HMAC(NODE_HMAC_SECRET, "transport-path-v1:<nodeId>")` 生成 `/ws/<24位摘要>`。
-因此同一节点普通重部署或轮换 `NODE_HMAC_SECRET` 都不会隐式换路径。显式路径只能包含安全的 URL pathname
+`nodes.transport_path` 是 WebSocket 数据路径的唯一配置源。一次性注册任务会复用已有节点路径；新节点未指定时
+由控制面生成随机 `/ws/<24位摘要>`。因此同一节点普通重部署或密钥轮换都不会隐式换路径。显式路径只能包含安全的 URL pathname
 字符，不能带查询参数、重复斜杠、`.`/`..` 段，也不能命中 `/__opus8`、`/admin`、`/login`、
 `/sub` 等保留入口。
 
@@ -155,7 +155,7 @@ Wrangler 4.36+，仓库和 CI 已固定到 4.115.0。
 - 允许使用落地机的 UUID；
 - 当前落地域名清单；
 - SOCKS5 全局开关。
-- 使用 `NODE_HMAC_SECRET` 加密的多落地机运行时配置包。
+- 使用该节点独立密钥加密的多落地机运行时配置包。
 
 修改默认清单并推送 `main` 会触发 `deploy-control`。已有节点如需代码更新，可再手动触发
 `deploy-nodes` 并选择 `maintenance`；新增节点必须选择 `provision` 并通过扩容门禁。

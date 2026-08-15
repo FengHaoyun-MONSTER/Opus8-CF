@@ -75,6 +75,38 @@ export interface NodeRow {
   health_last_failure?: number | null;
   health_last_error?: string | null;
   health_last_run_id?: string | null;
+  auth_mode?: "legacy" | "isolated" | "revoked" | null;
+  credential_fallback_pending?: number | null;
+  credential_activated_at?: number | null;
+  credential_updated_at?: number | null;
+}
+
+export interface NodeEnrollment {
+  id: string;
+  nodeId: string;
+  kind: "provision" | "migrate" | "rotate";
+  status: "pending" | "issued" | "activated" | "revoked" | "expired";
+  accountAlias: string;
+  accountId: string;
+  hostname: string;
+  region: string | null;
+  capabilities: string[];
+  preferredIp: string | null;
+  transportPath: string;
+  expiresAt: number;
+  issuedAt: number | null;
+  activatedAt: number | null;
+  createdAt: number;
+}
+
+export interface CreateNodeEnrollmentInput {
+  nodeId: string;
+  accountAlias: string;
+  accountId: string;
+  hostname: string;
+  region?: string;
+  transportPath?: string;
+  capabilities?: string[];
 }
 
 export interface OptimizedNodeIpPool {
@@ -427,6 +459,23 @@ export const api = {
   resetUserLeases: (id: string) =>
     req<{ ok: boolean }>(`/api/users/${id}/leases/reset`, { method: "POST" }),
   listNodes: () => req<{ nodes: NodeRow[] }>("/api/nodes"),
+  listNodeEnrollments: () =>
+    req<{ enrollments: NodeEnrollment[] }>("/api/node-enrollments"),
+  createNodeEnrollment: (input: CreateNodeEnrollmentInput) =>
+    req<{ enrollment: NodeEnrollment; token: string }>("/api/node-enrollments", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  revokeNodeEnrollment: (id: string) =>
+    req<{ ok: boolean }>(`/api/node-enrollments/${id}`, { method: "DELETE" }),
+  revokeNodeCredential: (id: string) =>
+    req<{ ok: boolean }>(`/api/nodes/${id}/credential`, { method: "DELETE" }),
+  retirePreviousNodeCredential: (id: string) =>
+    req<{ ok: boolean }>(`/api/nodes/${id}/credential/previous`, {
+      method: "DELETE",
+    }),
+  deleteNode: (id: string) =>
+    req<{ ok: boolean }>(`/api/nodes/${id}`, { method: "DELETE" }),
   optimizedIps: () => req<OptimizedIpPoolResponse>("/api/optimized-ips"),
   getUnlockHosts: () => req<UnlockHostsConfig>("/api/settings/unlock-hosts"),
   putUnlockHosts: (hosts: string[]) =>

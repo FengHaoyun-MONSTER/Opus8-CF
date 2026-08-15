@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
+  type CreateNodeEnrollmentInput,
+  type NodeEnrollment,
   type NodeRow,
   type OptimizedIpPoolResponse,
   type OptimizedNodeIpPool,
@@ -9,6 +11,14 @@ import { relTime, fmtTime, copy } from "../util";
 
 const OPTIMIZE_WORKFLOW_URL =
   "https://github.com/FengHaoyun-MONSTER/Opus8-CF/actions/workflows/optimize-ip.yml";
+
+const EMPTY_ENROLLMENT: CreateNodeEnrollmentInput = {
+  nodeId: "",
+  accountAlias: "",
+  accountId: "",
+  hostname: "",
+  region: "",
+};
 
 function healthText(health: string): string {
   if (health === "healthy") return "正常";
@@ -89,6 +99,14 @@ function optimizationState(
 
 export function Nodes() {
   const [nodes, setNodes] = useState<NodeRow[]>([]);
+  const [enrollments, setEnrollments] = useState<NodeEnrollment[]>([]);
+  const [enrollmentForm, setEnrollmentForm] =
+    useState<CreateNodeEnrollmentInput>(EMPTY_ENROLLMENT);
+  const [createdEnrollment, setCreatedEnrollment] = useState<{
+    enrollment: NodeEnrollment;
+    token: string;
+  } | null>(null);
+  const [enrolling, setEnrolling] = useState(false);
   const [optimized, setOptimized] = useState<OptimizedIpPoolResponse | null>(
     null,
   );
@@ -101,12 +119,14 @@ export function Nodes() {
     if (silent) setRefreshing(true);
     else setLoading(true);
     try {
-      const [nodeResponse, optimizedResponse] = await Promise.all([
+      const [nodeResponse, optimizedResponse, enrollmentResponse] = await Promise.all([
         api.listNodes(),
         api.optimizedIps(),
+        api.listNodeEnrollments(),
       ]);
       setNodes(nodeResponse.nodes);
       setOptimized(optimizedResponse);
+      setEnrollments(enrollmentResponse.enrollments);
       setNow(Date.now());
       setError("");
     } catch (e) {
@@ -116,6 +136,64 @@ export function Nodes() {
       setRefreshing(false);
     }
   }, []);
+
+  const createEnrollment = async () => {
+    setEnrolling(true);
+    try {
+      const result = await api.createNodeEnrollment({
+        ...enrollmentForm,
+        region: enrollmentForm.region?.trim() || undefined,
+        transportPath: enrollmentForm.transportPath?.trim() || undefined,
+      });
+      setCreatedEnrollment(result);
+      setEnrollmentForm(EMPTY_ENROLLMENT);
+      setError("");
+      await refresh(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setEnrolling(false);
+    }
+  };
+
+  const revokeEnrollment = async (id: string) => {
+    try {
+      await api.revokeNodeEnrollment(id);
+      if (createdEnrollment?.enrollment.id === id) setCreatedEnrollment(null);
+      await refresh(true);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  const prepareExistingNode = (node: NodeRow) => {
+    setEnrollmentForm({
+      nodeId: node.id,
+      accountAlias: node.account_alias,
+      accountId: "",
+      hostname: node.hostname,
+      region: node.region || "",
+      transportPath: node.transport_path || undefined,
+    });
+    setCreatedEnrollment(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const retirePreviousCredential = async (node: NodeRow) => {
+    if (
+      !window.confirm(
+        `确认 ${node.id} 已使用新密钥正常运行，并立即收回旧凭据？`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.retirePreviousNodeCredential(node.id);
+      await refresh(true);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   useEffect(() => {
     void refresh();
@@ -169,6 +247,187 @@ export function Nodes() {
       </div>
 
       {error && <div className="err">{error}</div>}
+
+      <section className="node-enrollment-panel">
+        <div className="node-enrollment-head">
+          <div>
+            <h3>安全注册 / 轮换节点</h3>
+            <div className="muted">
+              控制面只签发一次性令牌；Cloudflare API Token 只在本地或 CI
+              使用，不会发送到管理后台。
+            </div>
+          </div>
+        </div>
+        <div className="node-enrollment-grid">
+          <label>
+            Node ID
+            <input
+              value={enrollmentForm.nodeId}
+              onChange={(event) =>
+                setEnrollmentForm((value) => ({
+                  ...value,
+                  nodeId: event.target.value,
+                }))
+              }
+              placeholder="acc3-n1"
+            />
+          </label>
+          <label>
+            账户别名
+            <input
+              value={enrollmentForm.accountAlias}
+              onChange={(event) =>
+                setEnrollmentForm((value) => ({
+                  ...value,
+                  accountAlias: event.target.value,
+                }))
+              }
+              placeholder="acc3"
+            />
+          </label>
+          <label>
+            Cloudflare Account ID
+            <input
+              className="mono"
+              value={enrollmentForm.accountId}
+              onChange={(event) =>
+                setEnrollmentForm((value) => ({
+                  ...value,
+                  accountId: event.target.value,
+                }))
+              }
+              placeholder="32 位 Account ID"
+            />
+          </label>
+          <label>
+            节点域名
+            <input
+              value={enrollmentForm.hostname}
+              onChange={(event) =>
+                setEnrollmentForm((value) => ({
+                  ...value,
+                  hostname: event.target.value,
+                }))
+              }
+              placeholder="acc3-n1.example.com"
+            />
+          </label>
+          <label>
+            地区
+            <input
+              value={enrollmentForm.region || ""}
+              onChange={(event) =>
+                setEnrollmentForm((value) => ({
+                  ...value,
+                  region: event.target.value,
+                }))
+              }
+              placeholder="SG"
+            />
+          </label>
+          <label>
+            传输路径（可选）
+            <input
+              className="mono"
+              value={enrollmentForm.transportPath || ""}
+              onChange={(event) =>
+                setEnrollmentForm((value) => ({
+                  ...value,
+                  transportPath: event.target.value,
+                }))
+              }
+              placeholder="留空自动生成"
+            />
+          </label>
+        </div>
+        <button
+          className="btn-primary"
+          disabled={
+            enrolling ||
+            !enrollmentForm.nodeId ||
+            !enrollmentForm.accountAlias ||
+            !enrollmentForm.accountId ||
+            !enrollmentForm.hostname
+          }
+          onClick={() => void createEnrollment()}
+        >
+          {enrolling ? "正在生成…" : "生成一次性注册令牌"}
+        </button>
+
+        {createdEnrollment && (
+          <div className="node-enrollment-secret">
+            <strong>令牌只显示这一次</strong>
+            <div className="muted">
+              {remainingText(createdEnrollment.enrollment.expiresAt, now)}过期；
+              部署失败后请撤销并重新生成。
+            </div>
+            <button
+              className="token-copy mono"
+              onClick={() => void copy(createdEnrollment.token)}
+              title="点击复制一次性令牌"
+            >
+              {createdEnrollment.token}
+            </button>
+            <pre className="node-install-command">
+              {[
+                "export NODE_ENROLLMENT_TOKEN='" +
+                  createdEnrollment.token +
+                  "'",
+                "export NODE_ID='" +
+                  createdEnrollment.enrollment.nodeId +
+                  "'",
+                "export NODE_ACCOUNT_ALIAS='" +
+                  createdEnrollment.enrollment.accountAlias +
+                  "'",
+                "export NODE_REGION='" +
+                  (createdEnrollment.enrollment.region || "") +
+                  "'",
+                "export CLOUDFLARE_ACCOUNT_ID='" +
+                  createdEnrollment.enrollment.accountId +
+                  "'",
+                "export NODE_HOSTNAME='" +
+                  createdEnrollment.enrollment.hostname +
+                  "'",
+                "export NODE_DEPLOY_OPERATION='" +
+                  (createdEnrollment.enrollment.kind === "provision"
+                    ? "provision"
+                    : "maintenance") +
+                  "'",
+                "# 另行设置 CLOUDFLARE_API_TOKEN、ROOT_DOMAIN、CONTROL_ROOT_DOMAIN、ADMIN_PASSWORD",
+                "bash infra/scripts/deploy-node.sh",
+              ].join("\n")}
+            </pre>
+          </div>
+        )}
+
+        {enrollments.length > 0 && (
+          <div className="node-enrollment-list">
+            {enrollments.slice(0, 8).map((enrollment) => (
+              <div className="node-enrollment-row" key={enrollment.id}>
+                <div>
+                  <strong className="mono">{enrollment.nodeId}</strong>
+                  <span className="muted">
+                    {" "}
+                    · {enrollment.kind} · {enrollment.status}
+                  </span>
+                  <div className="muted">
+                    {enrollment.hostname} · {fmtTime(enrollment.createdAt)}
+                  </div>
+                </div>
+                {(enrollment.status === "pending" ||
+                  enrollment.status === "issued") && (
+                  <button
+                    className="btn-ghost"
+                    onClick={() => void revokeEnrollment(enrollment.id)}
+                  >
+                    撤销
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       <section className="optimization-panel">
         <div className="optimization-head">
@@ -271,6 +530,7 @@ export function Nodes() {
                 <th>节点</th>
                 <th>域名 / 地区</th>
                 <th>订阅状态</th>
+                <th>节点凭据</th>
                 <th>真实探测</th>
                 <th>连续结果</th>
                 <th>最后检查</th>
@@ -306,6 +566,34 @@ export function Nodes() {
                     </span>
                     {node.enabled !== 1 && (
                       <div className="muted">已停用</div>
+                    )}
+                  </td>
+                  <td>
+                    <div>
+                      {node.auth_mode === "isolated"
+                        ? "独立密钥"
+                        : node.auth_mode === "revoked"
+                          ? "已撤销"
+                          : "共享密钥待迁移"}
+                    </div>
+                    {node.auth_mode !== "revoked" && (
+                      <button
+                        className="btn-ghost node-rotate-button"
+                        onClick={() => prepareExistingNode(node)}
+                      >
+                        {node.auth_mode === "isolated" ? "轮换" : "迁移"}
+                      </button>
+                    )}
+                    {node.credential_fallback_pending === 1 && (
+                      <>
+                        <div className="muted">旧凭据回退仍开启</div>
+                        <button
+                          className="btn-ghost node-rotate-button"
+                          onClick={() => void retirePreviousCredential(node)}
+                        >
+                          收回旧凭据
+                        </button>
+                      </>
                     )}
                   </td>
                   <td>

@@ -40,6 +40,10 @@ for (const path of [
   "/api/landings/landing-1/test",
   "/api/optimized-ips",
   "/api/nodes",
+  "/api/node-enrollments",
+  "/api/node-enrollments/enrollment-1",
+  "/api/nodes/node-1/credential",
+  "/api/nodes/node-1/credential/previous",
 ]) {
   assert(isAdminApiPath(path), `admin API path was not classified: ${path}`);
 }
@@ -52,6 +56,7 @@ for (const path of [
   "/api/nodes/admission",
   "/api/nodes/usage",
   "/api/nodes/node-1/uuids",
+  "/api/node-enrollments/exchange",
 ]) {
   assert(!isAdminApiPath(path), `non-admin path was classified as admin: ${path}`);
 }

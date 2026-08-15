@@ -1271,6 +1271,107 @@ button {
 .optimization-card-head .mono {
   overflow-wrap: anywhere;
 }
+
+.node-enrollment-panel {
+  margin-bottom: 24px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.node-enrollment-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.node-enrollment-head h3 {
+  margin: 0 0 6px;
+}
+
+.node-enrollment-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.node-enrollment-grid label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.node-enrollment-grid input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.node-enrollment-secret {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid #d9a441;
+  border-radius: 12px;
+  background: rgba(217, 164, 65, 0.08);
+}
+
+.token-copy {
+  display: block;
+  width: 100%;
+  margin: 10px 0;
+  padding: 10px;
+  overflow-wrap: anywhere;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.node-install-command {
+  margin: 10px 0 0;
+  padding: 12px;
+  overflow-x: auto;
+  border-radius: 8px;
+  background: #111827;
+  color: #e5e7eb;
+  font-size: 12px;
+}
+
+.node-enrollment-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.node-enrollment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.node-rotate-button {
+  margin-top: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .node-enrollment-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .optimization-state {
   flex: 0 0 auto;
   padding: 2px 8px;

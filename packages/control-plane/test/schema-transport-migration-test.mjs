@@ -73,6 +73,21 @@ try {
   ) {
     throw new Error("legacy users must be backfilled as static compatibility devices");
   }
+  const legacyCredential = executeJson(
+    "SELECT node_id,auth_mode,current_salt,legacy_fallback FROM node_credentials WHERE node_id='legacy-node';",
+  );
+  const isolationMigration = executeJson(
+    "SELECT id FROM schema_migrations WHERE id='node-isolation-v1';",
+  );
+  if (
+    legacyCredential.length !== 1 ||
+    legacyCredential[0]?.auth_mode !== "legacy" ||
+    legacyCredential[0]?.current_salt !== null ||
+    legacyCredential[0]?.legacy_fallback !== 0 ||
+    isolationMigration.length !== 1
+  ) {
+    throw new Error("existing nodes must enter the explicit one-time legacy migration state");
+  }
   wrangler([
     "d1",
     "execute",

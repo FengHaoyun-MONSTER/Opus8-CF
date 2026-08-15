@@ -83,6 +83,18 @@ import {
   type NodeAuthResult,
 } from "./node-auth";
 import {
+  activateNodeEnrollment,
+  createNodeEnrollment,
+  deleteNodeRegistration,
+  exchangeNodeEnrollment,
+  listNodeEnrollments,
+  NodeEnrollmentError,
+  retirePreviousNodeCredential,
+  revokeNodeCredential,
+  revokeNodeEnrollment,
+  type CreateNodeEnrollmentInput,
+} from "./node-enrollment";
+import {
   enforceSubscriptionRateLimit,
   validSubscriptionToken,
 } from "./subscription-rate-limit";
@@ -966,6 +978,96 @@ export default {
         if (!(await requireAdmin(req, env))) return err("未授权", 401);
         return json({ nodes: await listNodes(env) });
       }
+      if (p === "/api/node-enrollments" && m === "GET") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return privateJson({ enrollments: await listNodeEnrollments(env) });
+      }
+      if (p === "/api/node-enrollments" && m === "POST") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        try {
+          const input = (await req.json()) as CreateNodeEnrollmentInput;
+          return privateJson(
+            await createNodeEnrollment(
+              env,
+              input,
+              proxyProvisioningAllowed(env),
+            ),
+            201,
+          );
+        } catch (error) {
+          if (error instanceof NodeEnrollmentError) {
+            return privateErr(error.message, error.status);
+          }
+          throw error;
+        }
+      }
+      if (p === "/api/node-enrollments/exchange" && m === "POST") {
+        try {
+          const input = (await req.json()) as {
+            token?: unknown;
+            nodeId?: unknown;
+            accountId?: unknown;
+          };
+          return privateJson(await exchangeNodeEnrollment(env, input));
+        } catch (error) {
+          if (error instanceof NodeEnrollmentError) {
+            return privateErr(error.message, error.status);
+          }
+          throw error;
+        }
+      }
+      const enrollmentMatch = p.match(
+        /^\/api\/node-enrollments\/([A-Za-z0-9-]+)$/,
+      );
+      if (enrollmentMatch && m === "DELETE") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        return (await revokeNodeEnrollment(env, enrollmentMatch[1]))
+          ? privateJson({ ok: true })
+          : privateErr("注册任务不存在或不可撤销", 404);
+      }
+      const nodeCredentialMatch = p.match(
+        /^\/api\/nodes\/([A-Za-z0-9._:-]+)\/credential$/,
+      );
+      if (nodeCredentialMatch && m === "DELETE") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        if (!(await revokeNodeCredential(env, nodeCredentialMatch[1]))) {
+          return err("节点凭据不存在或已撤销", 404);
+        }
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          ok: true,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
+      }
+      const nodePreviousCredentialMatch = p.match(
+        /^\/api\/nodes\/([A-Za-z0-9._:-]+)\/credential\/previous$/,
+      );
+      if (nodePreviousCredentialMatch && m === "DELETE") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        if (
+          !(await retirePreviousNodeCredential(
+            env,
+            nodePreviousCredentialMatch[1],
+          ))
+        ) {
+          return err("节点没有待收回的旧凭据", 404);
+        }
+        return privateJson({ ok: true });
+      }
+      const nodeDeleteMatch = p.match(/^\/api\/nodes\/([A-Za-z0-9._:-]+)$/);
+      if (nodeDeleteMatch && m === "DELETE") {
+        if (!(await requireAdmin(req, env))) return err("未授权", 401);
+        if (!(await deleteNodeRegistration(env, nodeDeleteMatch[1]))) {
+          return err("节点不存在", 404);
+        }
+        const policy = await publishEdgePolicyChange(env);
+        return json({
+          ok: true,
+          policyVersion: policy.version,
+          cacheInvalidation: policy.invalidation,
+        });
+      }
       if (p === "/api/nodes/register" && m === "POST") {
         const body = await req.text();
         const auth = await verifyNodeSig(req, env, body);
@@ -1007,6 +1109,52 @@ export default {
           transportPath = normalizeTransportPath(b.transportPath);
           if (!transportPath) return err("传输路径无效或命中保留路径", 400);
         }
+        if (auth.authKind === "enrollment") {
+          if (!auth.enrollmentId) return err("注册任务无效", 401);
+          if (!proxyProvisioningAllowed(env) && !(await getNode(env, auth.nodeId))) {
+            return err(
+              "当前合规策略不允许创建新的 Cloudflare 代理节点",
+              403,
+            );
+          }
+          try {
+            const activated = await activateNodeEnrollment(
+              env,
+              auth.enrollmentId,
+              b,
+              auth.timestamp,
+            );
+            return privateJson({
+              ok: true,
+              authMode: "isolated",
+              transportPath: activated.transport_path,
+            });
+          } catch (error) {
+            if (error instanceof NodeEnrollmentError) {
+              return privateErr(error.message, error.status);
+            }
+            throw error;
+          }
+        }
+        if (auth.authKind !== "isolated-current") {
+          return err("节点必须通过一次性注册任务迁移独立凭据", 403);
+        }
+        const existing = await getNode(env, auth.nodeId);
+        const requestedHostname = b.hostname
+          .trim()
+          .toLowerCase()
+          .replace(/\.$/, "");
+        const existingHostname = existing?.hostname
+          .trim()
+          .toLowerCase()
+          .replace(/\.$/, "");
+        if (
+          !existing ||
+          existing.account_alias !== b.accountAlias ||
+          existingHostname !== requestedHostname
+        ) {
+          return err("独立节点凭据不能改变节点账户或域名", 409);
+        }
         const now = auth.timestamp;
         const rec: NodeRecord = {
           id: auth.nodeId,
@@ -1024,6 +1172,7 @@ export default {
         await upsertNode(env, rec);
         return json({
           ok: true,
+          authMode: "isolated",
           ...(transportPath ? { transportPath } : {}),
         });
       }
@@ -1135,7 +1284,7 @@ export default {
         if (!auth || auth.nodeId !== uuidsMatch[1])
           return err("签名校验失败", 401);
         const [policy, routing, landings, policyVersion] = await Promise.all([
-          activeUserPolicy(env),
+          activeUserPolicy(env, auth.nodeId),
           getUnlockHosts(env),
           runtimeLandings(env),
           getEdgePolicyVersion(env),

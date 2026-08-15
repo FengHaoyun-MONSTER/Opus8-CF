@@ -41,15 +41,15 @@
   import { registerNode, heartbeat } from './platform/register'
   ctx.waitUntil(heartbeat(env, 'healthy', 反代IP))
   ```
-  首次部署由 CI 触发一次 `registerNode`（`deploy-nodes.yml` 里 curl 一个 `/__register` 内部路由，
-  或部署后调用）。
+  首次部署前由管理员创建一次性注册任务；CI 用绑定 Node ID、Cloudflare Account ID、
+  域名和路径的令牌换取节点独立密钥，然后签名调用 `registerNode`。
 
 ### ④ 环境变量（wrangler.toml / CI 注入）
 | 变量 | 含义 |
 |---|---|
 | `CONTROL_PLANE_URL` | 控制面 API 基址，如 `https://api.<ROOT_DOMAIN>` |
 | `NODE_ID` | 部署时生成的节点 id |
-| `NODE_HMAC_SECRET` | 与控制面一致的签名密钥（=GitHub secret `NODE_HMAC_SECRET`） |
+| `NODE_HMAC_SECRET` | 一次性注册任务派生的每节点独立签名密钥（仅注入该节点 Worker） |
 | `NODE_HOSTNAME` / `NODE_ACCOUNT_ALIAS` / `NODE_REGION` | 自注册元数据 |
 | `KV` | 绑定本账号 KV，缓存有效 UUID 集与分流规则 |
 | `SERVICES_IP/USER/CODE` + 端口 | 落地机（分流出口用） |

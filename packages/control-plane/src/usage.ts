@@ -1,4 +1,6 @@
 import type { Env } from "./db";
+import { deviceCredentialUuids } from "./device-credentials";
+import { userAssignedToNode } from "./node-assignment";
 
 const LEASE_TTL_MS = 5 * 60_000;
 const DAY_MS = 86_400_000;
@@ -34,6 +36,72 @@ function boundedInt(value: unknown, max: number): number | null {
   return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= max ? parsed : null;
 }
 
+async function resolveAuthorizedCredentialOwner(
+  env: Env,
+  nodeId: string,
+  requestedUserId: string | undefined,
+  credentialUuid: string,
+  now: number,
+): Promise<string | null> {
+  const node = await env.DB.prepare(
+    "SELECT id,account_alias,enabled FROM nodes WHERE id=?1",
+  )
+    .bind(nodeId)
+    .first<{ id: string; account_alias: string; enabled: number }>();
+  if (!node || Number(node.enabled) !== 1) return null;
+
+  if (!requestedUserId) {
+    const owner = await env.DB.prepare(
+      "SELECT u.id,u.node_group FROM users u " +
+        "JOIN user_devices d ON d.user_id=u.id " +
+        "WHERE d.base_uuid=?1 AND d.credential_mode='static' " +
+        "AND d.enabled=1 AND u.enabled=1 " +
+        "AND (u.expire_at IS NULL OR u.expire_at>?2) LIMIT 1",
+    )
+      .bind(credentialUuid, now)
+      .first<{ id: string; node_group: string | null }>();
+    return owner &&
+      userAssignedToNode(owner.node_group, node.id, node.account_alias)
+      ? owner.id
+      : null;
+  }
+
+  const { results } = await env.DB.prepare(
+    "SELECT u.id,u.node_group,d.base_uuid,d.credential_mode " +
+      "FROM users u JOIN user_devices d ON d.user_id=u.id " +
+      "WHERE u.id=?1 AND u.enabled=1 " +
+      "AND (u.expire_at IS NULL OR u.expire_at>?2) AND d.enabled=1",
+  )
+    .bind(requestedUserId, now)
+    .all<{
+      id: string;
+      node_group: string | null;
+      base_uuid: string;
+      credential_mode: "static" | "rotating";
+    }>();
+  const devices = results || [];
+  if (
+    devices.length === 0 ||
+    !userAssignedToNode(
+      devices[0].node_group,
+      node.id,
+      node.account_alias,
+    )
+  ) {
+    return null;
+  }
+  for (const device of devices) {
+    const candidates = await deviceCredentialUuids(
+      env.NODE_HMAC_SECRET,
+      device.base_uuid,
+      device.credential_mode,
+      now,
+    );
+    if (candidates.includes(credentialUuid.toLowerCase())) return device.id;
+  }
+  return null;
+}
+
 export async function admitConnection(
   env: Env,
   input: AdmissionInput,
@@ -52,21 +120,17 @@ export async function admitConnection(
   if (!Number.isSafeInteger(signedAt)) {
     throw new Error("invalid admission timestamp");
   }
-  const now = signedAt;
+  const now = Date.now();
   const dayAgo = now - DAY_MS;
   const expiresAt = now + LEASE_TTL_MS;
-  const userId =
-    input.userId
-    || (
-      await env.DB.prepare(
-        `SELECT u.id FROM users u
-         JOIN user_devices d ON d.user_id=u.id
-         WHERE d.base_uuid=?1 AND d.credential_mode='static' LIMIT 1`,
-      )
-        .bind(input.uuid)
-        .first<{ id: string }>()
-    )?.id;
-  if (!userId) throw new Error("unknown credential owner");
+  const userId = await resolveAuthorizedCredentialOwner(
+    env,
+    input.nodeId,
+    input.userId,
+    input.uuid.toLowerCase(),
+    now,
+  );
+  if (!userId) throw new Error("credential is not authorized for this node");
   const results = await env.DB.batch([
     env.DB.prepare(
       `DELETE FROM active_leases
@@ -224,6 +288,19 @@ export async function recordUsage(
   }
 
   const now = Date.now();
+  for (const event of events) {
+    const owner = await resolveAuthorizedCredentialOwner(
+      env,
+      nodeId,
+      event.userId,
+      event.uuid,
+      now,
+    );
+    if (!owner) {
+      throw new Error("usage credential is not authorized for this node");
+    }
+    event.userId = owner;
+  }
   const statements: D1PreparedStatement[] = [];
   for (const event of events) {
     statements.push(

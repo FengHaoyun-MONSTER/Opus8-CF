@@ -18,6 +18,68 @@ CREATE TABLE IF NOT EXISTS nodes (
   created_at    INTEGER NOT NULL
 );
 
+-- 节点运行凭据。控制面只保存随机 salt，实际节点密钥由控制面根密钥派生；
+-- 任一节点泄露后不能计算其他节点的密钥。
+CREATE TABLE IF NOT EXISTS node_credentials (
+  node_id         TEXT PRIMARY KEY,
+  auth_mode       TEXT NOT NULL DEFAULT 'legacy'
+    CHECK (auth_mode IN ('legacy', 'isolated', 'revoked')),
+  current_salt    TEXT,
+  previous_salt   TEXT,
+  legacy_fallback INTEGER NOT NULL DEFAULT 0
+    CHECK (legacy_fallback IN (0, 1)),
+  activated_at    INTEGER,
+  updated_at      INTEGER NOT NULL,
+  FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE,
+  CHECK (auth_mode != 'isolated' OR current_salt IS NOT NULL)
+);
+
+-- 一次性节点注册/轮换令牌。token 本体只返回一次，库中仅保存 HMAC 摘要。
+CREATE TABLE IF NOT EXISTS node_enrollments (
+  id              TEXT PRIMARY KEY,
+  node_id         TEXT NOT NULL,
+  kind            TEXT NOT NULL
+    CHECK (kind IN ('provision', 'migrate', 'rotate')),
+  status          TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'issued', 'activated', 'revoked')),
+  account_alias   TEXT NOT NULL,
+  account_id      TEXT NOT NULL,
+  hostname        TEXT NOT NULL,
+  region          TEXT,
+  capabilities    TEXT NOT NULL DEFAULT '[]',
+  preferred_ip    TEXT,
+  transport_path  TEXT NOT NULL,
+  token_hash      TEXT UNIQUE NOT NULL,
+  secret_salt     TEXT NOT NULL,
+  expires_at      INTEGER NOT NULL,
+  issued_at       INTEGER,
+  activated_at    INTEGER,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_enrollments_node_status
+  ON node_enrollments(node_id, status, expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_node_enrollments_token
+  ON node_enrollments(token_hash);
+
+-- 只在首次引入节点隔离时将当时已经存在的生产节点标成 legacy。
+-- 新节点若注册事务失败，后续 schema 重放不会错误地为其开启共享根密钥回退。
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id          TEXT PRIMARY KEY,
+  applied_at  INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO node_credentials (node_id, auth_mode, updated_at)
+SELECT id, 'legacy', 0 FROM nodes
+WHERE NOT EXISTS (
+  SELECT 1 FROM schema_migrations WHERE id='node-isolation-v1'
+);
+
+INSERT OR IGNORE INTO schema_migrations (id, applied_at)
+VALUES ('node-isolation-v1', 0);
+
 -- 外部端到端健康检查状态。节点心跳只证明 Worker 仍能运行，不能覆盖这里的真实 VLESS 探测结论。
 CREATE TABLE IF NOT EXISTS node_health_state (
   node_id               TEXT PRIMARY KEY,
@@ -184,7 +246,7 @@ CREATE TABLE IF NOT EXISTS user_limits (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
--- 仅保存由 NODE_HMAC_SECRET HMAC 后的 IP，不保存客户原始 IP。
+-- 仅保存由控制面按用户派生的稳定 HMAC 密钥生成的 IP 指纹，不保存客户原始 IP。
 CREATE TABLE IF NOT EXISTS active_leases (
   user_id     TEXT NOT NULL,
   uuid        TEXT NOT NULL,

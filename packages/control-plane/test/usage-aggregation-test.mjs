@@ -25,10 +25,34 @@ class Statement {
     this.values = values;
     return this;
   }
+
+  async first() {
+    if (/FROM nodes WHERE id=/i.test(this.sql)) {
+      return { id: "node-1", account_alias: "acc1", enabled: 1 };
+    }
+    throw new Error(`unexpected first query: ${this.sql}`);
+  }
+
+  async all() {
+    if (/FROM users u JOIN user_devices d/i.test(this.sql)) {
+      return {
+        results: [
+          {
+            id: "user-1",
+            node_group: null,
+            base_uuid: "4ca6da3f-0876-4af3-a03b-b286cdd03db6",
+            credential_mode: "static",
+          },
+        ],
+      };
+    }
+    throw new Error(`unexpected all query: ${this.sql}`);
+  }
 }
 
 const batches = [];
 const env = {
+  NODE_HMAC_SECRET: "usage-test-root-secret-32-bytes-minimum",
   DB: {
     prepare(sql) {
       return new Statement(sql);

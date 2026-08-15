@@ -7,6 +7,7 @@ import {
   type UserRecord,
   type SubFormat,
 } from "@opus8-cf/shared";
+import { userAssignedToNode } from "./node-assignment";
 
 const MAX_IPS_PER_NODE = 3;
 
@@ -22,14 +23,9 @@ export function nodesForUser(user: UserRecord, all: NodeRecord[]): NodeRecord[] 
       n.health !== "banned" &&
       nodeTransportPath(n.transport_path) !== null,
   );
-  let group: string[] = [];
-  try {
-    group = user.node_group ? (JSON.parse(user.node_group) as string[]) : [];
-  } catch {
-    group = [];
-  }
-  if (group.length === 0) return healthy;
-  return healthy.filter((n) => group.includes(n.account_alias) || group.includes(n.id));
+  return healthy.filter((node) =>
+    userAssignedToNode(user.node_group, node.id, node.account_alias),
+  );
 }
 
 interface Entry {

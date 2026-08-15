@@ -9,7 +9,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 CONTROL_PLANE_URL = ""   # 控制面 API 基址，如 https://api.<ROOT_DOMAIN>
 NODE_ID = ""             # 部署时生成
-# HMAC 共享密钥用 secret 注入：wrangler secret put NODE_HMAC_SECRET
+# 每节点独立 HMAC 密钥由一次性注册任务下发，再用 secret 注入：wrangler secret put NODE_HMAC_SECRET
 
 # KV：缓存同步下来的「有效 UUID 集」/分流规则（每账号一个）
 # [[kv_namespaces]]

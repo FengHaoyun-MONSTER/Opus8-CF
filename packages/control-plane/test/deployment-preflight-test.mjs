@@ -68,3 +68,19 @@ test("workflow and deploy script inject both integration secrets", () => {
   }
   assert.match(deployScript, /control-deploy-preflight\.mjs/);
 });
+
+test("node jobs use just-in-time enrollment without the control root", () => {
+  const workflow = readFileSync(
+    `${repositoryRoot}.github/workflows/deploy-nodes.yml`,
+    "utf8",
+  );
+  const zeroTrustWorkflow = readFileSync(
+    `${repositoryRoot}.github/workflows/enroll-zero-trust.yml`,
+    "utf8",
+  );
+  assert.doesNotMatch(workflow, /secrets\.NODE_HMAC_SECRET/);
+  assert.doesNotMatch(zeroTrustWorkflow, /secrets\.NODE_HMAC_SECRET/);
+  assert.match(workflow, /api\/node-enrollments/);
+  assert.match(workflow, /CLOUDFLARE_ACCOUNT_ID/);
+  assert.match(workflow, /NODE_ENROLLMENT_TOKEN/);
+});

@@ -23,7 +23,24 @@ const ALLOWED_HEADERS = new Set(["authorization", "content-type"]);
 const ALLOW_METHODS_HEADER = [...ALLOWED_METHODS].join(", ");
 
 export function isAdminApiPath(pathname: string): boolean {
-  if (pathname === "/api/nodes") return true;
+  if (pathname === "/api/nodes" || pathname === "/api/node-enrollments") {
+    return true;
+  }
+  if (/^\/api\/node-enrollments\/[A-Za-z0-9-]+$/.test(pathname)) {
+    return pathname !== "/api/node-enrollments/exchange";
+  }
+  if (
+    /^\/api\/nodes\/[A-Za-z0-9._:-]+(?:\/credential(?:\/previous)?)?$/.test(
+      pathname,
+    )
+  ) {
+    return ![
+      "/api/nodes/register",
+      "/api/nodes/heartbeat",
+      "/api/nodes/admission",
+      "/api/nodes/usage",
+    ].includes(pathname);
+  }
   return ADMIN_API_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(prefix + "/"),
   );

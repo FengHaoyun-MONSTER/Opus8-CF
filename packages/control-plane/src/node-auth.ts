@@ -7,11 +7,12 @@ import {
   timingSafeEqual,
 } from "@opus8-cf/shared";
 import {
-  secretCandidates,
-  type SecretSlot,
-} from "./key-rotation";
+  nodeAuthSecretCandidates,
+  type NodeAuthSecretCandidate,
+} from "./node-enrollment";
 
 export interface NodeAuthEnv {
+  DB?: D1Database;
   NODE_HMAC_SECRET: string;
   NODE_HMAC_SECRET_PREVIOUS?: string;
   HMAC_V1_ACCEPT_UNTIL?: string;
@@ -22,7 +23,11 @@ export interface NodeAuthResult {
   nodeId: string;
   timestamp: number;
   version: 1 | 2;
-  secretSlot: SecretSlot;
+  secretSlot: "current" | "previous";
+  authKind: NodeAuthSecretCandidate["authKind"];
+  enrollmentId?: string;
+  /** Internal only: encrypt/sign a response for exactly the credential used. */
+  secret: string;
 }
 
 function validTimestamp(value: string): number | null {
@@ -60,7 +65,7 @@ function legacyTargetAllowed(request: Request, nodeId: string): boolean {
   if (url.search) return false;
   const method = request.method.toUpperCase();
   if (method === "GET") {
-    return url.pathname === `/api/nodes/${nodeId}/uuids`;
+    return url.pathname === "/api/nodes/" + nodeId + "/uuids";
   }
   return (
     method === "POST" &&
@@ -70,6 +75,67 @@ function legacyTargetAllowed(request: Request, nodeId: string): boolean {
       "/api/nodes/usage",
     ].includes(url.pathname)
   );
+}
+
+function enrollmentTarget(request: Request): boolean {
+  const url = new URL(request.url);
+  return (
+    request.method.toUpperCase() === "POST" &&
+    url.pathname === "/api/nodes/register" &&
+    !url.search
+  );
+}
+
+function fallbackCandidates(env: NodeAuthEnv): NodeAuthSecretCandidate[] {
+  const values: NodeAuthSecretCandidate[] = [
+    {
+      secret: env.NODE_HMAC_SECRET,
+      authKind: "legacy",
+      rootSlot: "current",
+    },
+  ];
+  if (
+    env.NODE_HMAC_SECRET_PREVIOUS &&
+    env.NODE_HMAC_SECRET_PREVIOUS !== env.NODE_HMAC_SECRET
+  ) {
+    values.push({
+      secret: env.NODE_HMAC_SECRET_PREVIOUS,
+      authKind: "legacy",
+      rootSlot: "previous",
+    });
+  }
+  return values;
+}
+
+async function requestCandidates(
+  request: Request,
+  env: NodeAuthEnv,
+  nodeId: string,
+  now: number,
+): Promise<NodeAuthSecretCandidate[]> {
+  if (!env.DB) return fallbackCandidates(env);
+  return nodeAuthSecretCandidates(
+    env as NodeAuthEnv & { DB: D1Database },
+    nodeId,
+    enrollmentTarget(request),
+    now,
+  );
+}
+
+export async function nodeRuntimeSecretCandidates(
+  env: NodeAuthEnv,
+  nodeId: string,
+  now = Date.now(),
+): Promise<string[]> {
+  const candidates = env.DB
+    ? await nodeAuthSecretCandidates(
+        env as NodeAuthEnv & { DB: D1Database },
+        nodeId,
+        false,
+        now,
+      )
+    : fallbackCandidates(env);
+  return [...new Set(candidates.map((candidate) => candidate.secret))];
 }
 
 export async function verifyNodeRequest(
@@ -89,6 +155,7 @@ export async function verifyNodeRequest(
     return null;
   }
 
+  const candidates = await requestCandidates(request, env, nodeId, now);
   const signatureV2 = request.headers.get(SIGN_HEADERS.signV2);
   if (signatureV2 !== null) {
     if (!validSignature(signatureV2)) return null;
@@ -99,17 +166,17 @@ export async function verifyNodeRequest(
       request.url,
       body,
     );
-    for (const candidate of secretCandidates(
-      env.NODE_HMAC_SECRET,
-      env.NODE_HMAC_SECRET_PREVIOUS,
-    )) {
+    for (const candidate of candidates) {
       const expectedV2 = await hmacSign(candidate.secret, message);
       if (timingSafeEqual(expectedV2, signatureV2.toLowerCase())) {
         return {
           nodeId,
           timestamp,
           version: 2,
-          secretSlot: candidate.slot,
+          secretSlot: candidate.rootSlot,
+          authKind: candidate.authKind,
+          enrollmentId: candidate.enrollmentId,
+          secret: candidate.secret,
         };
       }
     }
@@ -126,9 +193,8 @@ export async function verifyNodeRequest(
   const signatureV1 = request.headers.get(SIGN_HEADERS.sign) || "";
   if (!validSignature(signatureV1)) return null;
   const message = nodeSignatureMessageV1(timestampText, nodeId, body);
-  for (const candidate of secretCandidates(
-    env.NODE_HMAC_SECRET,
-    env.NODE_HMAC_SECRET_PREVIOUS,
+  for (const candidate of candidates.filter(
+    (value) => value.authKind === "legacy",
   )) {
     const expectedV1 = await hmacSign(candidate.secret, message);
     if (timingSafeEqual(expectedV1, signatureV1.toLowerCase())) {
@@ -136,7 +202,9 @@ export async function verifyNodeRequest(
         nodeId,
         timestamp,
         version: 1,
-        secretSlot: candidate.slot,
+        secretSlot: candidate.rootSlot,
+        authKind: candidate.authKind,
+        secret: candidate.secret,
       };
     }
   }
@@ -144,15 +212,8 @@ export async function verifyNodeRequest(
 }
 
 export function nodeSecretForAuth(
-  env: NodeAuthEnv,
-  auth: Pick<NodeAuthResult, "secretSlot">,
+  _env: NodeAuthEnv,
+  auth: Pick<NodeAuthResult, "secret">,
 ): string {
-  if (
-    auth.secretSlot === "previous" &&
-    env.NODE_HMAC_SECRET_PREVIOUS &&
-    env.NODE_HMAC_SECRET_PREVIOUS !== env.NODE_HMAC_SECRET
-  ) {
-    return env.NODE_HMAC_SECRET_PREVIOUS;
-  }
-  return env.NODE_HMAC_SECRET;
+  return auth.secret;
 }

@@ -903,8 +903,8 @@ async function OPUS8_ipHash(runtime) {
     || request.headers.get("x-real-ip")
     || "unknown";
   return OPUS8_hmac(
-    runtime.env.NODE_HMAC_SECRET,
-    "ip:v1:" + (runtime.ipHashKey || runtime.uuid) + ":" + rawIp,
+    runtime.ipHashKey || runtime.uuid,
+    "ip:v2:" + rawIp,
   );
 }
 

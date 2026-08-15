@@ -2,8 +2,9 @@ import crypto from "node:crypto";
 
 const base = process.env.OPUS8_TEST_BASE || "http://127.0.0.1:8787";
 const adminPassword = process.env.OPUS8_TEST_ADMIN || "test-admin";
-const nodeSecret =
+const nodeRootSecret =
   process.env.OPUS8_TEST_NODE_SECRET || "test-node-hmac-secret-32-bytes!!";
+let nodeSecret = nodeRootSecret;
 const integrationKeyId =
   process.env.OPUS8_TEST_INTEGRATION_KEY_ID || "freedompost-local";
 const integrationSecret =
@@ -27,15 +28,21 @@ async function jsonResponse(response) {
   return data;
 }
 
-async function signedPost(path, payload, timestamp = String(Date.now())) {
+async function signedPost(
+  path,
+  payload,
+  timestamp = String(Date.now()),
+  identity = nodeId,
+  key = nodeSecret,
+) {
   const body = JSON.stringify(payload);
   const target = new URL(path, base).pathname + new URL(path, base).search;
   const signature = crypto
-    .createHmac("sha256", nodeSecret)
+    .createHmac("sha256", key)
     .update([
       "opus8-hmac-v2",
       timestamp,
-      nodeId,
+      identity,
       "POST",
       target,
       body,
@@ -46,21 +53,26 @@ async function signedPost(path, payload, timestamp = String(Date.now())) {
     headers: {
       "content-type": "application/json",
       "x-opus8-ts": timestamp,
-      "x-opus8-node": nodeId,
+      "x-opus8-node": identity,
       "x-opus8-sign-v2": signature,
     },
     body,
   });
 }
 
-async function signedGet(path, timestamp = String(Date.now())) {
+async function signedGet(
+  path,
+  timestamp = String(Date.now()),
+  identity = nodeId,
+  key = nodeSecret,
+) {
   const target = new URL(path, base).pathname + new URL(path, base).search;
   const signature = crypto
-    .createHmac("sha256", nodeSecret)
+    .createHmac("sha256", key)
     .update([
       "opus8-hmac-v2",
       timestamp,
-      nodeId,
+      identity,
       "GET",
       target,
       "",
@@ -69,7 +81,7 @@ async function signedGet(path, timestamp = String(Date.now())) {
   return fetch(base + path, {
     headers: {
       "x-opus8-ts": timestamp,
-      "x-opus8-node": nodeId,
+      "x-opus8-node": identity,
       "x-opus8-sign-v2": signature,
     },
   });
@@ -153,6 +165,75 @@ assert(
   "landing key migration must reject requests without a distinct previous key",
 );
 
+const unenrolledRegistration = await signedPost("/api/nodes/register", {
+  nodeId,
+  accountAlias: "integration",
+  hostname: nodeHost,
+  region: "test",
+  capabilities: ["vless", "ws"],
+  transportPath,
+});
+assert(
+  unenrolledRegistration.status === 401,
+  "the shared control root must not register an unknown node",
+);
+
+const accountId = "a".repeat(32);
+const enrollmentCreated = await jsonResponse(
+  await fetch(`${base}/api/node-enrollments`, {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({
+      nodeId,
+      accountAlias: "integration",
+      accountId,
+      hostname: nodeHost,
+      region: "test",
+      capabilities: ["vless", "ws"],
+      transportPath,
+    }),
+  }),
+);
+assert(
+  enrollmentCreated.enrollment?.kind === "provision" &&
+    /^[a-f0-9]{64}$/.test(enrollmentCreated.token || ""),
+  "admin enrollment must return a one-time token",
+);
+const wrongAccountExchange = await fetch(`${base}/api/node-enrollments/exchange`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    token: enrollmentCreated.token,
+    nodeId,
+    accountId: "b".repeat(32),
+  }),
+});
+assert(
+  wrongAccountExchange.status === 401,
+  "enrollment token must be bound to the declared Cloudflare account",
+);
+const enrollmentExchange = await jsonResponse(
+  await fetch(`${base}/api/node-enrollments/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: enrollmentCreated.token, nodeId, accountId }),
+  }),
+);
+nodeSecret = enrollmentExchange.nodeSecret;
+assert(
+  /^[a-f0-9]{64}$/.test(nodeSecret) && nodeSecret !== nodeRootSecret,
+  "enrollment must issue a node-specific key instead of the control root",
+);
+const replayedExchange = await fetch(`${base}/api/node-enrollments/exchange`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ token: enrollmentCreated.token, nodeId, accountId }),
+});
+assert(
+  replayedExchange.status === 401,
+  "one-time enrollment token must reject replay",
+);
+
 const registered = await jsonResponse(
   await signedPost("/api/nodes/register", {
     nodeId,
@@ -164,8 +245,151 @@ const registered = await jsonResponse(
   }),
 );
 assert(
-  registered.transportPath === transportPath,
+  registered.transportPath === transportPath && registered.authMode === "isolated",
   "node registration must acknowledge the canonical transport path",
+);
+const rootImpersonation = await signedPost(
+  "/api/nodes/heartbeat",
+  { nodeId, health: "healthy" },
+  String(Date.now()),
+  nodeId,
+  nodeRootSecret,
+);
+assert(
+  rootImpersonation.status === 401,
+  "the shared control root must stop authenticating a migrated node",
+);
+
+const rotationEnrollment = await jsonResponse(
+  await fetch(`${base}/api/node-enrollments`, {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({
+      nodeId,
+      accountAlias: "integration",
+      accountId,
+      hostname: nodeHost,
+      region: "test",
+      capabilities: ["vless", "ws"],
+      transportPath,
+    }),
+  }),
+);
+assert(
+  rotationEnrollment.enrollment?.kind === "rotate",
+  "an isolated node must create a rotation enrollment",
+);
+const rotationExchange = await jsonResponse(
+  await fetch(`${base}/api/node-enrollments/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: rotationEnrollment.token, nodeId, accountId }),
+  }),
+);
+const previousNodeSecret = nodeSecret;
+nodeSecret = rotationExchange.nodeSecret;
+await jsonResponse(
+  await signedPost("/api/nodes/register", {
+    nodeId,
+    accountAlias: "integration",
+    hostname: nodeHost,
+    region: "test",
+    capabilities: ["vless", "ws"],
+    transportPath,
+  }),
+);
+const previousCredentialGrace = await signedPost(
+  "/api/nodes/heartbeat",
+  { nodeId, health: "healthy" },
+  String(Date.now()),
+  nodeId,
+  previousNodeSecret,
+);
+assert(
+  previousCredentialGrace.status === 200,
+  "the previous node key must remain valid during a staged rotation",
+);
+const fallbackNodes = await jsonResponse(
+  await fetch(`${base}/api/nodes`, { headers: adminHeaders }),
+);
+assert(
+  fallbackNodes.nodes.find((item) => item.id === nodeId)
+    ?.credential_fallback_pending === 1,
+  "the admin API must expose an unretired previous credential",
+);
+await jsonResponse(
+  await fetch(`${base}/api/nodes/${nodeId}/credential/previous`, {
+    method: "DELETE",
+    headers: adminHeaders,
+  }),
+);
+const retiredCredential = await signedPost(
+  "/api/nodes/heartbeat",
+  { nodeId, health: "healthy" },
+  String(Date.now()),
+  nodeId,
+  previousNodeSecret,
+);
+assert(
+  retiredCredential.status === 401,
+  "the previous node key must fail after explicit retirement",
+);
+await jsonResponse(
+  await signedPost("/api/nodes/heartbeat", { nodeId, health: "healthy" }),
+);
+
+const otherNodeId = `${nodeId}-other`;
+const otherNodeHost = `${otherNodeId}.example.com`;
+const otherTransportPath = `${transportPath}-other`;
+const otherEnrollment = await jsonResponse(
+  await fetch(`${base}/api/node-enrollments`, {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({
+      nodeId: otherNodeId,
+      accountAlias: "other-account",
+      accountId: "c".repeat(32),
+      hostname: otherNodeHost,
+      region: "other",
+      transportPath: otherTransportPath,
+    }),
+  }),
+);
+const otherExchange = await jsonResponse(
+  await fetch(`${base}/api/node-enrollments/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      token: otherEnrollment.token,
+      nodeId: otherNodeId,
+      accountId: "c".repeat(32),
+    }),
+  }),
+);
+const otherNodeSecret = otherExchange.nodeSecret;
+await jsonResponse(
+  await signedPost(
+    "/api/nodes/register",
+    {
+      nodeId: otherNodeId,
+      accountAlias: "other-account",
+      hostname: otherNodeHost,
+      region: "other",
+      transportPath: otherTransportPath,
+    },
+    String(Date.now()),
+    otherNodeId,
+    otherNodeSecret,
+  ),
+);
+const isolatedNodes = await jsonResponse(
+  await fetch(`${base}/api/nodes`, { headers: adminHeaders }),
+);
+assert(
+  isolatedNodes.nodes.filter((item) =>
+    item.id === nodeId || item.id === otherNodeId
+  ).every((item) => item.auth_mode === "isolated"),
+  "activated nodes must expose isolated credential state",
 );
 const reservedTransport = await signedPost("/api/nodes/register", {
   nodeId,
@@ -442,6 +666,7 @@ try {
       headers: adminHeaders,
       body: JSON.stringify({
         username,
+        nodeGroup: [nodeId],
         durationDays: 1,
         deviceLimit: 1,
         ipLimit24h: 2,
@@ -491,9 +716,61 @@ try {
         (policy) =>
           policy.uuid !== userUuid
           && policy.meteringEnabled === true
-          && policy.ipHashKey === `user:${userId}`,
+          && /^[a-f0-9]{64}$/.test(policy.ipHashKey),
       ),
     `edge policy must accept only the device credential with stable per-user IP scope: ${JSON.stringify(userPolicies)}`,
+  );
+  const otherNodePolicy = await jsonResponse(
+    await signedGet(
+      `/api/nodes/${otherNodeId}/uuids`,
+      String(Date.now()),
+      otherNodeId,
+      otherNodeSecret,
+    ),
+  );
+  assert(
+    !otherNodePolicy.uuids.includes(activeCredentialUuid) &&
+      !otherNodePolicy.accessPolicies.some((policy) => policy.userId === userId),
+    "a node must not receive credentials assigned to another node",
+  );
+  const crossNodeAdmission = await signedPost(
+    "/api/nodes/admission",
+    {
+      nodeId: otherNodeId,
+      userId,
+      uuid: activeCredentialUuid,
+      leaseId: "cross-node-lease",
+      ipHash: "cross-node-ip",
+    },
+    String(Date.now()),
+    otherNodeId,
+    otherNodeSecret,
+  );
+  assert(
+    crossNodeAdmission.status === 400,
+    "admission must reject a valid credential on an unauthorized node",
+  );
+  const crossNodeUsage = await signedPost(
+    "/api/nodes/usage",
+    {
+      nodeId: otherNodeId,
+      events: [{
+        id: `${otherNodeId}:forged-usage`,
+        userId,
+        uuid: activeCredentialUuid,
+        connections: 1,
+        bytesUp: 1,
+        bytesDown: 1,
+        tsBucket: Math.floor(Date.now() / 3_600_000) * 3_600_000,
+      }],
+    },
+    String(Date.now()),
+    otherNodeId,
+    otherNodeSecret,
+  );
+  assert(
+    crossNodeUsage.status === 400,
+    "usage accounting must reject a credential assigned to another node",
   );
   const requiredDeviceResult = await jsonResponse(
     await fetch(`${base}/api/users/${userId}/devices`, {
@@ -638,7 +915,7 @@ try {
     signedPost("/api/nodes/admission", {
       nodeId,
       userId,
-      uuid: userUuid,
+      uuid: activeCredentialUuid,
       leaseId,
       ipHash,
     }).then(jsonResponse);
@@ -654,7 +931,7 @@ try {
   const event = {
     id: `${nodeId}:event-1`,
     userId,
-    uuid: userUuid,
+    uuid: activeCredentialUuid,
     connections: 1,
     bytesUp: 100,
     bytesDown: 200,
@@ -709,7 +986,7 @@ try {
       events: [{
         id: `${nodeId}:unlimited-event-1`,
         userId: unlimitedUserId,
-        uuid: unlimitedCreated.user.uuid,
+        uuid: unlimitedCreated.credential.uuid,
         connections: 1,
         bytesUp: 999,
         bytesDown: 999,

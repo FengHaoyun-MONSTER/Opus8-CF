@@ -285,6 +285,10 @@ if ! node test/compliance-runtime-local.mjs >/tmp/compliance-runtime-test.log 2>
   echo "ERROR compliance-runtime-test"; tail -n 12 /tmp/compliance-runtime-test.log; exit 12
 fi
 echo "OK compliance-runtime-test"
+if ! node test/integration-local.mjs >/tmp/integration-runtime-test.log 2>&1; then
+  echo "ERROR integration-runtime-test"; tail -n 16 /tmp/integration-runtime-test.log; exit 12
+fi
+echo "OK integration-runtime-test"
 
 echo "STEP deploy"
 if ! wrangler deploy >/tmp/wd.log 2>&1; then
@@ -573,12 +577,74 @@ echo "::add-mask::$SUID"
 echo "::add-mask::$SUUID"
 echo "::add-mask::$SUB"
 
+echo "STEP smoke-node-enrollment"
+SMOKE_ACCOUNT_ID="00000000000000000000000000000000"
+SMOKE_HOST="smoke-node.example.com"
+SMOKE_PATH="/ws/control-smoke"
+curl -fsS --max-time 15 -X DELETE "$API_URL/api/nodes/smoke-node" \
+  -H "authorization: Bearer $TOK" >/dev/null 2>&1 || true
+STALE_ENROLLMENTS=$(curl -fsS --max-time 15 "$API_URL/api/node-enrollments" \
+  -H "authorization: Bearer $TOK" \
+  | jq -r '.enrollments[] | select(.nodeId=="smoke-node") | .id')
+for enrollment_id in $STALE_ENROLLMENTS; do
+  curl -fsS --max-time 15 -X DELETE \
+    "$API_URL/api/node-enrollments/$enrollment_id" \
+    -H "authorization: Bearer $TOK" >/dev/null 2>&1 || true
+done
+SMOKE_ENROLL=$(curl -fsS --max-time 20 -X POST \
+  "$API_URL/api/node-enrollments" \
+  -H "authorization: Bearer $TOK" \
+  -H 'content-type: application/json' \
+  -d "$(jq -nc \
+    --arg nodeId "smoke-node" \
+    --arg accountAlias "smoke" \
+    --arg accountId "$SMOKE_ACCOUNT_ID" \
+    --arg hostname "$SMOKE_HOST" \
+    --arg transportPath "$SMOKE_PATH" \
+    '{nodeId:$nodeId,accountAlias:$accountAlias,accountId:$accountId,
+      hostname:$hostname,region:"test",transportPath:$transportPath}')")
+SMOKE_ENROLL_TOKEN=$(printf '%s' "$SMOKE_ENROLL" | jq -er '.token')
+echo "::add-mask::$SMOKE_ENROLL_TOKEN"
+SMOKE_EXCHANGE=$(curl -fsS --max-time 20 -X POST \
+  "$API_URL/api/node-enrollments/exchange" \
+  -H 'content-type: application/json' \
+  -d "$(jq -nc \
+    --arg token "$SMOKE_ENROLL_TOKEN" \
+    --arg nodeId "smoke-node" \
+    --arg accountId "$SMOKE_ACCOUNT_ID" \
+    '{token:$token,nodeId:$nodeId,accountId:$accountId}')")
+SMOKE_NODE_SECRET=$(printf '%s' "$SMOKE_EXCHANGE" | jq -er '.nodeSecret')
+echo "::add-mask::$SMOKE_NODE_SECRET"
+SMOKE_REGISTER_BODY=$(jq -nc \
+  --arg nodeId "smoke-node" \
+  --arg accountAlias "smoke" \
+  --arg hostname "$SMOKE_HOST" \
+  --arg transportPath "$SMOKE_PATH" \
+  '{nodeId:$nodeId,accountAlias:$accountAlias,hostname:$hostname,
+    region:"test",transportPath:$transportPath,capabilities:["smoke"]}')
+SMOKE_REGISTER_TS=$(date +%s)000
+SMOKE_REGISTER_SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+  "$SMOKE_REGISTER_TS" "smoke-node" "POST" "/api/nodes/register" \
+  "$SMOKE_REGISTER_BODY" \
+  | openssl dgst -sha256 -hmac "$SMOKE_NODE_SECRET" -r | cut -d' ' -f1)
+SMOKE_REGISTER=$(curl -fsS --max-time 20 -X POST "$API_URL/api/nodes/register" \
+  -H "x-opus8-ts: $SMOKE_REGISTER_TS" \
+  -H "x-opus8-node: smoke-node" \
+  -H "x-opus8-sign-v2: $SMOKE_REGISTER_SIG" \
+  -H 'content-type: application/json' --data "$SMOKE_REGISTER_BODY")
+if printf '%s' "$SMOKE_REGISTER" | jq -e \
+  '.ok == true and .authMode == "isolated"' >/dev/null; then
+  echo "OK smoke-node-isolated-enrollment"
+else
+  echo "ERROR smoke-node-enrollment"; exit 22
+fi
+
 signed_node_post() {
   local path="$1" body="$2" output="$3" ts sig
   ts=$(date +%s)000
   sig=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
     "$ts" "smoke-node" "POST" "$path" "$body" \
-    | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+    | openssl dgst -sha256 -hmac "$SMOKE_NODE_SECRET" -r | cut -d' ' -f1)
   curl -fsS --max-time 20 -X POST "$API_URL$path" \
     -H "x-opus8-ts: $ts" \
     -H "x-opus8-node: smoke-node" \
@@ -592,12 +658,21 @@ HMAC_BODY='{"nodeId":"smoke-node","health":"healthy"}'
 HMAC_TS=$(date +%s)000
 HMAC_SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
   "$HMAC_TS" "smoke-node" "POST" "/api/nodes/heartbeat" "$HMAC_BODY" \
-  | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+  | openssl dgst -sha256 -hmac "$SMOKE_NODE_SECRET" -r | cut -d' ' -f1)
 HMAC_VALID_CODE=$(curl -sS -o /tmp/hmac-valid.json -w '%{http_code}' \
   --max-time 20 -X POST "$API_URL/api/nodes/heartbeat" \
   -H "x-opus8-ts: $HMAC_TS" \
   -H "x-opus8-node: smoke-node" \
   -H "x-opus8-sign-v2: $HMAC_SIG" \
+  -H 'content-type: application/json' --data "$HMAC_BODY" || true)
+HMAC_ROOT_SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
+  "$HMAC_TS" "smoke-node" "POST" "/api/nodes/heartbeat" "$HMAC_BODY" \
+  | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+HMAC_ROOT_CODE=$(curl -sS -o /tmp/hmac-root.json -w '%{http_code}' \
+  --max-time 20 -X POST "$API_URL/api/nodes/heartbeat" \
+  -H "x-opus8-ts: $HMAC_TS" \
+  -H "x-opus8-node: smoke-node" \
+  -H "x-opus8-sign-v2: $HMAC_ROOT_SIG" \
   -H 'content-type: application/json' --data "$HMAC_BODY" || true)
 HMAC_REPLAY_CODE=$(curl -sS -o /tmp/hmac-replay.json -w '%{http_code}' \
   --max-time 20 -X POST "$API_URL/api/nodes/usage" \
@@ -608,7 +683,7 @@ HMAC_REPLAY_CODE=$(curl -sS -o /tmp/hmac-replay.json -w '%{http_code}' \
 HMAC_ID_BODY='{"nodeId":"forged-smoke-node","health":"healthy"}'
 HMAC_ID_SIG=$(printf 'opus8-hmac-v2\n%s\n%s\n%s\n%s\n%s' \
   "$HMAC_TS" "smoke-node" "POST" "/api/nodes/heartbeat" "$HMAC_ID_BODY" \
-  | openssl dgst -sha256 -hmac "$NODE_HMAC_SECRET" -r | cut -d' ' -f1)
+  | openssl dgst -sha256 -hmac "$SMOKE_NODE_SECRET" -r | cut -d' ' -f1)
 HMAC_ID_CODE=$(curl -sS -o /tmp/hmac-identity.json -w '%{http_code}' \
   --max-time 20 -X POST "$API_URL/api/nodes/heartbeat" \
   -H "x-opus8-ts: $HMAC_TS" \
@@ -616,9 +691,10 @@ HMAC_ID_CODE=$(curl -sS -o /tmp/hmac-identity.json -w '%{http_code}' \
   -H "x-opus8-sign-v2: $HMAC_ID_SIG" \
   -H 'content-type: application/json' --data "$HMAC_ID_BODY" || true)
 if [ "$HMAC_VALID_CODE" != "200" ] \
+  || [ "$HMAC_ROOT_CODE" != "401" ] \
   || [ "$HMAC_REPLAY_CODE" != "401" ] \
   || [ "$HMAC_ID_CODE" != "401" ]; then
-  echo "ERROR hmac-v2-binding valid=$HMAC_VALID_CODE cross_path=$HMAC_REPLAY_CODE identity=$HMAC_ID_CODE"
+  echo "ERROR hmac-v2-binding valid=$HMAC_VALID_CODE root=$HMAC_ROOT_CODE cross_path=$HMAC_REPLAY_CODE identity=$HMAC_ID_CODE"
   exit 22
 fi
 echo "OK hmac-v2-method-path-body-identity-bound"
@@ -729,6 +805,7 @@ NODE
 else
   echo "ERROR smoke-sub-unverified-ip-or-host-mismatch"; exit 24
 fi
-if curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-cleanup"; else echo "ERROR smoke-cleanup"; exit 25; fi
+if curl -fsS --max-time 15 -X DELETE "$API_URL/api/users/$SUID" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-user-cleanup"; else echo "ERROR smoke-user-cleanup"; exit 25; fi
+if curl -fsS --max-time 15 -X DELETE "$API_URL/api/nodes/smoke-node" -H "authorization: Bearer $TOK" | grep -q '"ok":true'; then echo "OK smoke-node-cleanup"; else echo "ERROR smoke-node-cleanup"; exit 25; fi
 
 echo "DONE url=$API_URL"

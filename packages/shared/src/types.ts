@@ -23,6 +23,10 @@ export interface NodeRecord {
   health_last_failure?: number | null;
   health_last_error?: string | null;
   health_last_run_id?: string | null;
+  auth_mode?: "legacy" | "isolated" | "revoked" | null;
+  credential_fallback_pending?: number | null;
+  credential_activated_at?: number | null;
+  credential_updated_at?: number | null;
 }
 
 export interface UserRecord {
@@ -106,7 +110,7 @@ export interface ActiveUuidsResponse {
   unlockUuids: string[]; // 允许使用 SOCKS5 落地的用户 UUID
   unlockHosts: string[]; // 命中则走 SOCKS5 落地
   socks5Enabled: boolean;
-  landingBundle?: string; // 用 NODE_HMAC_SECRET 派生密钥加密的多落地运行配置
+  landingBundle?: string; // 用该节点独立运行密钥加密的多落地运行配置
   accessPolicies?: UserAccessPolicy[];
 }
 

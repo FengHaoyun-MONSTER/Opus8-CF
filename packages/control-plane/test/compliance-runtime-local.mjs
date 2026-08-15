@@ -46,6 +46,9 @@ function seedDatabase() {
       (id,account_alias,hostname,region,capabilities,preferred_ip,transport_path,health,enabled,last_seen,created_at)
     VALUES
       ('acc1-n1','acc1','acc1-n1.example.com','test','["vless","ws"]',NULL,'/','healthy',1,${now},${now});
+    INSERT INTO node_credentials
+      (node_id,auth_mode,current_salt,previous_salt,legacy_fallback,activated_at,updated_at)
+    VALUES ('acc1-n1','legacy',NULL,NULL,0,NULL,${now});
     INSERT INTO users
       (id,username,uuid,plan_id,node_group,unlock,sub_token,expire_at,enabled,created_at)
     VALUES
@@ -100,7 +103,7 @@ async function waitUntilReady(base, worker, logs) {
   throw new Error(`local worker did not become ready:\n${logs.join("")}`);
 }
 
-function signedRegister(base, nodeId, overrides = {}) {
+function signedRegister(base, nodeId, overrides = {}, signingKey = nodeSecret) {
   const body = JSON.stringify({
     nodeId,
     accountAlias: "acc1",
@@ -112,7 +115,7 @@ function signedRegister(base, nodeId, overrides = {}) {
   });
   const timestamp = String(Date.now());
   const signature = crypto
-    .createHmac("sha256", nodeSecret)
+    .createHmac("sha256", signingKey)
     .update(
       [
         "opus8-hmac-v2",
@@ -238,10 +241,57 @@ try {
   });
   assert(decrease.ok, "capacity reduction must remain available");
 
-  const registerNew = await signedRegister(base, "acc1-n2");
-  assert(registerNew.status === 403, "new node registration must be blocked");
+  const blockedNodeEnrollment = await fetch(`${base}/api/node-enrollments`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      nodeId: "acc1-n2",
+      accountAlias: "acc1",
+      accountId: "a".repeat(32),
+      hostname: "acc1-n2.example.com",
+      transportPath: "/ws/compliance-runtime",
+    }),
+  });
+  assert(
+    blockedNodeEnrollment.status === 403,
+    "new node enrollment must be blocked",
+  );
 
-  const maintainExisting = await signedRegister(base, "acc1-n1");
+  const migrationResponse = await fetch(`${base}/api/node-enrollments`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      nodeId: "acc1-n1",
+      accountAlias: "acc1",
+      accountId: "a".repeat(32),
+      hostname: "acc1-n1.example.com",
+      region: "test",
+      capabilities: ["vless", "ws"],
+      transportPath: "/ws/compliance-runtime",
+    }),
+  });
+  const migration = await migrationResponse.json();
+  assert(
+    migrationResponse.ok && migration.enrollment?.kind === "migrate",
+    "exact in-place credential migration must remain available",
+  );
+  const exchangeResponse = await fetch(`${base}/api/node-enrollments/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      token: migration.token,
+      nodeId: "acc1-n1",
+      accountId: "a".repeat(32),
+    }),
+  });
+  const exchange = await exchangeResponse.json();
+  assert(exchangeResponse.ok && exchange.nodeSecret, "migration exchange failed");
+  const maintainExisting = await signedRegister(
+    base,
+    "acc1-n1",
+    {},
+    exchange.nodeSecret,
+  );
   assert(
     maintainExisting.ok,
     "exact in-place registration of an existing node must remain available",
@@ -252,17 +302,23 @@ try {
     "maintenance registration must update the transport path",
   );
 
-  const changeAccount = await signedRegister(base, "acc1-n1", {
-    accountAlias: "acc2",
-  });
+  const changeAccount = await signedRegister(
+    base,
+    "acc1-n1",
+    { accountAlias: "acc2" },
+    exchange.nodeSecret,
+  );
   assert(
     changeAccount.status === 403,
     "maintenance registration must not move an existing node to another account",
   );
 
-  const changeHostname = await signedRegister(base, "acc1-n1", {
-    hostname: "replacement.example.com",
-  });
+  const changeHostname = await signedRegister(
+    base,
+    "acc1-n1",
+    { hostname: "replacement.example.com" },
+    exchange.nodeSecret,
+  );
   assert(
     changeHostname.status === 403,
     "maintenance registration must not change an existing node hostname",
