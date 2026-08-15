@@ -40,6 +40,7 @@
     "OK secret LANDING_CONFIG_KEY",
     "OK secret FREEDOMPOST_INTEGRATION_KEY_ID",
     "OK secret FREEDOMPOST_INTEGRATION_SECRET",
+    "OK secret AUTOMATION_HMAC_SECRET",
     "OK secret ROOT_DOMAIN",
     "OK secret SUB_BASE",
     "STEP wait-deployed-version",
@@ -51,6 +52,8 @@
     "OK smoke-login",
     "OK smoke-compliance-state provisioning=1",
     "OK smoke-key-rotation-state unreadable=0",
+    "OK smoke-operations-slo",
+    "OK smoke-admin-audit",
     "STEP cors-regression",
     "OK cors-admin-only",
     "STEP ensure-default-landing",
@@ -91,5 +94,5 @@
     "OK smoke-node-cleanup",
     "DONE url=https://api.thinderbox.com"
   ],
-  "finishedAt": "2026-08-15T09:15:48Z"
+  "finishedAt": "2026-08-15T13:04:35Z"
 }
