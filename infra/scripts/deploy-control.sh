@@ -116,11 +116,47 @@ SUB_TOKEN_RATE_LIMIT=20
 SUB_RATE_LIMIT_PERIOD=60
 
 echo "STEP ensure-d1-kv"
-wrangler d1 create opus8cf-db >/dev/null 2>&1 || true
-wrangler kv namespace create OPUS8_KV >/dev/null 2>&1 || true
+wrangler_with_retry() {
+  local label="$1"
+  shift
+  local attempt output delay=5
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if output=$(wrangler "$@" 2>/tmp/opus8-wrangler-api.log); then
+      printf '%s' "$output"
+      return 0
+    fi
+    if grep -Eqi '10429|rate[ -]?limit' /tmp/opus8-wrangler-api.log; then
+      echo "WARN cloudflare-rate-limit operation=$label attempt=$attempt retryIn=${delay}s" >&2
+      sleep "$delay"
+      delay=$((delay < 30 ? delay * 2 : 30))
+      continue
+    fi
+    echo "ERROR cloudflare-api operation=$label" >&2
+    tail -n 8 /tmp/opus8-wrangler-api.log \
+      | sed 's/[A-Za-z0-9_-]\{24,\}/<redacted>/g' >&2
+    return 1
+  done
+  echo "ERROR cloudflare-rate-limit-exhausted operation=$label" >&2
+  return 1
+}
 
-DBID=$(wrangler d1 list --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const x=a.find(r=>r.name==="opus8cf-db");process.stdout.write(x?(x.uuid||x.database_id||""):"")}catch(e){process.stdout.write("")}})')
-KVID=$(wrangler kv namespace list 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const x=a.find(r=>r.title&&r.title.includes("OPUS8_KV"));process.stdout.write(x?x.id:"")}catch(e){process.stdout.write("")}})')
+D1_LIST=$(wrangler_with_retry d1-list d1 list --json)
+DBID=$(printf '%s' "$D1_LIST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const x=a.find(r=>r.name==="opus8cf-db");process.stdout.write(x?(x.uuid||x.database_id||""):"")}catch(e){process.stdout.write("")}})')
+if [ -z "$DBID" ]; then
+  wrangler_with_retry d1-create d1 create opus8cf-db >/dev/null
+  D1_LIST=$(wrangler_with_retry d1-list d1 list --json)
+  DBID=$(printf '%s' "$D1_LIST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const x=a.find(r=>r.name==="opus8cf-db");process.stdout.write(x?(x.uuid||x.database_id||""):"")}catch(e){process.stdout.write("")}})')
+fi
+unset D1_LIST
+
+KV_LIST=$(wrangler_with_retry kv-list kv namespace list)
+KVID=$(printf '%s' "$KV_LIST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const x=a.find(r=>r.title&&r.title.includes("OPUS8_KV"));process.stdout.write(x?x.id:"")}catch(e){process.stdout.write("")}})')
+if [ -z "$KVID" ]; then
+  wrangler_with_retry kv-create kv namespace create OPUS8_KV >/dev/null
+  KV_LIST=$(wrangler_with_retry kv-list kv namespace list)
+  KVID=$(printf '%s' "$KV_LIST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s);const x=a.find(r=>r.title&&r.title.includes("OPUS8_KV"));process.stdout.write(x?x.id:"")}catch(e){process.stdout.write("")}})')
+fi
+unset KV_LIST
 
 if [ -z "$DBID" ] || [ -z "$KVID" ]; then
   echo "ERROR resolve-id-failed (token 可能缺少 D1/KV 编辑权限)"
