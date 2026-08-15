@@ -105,6 +105,8 @@ const worker = spawn(
     "FREEDOMPOST_INTEGRATION_KEY_ID:freedompost-local",
     "--var",
     "FREEDOMPOST_INTEGRATION_SECRET:test-freedompost-integration-secret-32-bytes",
+    "--var",
+    `SUB_BASE:${base}`,
   ],
   {
     cwd: controlRoot,
